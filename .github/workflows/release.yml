@@ -50,8 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uniffi-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/${{ matrix.lib_name }}
+          path: bindings/uniffi/target/${{ matrix.target }}/release/${{ matrix.lib_name }}
           retention-days: 5
 
   # Build C-FFI library for supported platforms
@@ -91,14 +90,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cffi-static-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.lib_name_static }}
+          path: bindings/c-ffi/target/${{ matrix.target }}/release/${{ matrix.lib_name_static }}
           retention-days: 5
 
       - name: Upload shared library artifact
         uses: actions/upload-artifact@v4
         with:
           name: cffi-shared-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.lib_name_shared }}
+          path: bindings/c-ffi/target/${{ matrix.target }}/release/${{ matrix.lib_name_shared }}
           retention-days: 5
 
   # Generate header file for C-FFI
@@ -150,6 +149,12 @@ jobs:
         with:
           path: artifacts
 
+      - name: Debug - show artifact structure
+        run: |
+          echo "=== Artifacts structure ==="
+          find artifacts -type f
+          echo "==========================="
+
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
@@ -157,25 +162,38 @@ jobs:
           # Package uniffi libraries
           for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
             if [ -d "artifacts/uniffi-$target" ]; then
+              echo "Packaging uniffi for $target"
               cd artifacts/uniffi-$target
+              # Find the library file (could be in subdirectory)
+              find . -name "*.so" -o -name "*.dylib" | head -1
               zip -r "../../release-assets/rgb-lib-uniffi-$target.zip" .
               cd ../..
+            else
+              echo "WARNING: artifacts/uniffi-$target not found"
             fi
           done
 
           # Package c-ffi libraries
           for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
-            if [ -d "artifacts/cffi-static-$target" ] && [ -d "artifacts/cffi-shared-$target" ]; then
-              mkdir -p "temp-cffi-$target"
-              cp artifacts/cffi-static-$target/* "temp-cffi-$target/" 2>/dev/null || true
-              cp artifacts/cffi-shared-$target/* "temp-cffi-$target/" 2>/dev/null || true
-              cp artifacts/cffi-header/* "temp-cffi-$target/" 2>/dev/null || true
+            echo "Packaging c-ffi for $target"
+            mkdir -p "temp-cffi-$target"
+            
+            # Copy files from wherever they are
+            find artifacts/cffi-static-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-shared-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-header -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            
+            if [ "$(ls -A temp-cffi-$target 2>/dev/null)" ]; then
               cd "temp-cffi-$target"
               zip -r "../release-assets/rgb-lib-cffi-$target.zip" .
               cd ..
-              rm -rf "temp-cffi-$target"
             fi
+            rm -rf "temp-cffi-$target"
           done
+
+          echo "=== Release assets ==="
+          ls -la release-assets/
+          echo "======================"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
