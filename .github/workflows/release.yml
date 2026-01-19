@@ -100,6 +100,13 @@ jobs:
           path: bindings/c-ffi/target/${{ matrix.target }}/release/${{ matrix.lib_name_shared }}
           retention-days: 5
 
+      - name: Upload C++ header artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-hpp-${{ matrix.target }}
+          path: bindings/c-ffi/rgblib.hpp
+          retention-days: 5
+
   # Generate header file for C-FFI
   generate-header:
     name: Generate C header
@@ -182,6 +189,7 @@ jobs:
             find artifacts/cffi-static-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
             find artifacts/cffi-shared-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
             find artifacts/cffi-header -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-hpp-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
             
             if [ "$(ls -A temp-cffi-$target 2>/dev/null)" ]; then
               cd "temp-cffi-$target"
