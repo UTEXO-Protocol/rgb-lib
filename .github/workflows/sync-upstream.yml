@@ -1,13 +1,27 @@
 name: Sync with upstream
 
 on:
-  schedule:
-    - cron: '0 6 * * 1'  # Every Monday at 6:00 UTC
+  # Manual trigger with options
   workflow_dispatch:
+    inputs:
+      auto_release:
+        description: 'Automatically trigger release after sync'
+        required: true
+        default: true
+        type: boolean
+      force_sync:
+        description: 'Force sync even if tag exists'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      upstream_tag: ${{ steps.check.outputs.upstream_tag }}
+    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,17 +38,23 @@ jobs:
         run: git remote add upstream https://github.com/RGB-Tools/rgb-lib.git
 
       - name: Fetch upstream
-        run: git fetch upstream
+        run: git fetch upstream --tags
 
       - name: Check for new tags
         id: check
         run: |
+          # Get latest tag from upstream
           UPSTREAM_TAG=$(git describe --tags --abbrev=0 upstream/master 2>/dev/null || echo "")
           echo "upstream_tag=$UPSTREAM_TAG" >> $GITHUB_OUTPUT
+          echo "Latest upstream tag: $UPSTREAM_TAG"
           
-          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+          # Check if we already have this tag
+          if [ "${{ inputs.force_sync }}" == "true" ]; then
+            echo "new_version=true" >> $GITHUB_OUTPUT
+            echo "Force sync enabled"
+          elif git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
             echo "new_version=false" >> $GITHUB_OUTPUT
-            echo "Tag $UPSTREAM_TAG already exists"
+            echo "Tag $UPSTREAM_TAG already exists locally"
           else
             echo "new_version=true" >> $GITHUB_OUTPUT
             echo "New version found: $UPSTREAM_TAG"
@@ -44,19 +64,45 @@ jobs:
         if: steps.check.outputs.new_version == 'true'
         run: |
           git checkout master
-          git merge upstream/master --no-edit
+          git merge upstream/master --no-edit || git merge upstream/master --strategy-option theirs --no-edit
           git push origin master
 
       - name: Create tag
         if: steps.check.outputs.new_version == 'true'
         run: |
+          # Delete local tag if exists (for force sync)
+          git tag -d ${{ steps.check.outputs.upstream_tag }} 2>/dev/null || true
+          git push origin :refs/tags/${{ steps.check.outputs.upstream_tag }} 2>/dev/null || true
+          
+          # Create new tag
           git tag ${{ steps.check.outputs.upstream_tag }}
           git push origin ${{ steps.check.outputs.upstream_tag }}
 
       - name: Summary
         run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.check.outputs.new_version }}" == "true" ]; then
-            echo "Synced new version: ${{ steps.check.outputs.upstream_tag }}"
+            echo "✅ Synced version: ${{ steps.check.outputs.upstream_tag }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "Already up to date"
+            echo "ℹ️ Already up to date" >> $GITHUB_STEP_SUMMARY
           fi
+
+  trigger-release:
+    needs: sync
+    if: needs.sync.outputs.new_version == 'true' && inputs.auto_release == true
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger Release workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release.yml',
+              ref: 'master',
+              inputs: {
+                version: '${{ needs.sync.outputs.upstream_tag }}'
+              }
+            })
