@@ -52,6 +52,7 @@ trait CReturnType: Sized + 'static {
 }
 impl CReturnType for Wallet {}
 impl CReturnType for Online {}
+impl CReturnType for Invoice {}
 
 impl<T: 'static, E> From<Result<T, E>> for CResult
 where
@@ -225,6 +226,44 @@ pub(crate) fn create_utxos(
     let size = convert_optional_number(size_opt)?;
     let fee_rate = ptr_to_num(fee_rate)?;
     let res = wallet.create_utxos((*online).clone(), up_to, num, size, fee_rate, skip_sync)?;
+    Ok(serde_json::to_string(&res)?)
+}
+
+pub(crate) fn create_utxos_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    up_to: bool,
+    num_opt: *const c_char,
+    size_opt: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let num = convert_optional_number(num_opt)?;
+    let size = convert_optional_number(size_opt)?;
+    let fee_rate = ptr_to_num(fee_rate)?;
+    let res = wallet.create_utxos_begin(
+        (*online).clone(),
+        up_to,
+        num,
+        size,
+        fee_rate,
+        skip_sync,
+    )?;
+    Ok(res)
+}
+
+pub(crate) fn create_utxos_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let signed_psbt = ptr_to_string(signed_psbt);
+    let res = wallet.create_utxos_end((*online).clone(), signed_psbt, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -519,6 +558,43 @@ pub(crate) fn send(
     Ok(serde_json::to_string(&res)?)
 }
 
+pub(crate) fn send_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    recipient_map: *const c_char,
+    donation: bool,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let recipient_map: HashMap<String, Vec<Recipient>> =
+        serde_json::from_str(&ptr_to_string(recipient_map))?;
+    let fee_rate = ptr_to_num(fee_rate)?;
+    let min_confirmations = ptr_to_num(min_confirmations)?;
+    let res = wallet.send_begin(
+        (*online).clone(),
+        recipient_map,
+        donation,
+        fee_rate,
+        min_confirmations,
+    )?;
+    Ok(res)
+}
+
+pub(crate) fn send_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let signed_psbt = ptr_to_string(signed_psbt);
+    let res = wallet.send_end((*online).clone(), signed_psbt, skip_sync)?;
+    Ok(serde_json::to_string(&res)?)
+}
+
 pub(crate) fn send_btc(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -575,4 +651,20 @@ pub(crate) fn witness_receive(
         min_confirmations,
     )?;
     Ok(serde_json::to_string(&res)?)
+}
+
+pub(crate) fn invoice_new(invoice_string: *const c_char) -> Result<Invoice, Error> {
+    let invoice_string = ptr_to_string(invoice_string);
+    Ok(Invoice::new(invoice_string)?)
+}
+
+pub(crate) fn invoice_data(invoice: &COpaqueStruct) -> Result<String, Error> {
+    let invoice = Invoice::from_opaque(invoice)?;
+    let res = invoice.invoice_data();
+    Ok(serde_json::to_string(&res)?)
+}
+
+pub(crate) fn invoice_string(invoice: &COpaqueStruct) -> Result<String, Error> {
+    let invoice = Invoice::from_opaque(invoice)?;
+    Ok(invoice.invoice_string())
 }
