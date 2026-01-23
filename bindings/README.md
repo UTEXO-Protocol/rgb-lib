@@ -21,11 +21,13 @@ These are the officially supported languages:
 
 These are the unofficially supported languages:
 
-| Language | Tool   | Platform              | Location         |
-| -------- | ------ | --------------------- | ---------------- |
-| Go       | uniffi | Linux, macOS, Windows | [rgb-lib-go]     |
+| Language | Tool   | Platform              | Location          |
+| -------- | ------ | --------------------- | ----------------- |
+| C#       | c-ffi  | Linux, macOS          | [rgb-lib-c-sharp] |
+| Go       | uniffi | Linux, macOS          | [rgb-lib-go]      |
 
-[rgb-lib-go]: https://github.com/RGB-OS/rgb-lib-go
+[rgb-lib-c-sharp]: https://github.com/UTEXO-Protocol/rgb-lib-c-sharp
+[rgb-lib-go]: https://github.com/UTEXO-Protocol/rgb-lib-go
 [rgb-lib-kotlin]: https://github.com/RGB-Tools/rgb-lib-kotlin
 [rgb-lib-nodejs]: https://github.com/RGB-Tools/rgb-lib-nodejs
 [rgb-lib-python]: https://github.com/RGB-Tools/rgb-lib-python
