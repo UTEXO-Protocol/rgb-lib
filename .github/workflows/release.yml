@@ -266,3 +266,15 @@ jobs:
               "version": "${{ steps.version.outputs.version }}",
               "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
             }
+
+      - name: Trigger rgb-lib-python workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_PYTHON_PAT }}
+          repository: UTEXO-Protocol/rgb-lib-python
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }

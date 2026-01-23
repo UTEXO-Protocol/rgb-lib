@@ -6,3 +6,4 @@
 **/tests/lists
 /.vim
 /.vscode
+.idea/
