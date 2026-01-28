@@ -23,7 +23,7 @@ These are the unofficially supported languages:
 
 | Language | Tool   | Platform              | Location          |
 | -------- | ------ | --------------------- | ----------------- |
-| C#       | c-ffi  | Linux, macOS          | [rgb-lib-c-sharp] |
+| C#       | c-ffi  | Linux, macOS, Windows | [rgb-lib-c-sharp] |
 | Go       | uniffi | Linux, macOS          | [rgb-lib-go]      |
 
 [rgb-lib-c-sharp]: https://github.com/UTEXO-Protocol/rgb-lib-c-sharp
