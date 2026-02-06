@@ -13,7 +13,7 @@ use std::{
 
 use rgb_lib::{
     AssetSchema, Assignment, BitcoinNetwork, Error as RgbLibError,
-    wallet::{Online, Recipient, RefreshFilter, Wallet, WalletData},
+    wallet::{Invoice, Online, Recipient, RefreshFilter, Wallet, WalletData},
 };
 
 #[repr(C)]
@@ -51,6 +51,13 @@ pub extern "C" fn free_online(obj: COpaqueStruct) {
 pub extern "C" fn free_wallet(obj: COpaqueStruct) {
     unsafe {
         let _ = Box::from_raw(obj.ptr as *mut Wallet);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn free_invoice(obj: COpaqueStruct) {
+    unsafe {
+        let _ = Box::from_raw(obj.ptr as *mut Invoice);
     }
 }
 
@@ -100,6 +107,59 @@ pub extern "C" fn rgblib_create_utxos(
 ) -> CResultString {
     create_utxos(
         wallet, online, up_to, num_opt, size_opt, fee_rate, skip_sync,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_create_utxos_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    up_to: bool,
+    num_opt: *const c_char,
+    size_opt: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    create_utxos_begin(
+        wallet, online, up_to, num_opt, size_opt, fee_rate, skip_sync,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_create_utxos_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    create_utxos_end(wallet, online, signed_psbt, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_delete_transfers(
+    wallet: &COpaqueStruct,
+    batch_transfer_idx_opt: *const c_char,
+    no_asset_only: bool,
+) -> CResultString {
+    delete_transfers(wallet, batch_transfer_idx_opt, no_asset_only).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_fail_transfers(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    batch_transfer_idx_opt: *const c_char,
+    no_asset_only: bool,
+    skip_sync: bool,
+) -> CResultString {
+    fail_transfers(
+        wallet,
+        online,
+        batch_transfer_idx_opt,
+        no_asset_only,
+        skip_sync,
     )
     .into()
 }
@@ -337,6 +397,36 @@ pub extern "C" fn rgblib_send(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    recipient_map: *const c_char,
+    donation: bool,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+) -> CResultString {
+    send_begin(
+        wallet,
+        online,
+        recipient_map,
+        donation,
+        fee_rate,
+        min_confirmations,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    send_end(wallet, online, signed_psbt, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_btc(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -346,6 +436,28 @@ pub extern "C" fn rgblib_send_btc(
     skip_sync: bool,
 ) -> CResultString {
     send_btc(wallet, online, address, amount, fee_rate, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    address: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    send_btc_begin(wallet, online, address, amount, fee_rate, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    send_btc_end(wallet, online, signed_psbt, skip_sync).into()
 }
 
 #[unsafe(no_mangle)]
@@ -379,4 +491,19 @@ pub extern "C" fn rgblib_witness_receive(
         min_confirmations,
     )
     .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_invoice_new(invoice_string: *const c_char) -> CResult {
+    invoice_new(invoice_string).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_invoice_data(invoice: &COpaqueStruct) -> CResultString {
+    invoice_data(invoice).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_invoice_string(invoice: &COpaqueStruct) -> CResultString {
+    invoice_string(invoice).into()
 }
