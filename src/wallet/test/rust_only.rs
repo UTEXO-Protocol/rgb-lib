@@ -168,6 +168,212 @@ fn success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn color_psbt_for_outpoints_and_consume_rejects_invalid_inputs() {
+    initialize();
+
+    let amt_sat = 500;
+
+    let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
+    let (mut wallet_recv, _online_recv) = get_empty_wallet!();
+
+    test_create_utxos(
+        &mut wallet_send,
+        &online_send,
+        false,
+        Some(1),
+        None,
+        FEE_RATE,
+        None,
+    );
+    test_drain_to_keep(
+        &mut wallet_send,
+        &online_send,
+        &test_get_address(&mut wallet_recv),
+    );
+
+    let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout = output.0 as u32;
+    output_map.insert(vout, AMOUNT);
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: None,
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: None,
+        nonce: None,
+    };
+
+    let err = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info.clone(), vec![])
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
+
+    let fake_txid = bitcoin::Txid::from_str(&"00".repeat(32)).unwrap();
+    let fake_outpoint = OutPoint {
+        txid: fake_txid,
+        vout: 0,
+    };
+    let err = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, vec![fake_outpoint])
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_and_consume_success() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
+    let (mut wallet_recv, _online_recv) = get_empty_wallet!();
+
+    test_create_utxos(
+        &mut wallet_send,
+        &online_send,
+        false,
+        Some(1),
+        None,
+        FEE_RATE,
+        None,
+    );
+    test_drain_to_keep(
+        &mut wallet_send,
+        &online_send,
+        &test_get_address(&mut wallet_recv),
+    );
+
+    let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+    assert!(
+        !psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .any(|o| o.script_pubkey.is_op_return())
+    );
+    assert!(psbt.proprietary.is_empty());
+
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout = output.0 as u32;
+    output_map.insert(vout, AMOUNT); // sending AMOUNT since color_psbt doesn't support change
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let input_outpoints: Vec<OutPoint> = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .map(|txin| txin.previous_output)
+        .collect();
+
+    let transfers = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, input_outpoints)
+        .unwrap();
+
+    assert_eq!(transfers.len(), 1);
+    assert!(
+        psbt.unsigned_tx
+            .output
+            .iter()
+            .any(|o| o.script_pubkey.is_op_return())
+    );
+    assert!(!psbt.proprietary.is_empty());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn contract_assignments_for_outpoints_success() {
+    initialize();
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let asset = test_issue_asset_nia(&mut wallet, &online, Some(&[AMOUNT]));
+
+    let unspents: Vec<Unspent> = test_list_unspents(&mut wallet, Some(&online), true)
+        .into_iter()
+        .filter(|u| {
+            u.rgb_allocations
+                .iter()
+                .any(|a| a.asset_id == Some(asset.asset_id.clone()))
+        })
+        .collect();
+    assert!(!unspents.is_empty());
+
+    let outpoint = unspents.first().unwrap().utxo.outpoint.clone();
+    let contract_id = ContractId::from_str(&asset.asset_id).unwrap();
+
+    let assignments_map = wallet
+        .contract_assignments_for_outpoints(contract_id, vec![outpoint.clone()])
+        .unwrap();
+    let assignments = assignments_map
+        .get(&outpoint)
+        .expect("assignments for outpoint");
+    assert!(!assignments.is_empty());
+    assert!(
+        assignments
+            .iter()
+            .any(|a| matches!(a, Assignment::Fungible(_)))
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn list_unspents_vanilla_success() {
     initialize();
 
