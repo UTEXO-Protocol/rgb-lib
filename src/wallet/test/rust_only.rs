@@ -3,17 +3,662 @@ use super::*;
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn success() {
+fn accept_transfer_fail() {
     initialize();
 
+    let (mut wallet, _online) = get_empty_wallet!();
+
+    // invalid txid
+    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
+    let result = wallet.accept_transfer(s!("invalidTxid"), 0, consignment_endpoint, 0);
+    assert_matches!(result, Err(Error::InvalidTxid));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn check_indexer_url_electrum_fail() {
+    initialize();
+
+    let result = check_indexer_url(ELECTRUM_BLOCKSTREAM_URL, BitcoinNetwork::Regtest);
+    let verbose_unsupported =
+        "verbose transactions are unsupported by the provided electrum service";
+    assert_matches!(result, Err(Error::InvalidIndexer { details: m }) if m.contains(verbose_unsupported));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn check_indexer_url_electrum_success() {
+    initialize();
+
+    let result = check_indexer_url(ELECTRUM_URL, BitcoinNetwork::Regtest);
+    assert_matches!(result, Ok(IndexerProtocol::Electrum));
+
+    let result = check_indexer_url(ELECTRUM_2_URL, BitcoinNetwork::Regtest);
+    assert_matches!(result, Ok(IndexerProtocol::Electrum));
+}
+
+#[cfg(feature = "esplora")]
+#[test]
+#[parallel]
+fn check_indexer_url_esplora_fail() {
+    initialize();
+
+    let result = check_indexer_url(PROXY_URL, BitcoinNetwork::Regtest);
+    let invalid_indexer = s!("not a valid electrum nor esplora server");
+    assert_matches!(result, Err(Error::InvalidIndexer { details: m }) if m == invalid_indexer);
+}
+
+#[cfg(feature = "esplora")]
+#[test]
+#[parallel]
+fn check_indexer_url_esplora_success() {
+    initialize();
+
+    let result = check_indexer_url(ESPLORA_URL, BitcoinNetwork::Regtest);
+    assert_matches!(result, Ok(IndexerProtocol::Esplora));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn check_proxy_url_fail() {
+    initialize();
+
+    let result = check_proxy_url(PROXY_URL_MOD_PROTO);
+    assert_matches!(result, Err(Error::InvalidProxyProtocol { version: _ }));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn check_proxy_url_success() {
+    initialize();
+
+    assert!(check_proxy_url(PROXY_URL).is_ok());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_fail() {
     let amt_sat = 500;
     let blinding = 777;
 
+    let (mut wallet_send, _online_send, mut wallet_recv, asset) =
+        setup_send_receive_wallets_with_asset();
+
+    // prepare PSBT
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+
+    // prepare coloring data
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    output_map.insert(output.0 as u32, AMOUNT);
+
+    // wrong contract ID
+    let fake_cid = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E";
+    let asset_coloring_info = AssetColoringInfo {
+        output_map: output_map.clone(),
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> =
+        HashMap::from_iter([(ContractId::from_str(fake_cid).unwrap(), asset_coloring_info)]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let result = wallet_send.color_psbt(&mut psbt, coloring_info);
+    assert!(
+        matches!(result, Err(Error::Internal { details: m }) if m.contains(&format!("contract {fake_cid} is unknown")))
+    );
+
+    // wrong output map vout
+    let fake_o_map: HashMap<u32, u64> = HashMap::from_iter([(666, AMOUNT)]);
+    let asset_coloring_info = AssetColoringInfo {
+        output_map: fake_o_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let result = wallet_send.color_psbt(&mut psbt, coloring_info);
+    let msg = "invalid vout in output_map, does not exist in the given PSBT";
+    assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
+
+    // wrong output map amount
+    let fake_o_map = output_map.keys().map(|k| (*k, 999u64)).collect();
+    let asset_coloring_info = AssetColoringInfo {
+        output_map: fake_o_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let result = wallet_send.color_psbt(&mut psbt, coloring_info.clone());
+    let msg = "total amount in output_map (999) greater than available (666)";
+    assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_and_consume_rejects_invalid_inputs() {
+    let amt_sat = 500;
+
+    let (mut wallet_send, _online_send, mut wallet_recv, asset) =
+        setup_send_receive_wallets_with_asset();
+
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout = output.0 as u32;
+    output_map.insert(vout, AMOUNT);
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: None,
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: None,
+        nonce: None,
+    };
+
+    let err = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info.clone(), vec![])
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
+
+    let fake_txid = bitcoin::Txid::from_str(&"00".repeat(32)).unwrap();
+    let fake_outpoint = OutPoint {
+        txid: fake_txid,
+        vout: 0,
+    };
+    let err = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, vec![fake_outpoint])
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_and_consume_success() {
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let (mut wallet_send, _online_send, mut wallet_recv, asset) =
+        setup_send_receive_wallets_with_asset();
+
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+    assert!(
+        !psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .any(|o| o.script_pubkey.is_op_return())
+    );
+    assert!(psbt.proprietary.is_empty());
+
+    assert_eq!(psbt.unsigned_tx.input.len(), 1);
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout = output.0 as u32;
+    output_map.insert(vout, AMOUNT); // sending AMOUNT since color_psbt doesn't support change
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let input_outpoints: Vec<OutPoint> = psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .map(|txin| txin.previous_output)
+        .collect();
+
+    let transfers = wallet_send
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, input_outpoints)
+        .unwrap();
+
+    assert_eq!(transfers.len(), 1);
+    assert!(
+        psbt.unsigned_tx
+            .output
+            .iter()
+            .any(|o| o.script_pubkey.is_op_return())
+    );
+    assert!(!psbt.proprietary.is_empty());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn contract_assignments_for_outpoints_success() {
+    initialize();
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let asset = test_issue_asset_nia(&mut wallet, &online, Some(&[AMOUNT]));
+
+    let unspents: Vec<Unspent> = test_list_unspents(&mut wallet, Some(&online), true)
+        .into_iter()
+        .filter(|u| {
+            u.rgb_allocations
+                .iter()
+                .any(|a| a.asset_id == Some(asset.asset_id.clone()))
+        })
+        .collect();
+    assert!(!unspents.is_empty());
+
+    let outpoint = unspents.first().unwrap().utxo.outpoint.clone();
+    let contract_id = ContractId::from_str(&asset.asset_id).unwrap();
+
+    let assignments_map = wallet
+        .contract_assignments_for_outpoints(contract_id, vec![outpoint.clone()])
+        .unwrap();
+    let assignments = assignments_map
+        .get(&outpoint)
+        .expect("assignments for outpoint");
+    assert!(!assignments.is_empty());
+    assert!(
+        assignments
+            .iter()
+            .any(|a| matches!(a, Assignment::Fungible(_)))
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn fetch_and_accept_transfer_from_consignment_success() {
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let (mut wallet_send, _online_send, mut wallet_recv, asset) =
+        setup_send_receive_wallets_with_asset();
+
+    // prepare PSBT
+    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
+    let script_pubkey = address.assume_checked().script_pubkey();
+    let recipient_id = recipient_id_from_script_buf(script_pubkey.clone(), BitcoinNetwork::Regtest);
+    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
+    tx_builder
+        .add_recipient(script_pubkey.clone(), BdkAmount::from_sat(amt_sat))
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+    let mut psbt = tx_builder.finish().unwrap();
+
+    // color PSBT and consume
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout_pre = output.0 as u32;
+    let mut output_map = HashMap::new();
+    output_map.insert(vout_pre, AMOUNT);
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
+        ContractId::from_str(&asset.asset_id).unwrap(),
+        asset_coloring_info,
+    )]);
+    let coloring_info = ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let transfers = wallet_send
+        .color_psbt_and_consume(&mut psbt, coloring_info)
+        .unwrap();
+
+    // push consignment to proxy using recipient_id
+    let txid = psbt.get_txid().to_string();
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .position(|o| o.script_pubkey == script_pubkey)
+        .expect("missing recipient output") as u32;
+    let transfers_dir = wallet_send.get_transfers_dir().join(&txid);
+    let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
+    std::fs::create_dir_all(&transfers_dir).unwrap();
+    assert_eq!(transfers.len(), 1);
+    transfers
+        .first()
+        .unwrap()
+        .save_file(&consignment_path)
+        .unwrap();
+    wallet_send
+        .post_consignment(
+            PROXY_URL,
+            recipient_id.clone(),
+            consignment_path,
+            txid.clone(),
+            Some(vout),
+        )
+        .unwrap();
+
+    // fetch + accept transfer
+    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
+    let (consignment, consignment_txid, consignment_vout) = wallet_recv
+        .fetch_consignment_by_recipient_id(recipient_id, consignment_endpoint)
+        .unwrap();
+    assert_eq!(consignment_txid, txid);
+    assert_eq!(consignment_vout, vout);
+
+    let (_consignment, assignments) = wallet_recv
+        .accept_transfer_from_consignment(consignment, consignment_txid, consignment_vout, blinding)
+        .unwrap();
+    assert!(!assignments.is_empty());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn get_tx_height_fail() {
+    initialize();
+
+    let (wallet, _online) = get_empty_wallet!();
+
+    // invalid txid
+    let result = wallet.get_tx_height(s!("invalidTxid"));
+    assert_matches!(result, Err(Error::InvalidTxid));
+}
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn list_unspents_vanilla_skip_sync() {
+    initialize();
+
+    let (mut wallet, online) = get_empty_wallet!();
+
+    fund_wallet(test_get_address(&mut wallet));
+
+    // no unspents if skipping sync
+    let unspents = wallet
+        .list_unspents_vanilla(online.clone(), MIN_CONFIRMATIONS, true)
+        .unwrap();
+    assert_eq!(unspents.len(), 0);
+
+    // 1 unspent after manually syncing
+    wallet.sync(online.clone()).unwrap();
+    let unspents = wallet
+        .list_unspents_vanilla(online.clone(), MIN_CONFIRMATIONS, true)
+        .unwrap();
+    assert_eq!(unspents.len(), 1);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn list_unspents_vanilla_success() {
+    initialize();
+
     // wallets
+    let (mut wallet, online) = get_empty_wallet!();
+
+    // no unspents
+    let bak_info_before = wallet.database.get_backup_info().unwrap();
+    assert!(bak_info_before.is_none());
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
+    let bak_info_after = wallet.database.get_backup_info().unwrap();
+    assert!(bak_info_after.is_none());
+    assert_eq!(unspent_list.len(), 0);
+
+    stop_mining();
+
+    send_to_address(test_get_address(&mut wallet));
+
+    // one unspent, no confirmations
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
+    assert_eq!(unspent_list.len(), 0);
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, Some(0));
+    assert_eq!(unspent_list.len(), 1);
+
+    mine(false, true);
+
+    // one unspent, 1 confirmation
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
+    assert_eq!(unspent_list.len(), 1);
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, Some(0));
+    assert_eq!(unspent_list.len(), 1);
+
+    test_create_utxos_default(&mut wallet, &online);
+
+    // one unspent (change), colored unspents not listed
+    mine(false, false);
+    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
+    assert_eq!(unspent_list.len(), 1);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn post_consignment_fail() {
+    initialize();
+
+    // wallets
+    let wallet = get_test_wallet(false, None);
+
+    // fake data
+    let fake_txid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let transfers_dir = wallet.get_transfers_dir().join(fake_txid);
+    let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
+    std::fs::create_dir_all(&transfers_dir).unwrap();
+    std::fs::File::create(&consignment_path).unwrap();
+
+    // proxy error
+    let invalid_proxy_url = "http://127.6.6.6:7777/json-rpc";
+    let result = wallet.post_consignment(
+        invalid_proxy_url,
+        fake_txid.to_string(),
+        consignment_path.clone(),
+        fake_txid.to_string(),
+        Some(0),
+    );
+    assert_matches!(
+        result,
+        Err(Error::Proxy { details: m })
+        if m.contains("error sending request for url")
+            || m.contains("request or response body error for url"));
+
+    // invalid transport endpoint
+    let invalid_proxy_url = &format!("http://{PROXY_HOST_MOD_API}");
+    let result = wallet.post_consignment(
+        invalid_proxy_url,
+        fake_txid.to_string(),
+        consignment_path.clone(),
+        fake_txid.to_string(),
+        Some(0),
+    );
+    assert!(
+        matches!(result, Err(Error::InvalidTransportEndpoint { details: m }) if m == "invalid result")
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn save_new_asset_success() {
+    initialize();
+    let asset_amount: u64 = 66;
+
+    // wallets
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, _rcv_online) = get_empty_wallet!();
+
+    // NIA
+    let nia_asset = test_issue_asset_nia(&mut wallet, &online, None);
+    test_save_new_asset(
+        &mut wallet,
+        &online,
+        &mut rcv_wallet,
+        &nia_asset.asset_id,
+        Assignment::Fungible(asset_amount),
+    );
+    assert!(
+        &rcv_wallet
+            .database
+            .check_asset_exists(nia_asset.asset_id.clone())
+            .is_ok()
+    );
+    let asset_model = rcv_wallet
+        .database
+        .get_asset(nia_asset.asset_id.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(asset_model.id, nia_asset.asset_id);
+    assert_eq!(asset_model.initial_supply, AMOUNT.to_string());
+    assert_eq!(asset_model.name, NAME);
+    assert_eq!(asset_model.precision, PRECISION);
+    assert_eq!(asset_model.ticker.unwrap(), TICKER);
+    assert_eq!(asset_model.schema, AssetSchema::Nia);
+
+    // CFA
+    let cfa_asset = test_issue_asset_cfa(&mut wallet, &online, None, None);
+    test_save_new_asset(
+        &mut wallet,
+        &online,
+        &mut rcv_wallet,
+        &cfa_asset.asset_id,
+        Assignment::Fungible(asset_amount),
+    );
+    assert!(
+        &rcv_wallet
+            .database
+            .check_asset_exists(cfa_asset.asset_id.clone())
+            .is_ok()
+    );
+    let asset_model = rcv_wallet
+        .database
+        .get_asset(cfa_asset.asset_id.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(asset_model.id, cfa_asset.asset_id);
+    assert_eq!(asset_model.initial_supply, AMOUNT.to_string());
+    assert_eq!(asset_model.name, NAME);
+    assert_eq!(asset_model.precision, PRECISION);
+    assert!(asset_model.ticker.is_none());
+    assert_eq!(asset_model.schema, AssetSchema::Cfa);
+
+    // UDA
+    let file_str = "README.md";
+    let image_str = ["tests", "qrcode.png"].join(MAIN_SEPARATOR_STR);
+    let uda_asset = test_issue_asset_uda(
+        &mut wallet,
+        &online,
+        Some(DETAILS),
+        Some(file_str),
+        vec![&image_str, file_str],
+    );
+    test_create_utxos(&mut wallet, &online, false, None, None, FEE_RATE, None);
+    test_save_new_asset(
+        &mut wallet,
+        &online,
+        &mut rcv_wallet,
+        &uda_asset.asset_id,
+        Assignment::NonFungible,
+    );
+    assert!(
+        &rcv_wallet
+            .database
+            .check_asset_exists(uda_asset.asset_id.clone())
+            .is_ok()
+    );
+    let asset_model = rcv_wallet
+        .database
+        .get_asset(uda_asset.asset_id.clone())
+        .unwrap()
+        .unwrap();
+    assert_eq!(asset_model.id, uda_asset.asset_id);
+    assert_eq!(asset_model.initial_supply, 1.to_string());
+    assert_eq!(asset_model.name, NAME);
+    assert_eq!(asset_model.precision, PRECISION);
+    assert_eq!(asset_model.ticker.unwrap(), TICKER);
+    assert_eq!(asset_model.schema, AssetSchema::Uda);
+}
+
+#[cfg(feature = "electrum")]
+fn setup_send_receive_wallets_with_asset() -> (Wallet, Online, Wallet, AssetNIA) {
+    initialize();
+
     let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
     let (mut wallet_recv, _online_recv) = get_empty_wallet!();
 
-    // create 1 UTXO and drain the rest
     test_create_utxos(
         &mut wallet_send,
         &online_send,
@@ -29,8 +674,20 @@ fn success() {
         &test_get_address(&mut wallet_recv),
     );
 
-    // issue
     let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
+
+    (wallet_send, online_send, wallet_recv, asset)
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn success() {
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let (mut wallet_send, _online_send, mut wallet_recv, asset) =
+        setup_send_receive_wallets_with_asset();
 
     // prepare PSBT
     let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
@@ -163,628 +820,4 @@ fn success() {
     wallet_send
         .consume_fascia(fascia, RgbTxid::from_str(&txid).unwrap(), None)
         .unwrap();
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn color_psbt_for_outpoints_and_consume_rejects_invalid_inputs() {
-    initialize();
-
-    let amt_sat = 500;
-
-    let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
-    let (mut wallet_recv, _online_recv) = get_empty_wallet!();
-
-    test_create_utxos(
-        &mut wallet_send,
-        &online_send,
-        false,
-        Some(1),
-        None,
-        FEE_RATE,
-        None,
-    );
-    test_drain_to_keep(
-        &mut wallet_send,
-        &online_send,
-        &test_get_address(&mut wallet_recv),
-    );
-
-    let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
-
-    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
-    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
-    tx_builder
-        .add_recipient(
-            address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
-    let mut psbt = tx_builder.finish().unwrap();
-
-    let mut output_map = HashMap::new();
-    let output = psbt
-        .unsigned_tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_, o)| o.value.to_sat() == amt_sat)
-        .unwrap();
-    let vout = output.0 as u32;
-    output_map.insert(vout, AMOUNT);
-    let asset_coloring_info = AssetColoringInfo {
-        output_map,
-        static_blinding: None,
-    };
-    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
-        ContractId::from_str(&asset.asset_id).unwrap(),
-        asset_coloring_info,
-    )]);
-    let coloring_info = ColoringInfo {
-        asset_info_map,
-        static_blinding: None,
-        nonce: None,
-    };
-
-    let err = wallet_send
-        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info.clone(), vec![])
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
-
-    let fake_txid = bitcoin::Txid::from_str(&"00".repeat(32)).unwrap();
-    let fake_outpoint = OutPoint {
-        txid: fake_txid,
-        vout: 0,
-    };
-    let err = wallet_send
-        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, vec![fake_outpoint])
-        .unwrap_err();
-    assert!(matches!(err, Error::InvalidColoringInfo { .. }));
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn color_psbt_for_outpoints_and_consume_success() {
-    initialize();
-
-    let amt_sat = 500;
-    let blinding = 777;
-
-    let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
-    let (mut wallet_recv, _online_recv) = get_empty_wallet!();
-
-    test_create_utxos(
-        &mut wallet_send,
-        &online_send,
-        false,
-        Some(1),
-        None,
-        FEE_RATE,
-        None,
-    );
-    test_drain_to_keep(
-        &mut wallet_send,
-        &online_send,
-        &test_get_address(&mut wallet_recv),
-    );
-
-    let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
-
-    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
-    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
-    tx_builder
-        .add_recipient(
-            address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
-    let mut psbt = tx_builder.finish().unwrap();
-    assert!(
-        !psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .any(|o| o.script_pubkey.is_op_return())
-    );
-    assert!(psbt.proprietary.is_empty());
-
-    assert_eq!(psbt.unsigned_tx.input.len(), 1);
-    let mut output_map = HashMap::new();
-    let output = psbt
-        .unsigned_tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_, o)| o.value.to_sat() == amt_sat)
-        .unwrap();
-    let vout = output.0 as u32;
-    output_map.insert(vout, AMOUNT); // sending AMOUNT since color_psbt doesn't support change
-    let asset_coloring_info = AssetColoringInfo {
-        output_map,
-        static_blinding: Some(blinding),
-    };
-    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
-        ContractId::from_str(&asset.asset_id).unwrap(),
-        asset_coloring_info,
-    )]);
-    let coloring_info = ColoringInfo {
-        asset_info_map,
-        static_blinding: Some(blinding),
-        nonce: None,
-    };
-    let input_outpoints: Vec<OutPoint> = psbt
-        .unsigned_tx
-        .input
-        .iter()
-        .map(|txin| txin.previous_output)
-        .collect();
-
-    let transfers = wallet_send
-        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, input_outpoints)
-        .unwrap();
-
-    assert_eq!(transfers.len(), 1);
-    assert!(
-        psbt.unsigned_tx
-            .output
-            .iter()
-            .any(|o| o.script_pubkey.is_op_return())
-    );
-    assert!(!psbt.proprietary.is_empty());
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn contract_assignments_for_outpoints_success() {
-    initialize();
-
-    let (mut wallet, online) = get_funded_wallet!();
-    let asset = test_issue_asset_nia(&mut wallet, &online, Some(&[AMOUNT]));
-
-    let unspents: Vec<Unspent> = test_list_unspents(&mut wallet, Some(&online), true)
-        .into_iter()
-        .filter(|u| {
-            u.rgb_allocations
-                .iter()
-                .any(|a| a.asset_id == Some(asset.asset_id.clone()))
-        })
-        .collect();
-    assert!(!unspents.is_empty());
-
-    let outpoint = unspents.first().unwrap().utxo.outpoint.clone();
-    let contract_id = ContractId::from_str(&asset.asset_id).unwrap();
-
-    let assignments_map = wallet
-        .contract_assignments_for_outpoints(contract_id, vec![outpoint.clone()])
-        .unwrap();
-    let assignments = assignments_map
-        .get(&outpoint)
-        .expect("assignments for outpoint");
-    assert!(!assignments.is_empty());
-    assert!(
-        assignments
-            .iter()
-            .any(|a| matches!(a, Assignment::Fungible(_)))
-    );
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn list_unspents_vanilla_success() {
-    initialize();
-
-    // wallets
-    let (mut wallet, online) = get_empty_wallet!();
-
-    // no unspents
-    let bak_info_before = wallet.database.get_backup_info().unwrap();
-    assert!(bak_info_before.is_none());
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
-    let bak_info_after = wallet.database.get_backup_info().unwrap();
-    assert!(bak_info_after.is_none());
-    assert_eq!(unspent_list.len(), 0);
-
-    stop_mining();
-
-    send_to_address(test_get_address(&mut wallet));
-
-    // one unspent, no confirmations
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
-    assert_eq!(unspent_list.len(), 0);
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, Some(0));
-    assert_eq!(unspent_list.len(), 1);
-
-    mine(false, true);
-
-    // one unspent, 1 confirmation
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
-    assert_eq!(unspent_list.len(), 1);
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, Some(0));
-    assert_eq!(unspent_list.len(), 1);
-
-    test_create_utxos_default(&mut wallet, &online);
-
-    // one unspent (change), colored unspents not listed
-    mine(false, false);
-    let unspent_list = test_list_unspents_vanilla(&mut wallet, &online, None);
-    assert_eq!(unspent_list.len(), 1);
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn list_unspents_vanilla_skip_sync() {
-    initialize();
-
-    let (mut wallet, online) = get_empty_wallet!();
-
-    fund_wallet(test_get_address(&mut wallet));
-
-    // no unspents if skipping sync
-    let unspents = wallet
-        .list_unspents_vanilla(online.clone(), MIN_CONFIRMATIONS, true)
-        .unwrap();
-    assert_eq!(unspents.len(), 0);
-
-    // 1 unspent after manually syncing
-    wallet.sync(online.clone()).unwrap();
-    let unspents = wallet
-        .list_unspents_vanilla(online.clone(), MIN_CONFIRMATIONS, true)
-        .unwrap();
-    assert_eq!(unspents.len(), 1);
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn save_new_asset_success() {
-    initialize();
-    let asset_amount: u64 = 66;
-
-    // wallets
-    let (mut wallet, online) = get_funded_wallet!();
-    let (mut rcv_wallet, _rcv_online) = get_empty_wallet!();
-
-    // NIA
-    let nia_asset = test_issue_asset_nia(&mut wallet, &online, None);
-    test_save_new_asset(
-        &mut wallet,
-        &online,
-        &mut rcv_wallet,
-        &nia_asset.asset_id,
-        Assignment::Fungible(asset_amount),
-    );
-    assert!(
-        &rcv_wallet
-            .database
-            .check_asset_exists(nia_asset.asset_id.clone())
-            .is_ok()
-    );
-    let asset_model = rcv_wallet
-        .database
-        .get_asset(nia_asset.asset_id.clone())
-        .unwrap()
-        .unwrap();
-    assert_eq!(asset_model.id, nia_asset.asset_id);
-    assert_eq!(asset_model.initial_supply, AMOUNT.to_string());
-    assert_eq!(asset_model.name, NAME);
-    assert_eq!(asset_model.precision, PRECISION);
-    assert_eq!(asset_model.ticker.unwrap(), TICKER);
-    assert_eq!(asset_model.schema, AssetSchema::Nia);
-
-    // CFA
-    let cfa_asset = test_issue_asset_cfa(&mut wallet, &online, None, None);
-    test_save_new_asset(
-        &mut wallet,
-        &online,
-        &mut rcv_wallet,
-        &cfa_asset.asset_id,
-        Assignment::Fungible(asset_amount),
-    );
-    assert!(
-        &rcv_wallet
-            .database
-            .check_asset_exists(cfa_asset.asset_id.clone())
-            .is_ok()
-    );
-    let asset_model = rcv_wallet
-        .database
-        .get_asset(cfa_asset.asset_id.clone())
-        .unwrap()
-        .unwrap();
-    assert_eq!(asset_model.id, cfa_asset.asset_id);
-    assert_eq!(asset_model.initial_supply, AMOUNT.to_string());
-    assert_eq!(asset_model.name, NAME);
-    assert_eq!(asset_model.precision, PRECISION);
-    assert!(asset_model.ticker.is_none());
-    assert_eq!(asset_model.schema, AssetSchema::Cfa);
-
-    // UDA
-    let file_str = "README.md";
-    let image_str = ["tests", "qrcode.png"].join(MAIN_SEPARATOR_STR);
-    let uda_asset = test_issue_asset_uda(
-        &mut wallet,
-        &online,
-        Some(DETAILS),
-        Some(file_str),
-        vec![&image_str, file_str],
-    );
-    test_create_utxos(&mut wallet, &online, false, None, None, FEE_RATE, None);
-    test_save_new_asset(
-        &mut wallet,
-        &online,
-        &mut rcv_wallet,
-        &uda_asset.asset_id,
-        Assignment::NonFungible,
-    );
-    assert!(
-        &rcv_wallet
-            .database
-            .check_asset_exists(uda_asset.asset_id.clone())
-            .is_ok()
-    );
-    let asset_model = rcv_wallet
-        .database
-        .get_asset(uda_asset.asset_id.clone())
-        .unwrap()
-        .unwrap();
-    assert_eq!(asset_model.id, uda_asset.asset_id);
-    assert_eq!(asset_model.initial_supply, 1.to_string());
-    assert_eq!(asset_model.name, NAME);
-    assert_eq!(asset_model.precision, PRECISION);
-    assert_eq!(asset_model.ticker.unwrap(), TICKER);
-    assert_eq!(asset_model.schema, AssetSchema::Uda);
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn color_psbt_fail() {
-    initialize();
-
-    let amt_sat = 500;
-    let blinding = 777;
-
-    // wallets
-    let (mut wallet_send, online_send) = get_funded_noutxo_wallet!();
-    let (mut wallet_recv, _online_recv) = get_empty_wallet!();
-
-    // create 1 UTXO and drain the rest
-    test_create_utxos(
-        &mut wallet_send,
-        &online_send,
-        false,
-        Some(1),
-        None,
-        FEE_RATE,
-        None,
-    );
-    test_drain_to_keep(
-        &mut wallet_send,
-        &online_send,
-        &test_get_address(&mut wallet_recv),
-    );
-
-    // issue
-    let asset = test_issue_asset_nia(&mut wallet_send, &online_send, Some(&[AMOUNT]));
-
-    // prepare PSBT
-    let address = BdkAddress::from_str(&test_get_address(&mut wallet_recv)).unwrap();
-    let mut tx_builder = wallet_send.bdk_wallet.build_tx();
-    tx_builder
-        .add_recipient(
-            address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
-    let mut psbt = tx_builder.finish().unwrap();
-
-    // prepare coloring data
-    assert_eq!(psbt.unsigned_tx.input.len(), 1);
-    let mut output_map = HashMap::new();
-    let output = psbt
-        .unsigned_tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_, o)| o.value.to_sat() == amt_sat)
-        .unwrap();
-    output_map.insert(output.0 as u32, AMOUNT);
-
-    // wrong contract ID
-    let fake_cid = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E";
-    let asset_coloring_info = AssetColoringInfo {
-        output_map: output_map.clone(),
-        static_blinding: Some(blinding),
-    };
-    let asset_info_map: HashMap<ContractId, AssetColoringInfo> =
-        HashMap::from_iter([(ContractId::from_str(fake_cid).unwrap(), asset_coloring_info)]);
-    let coloring_info = ColoringInfo {
-        asset_info_map,
-        static_blinding: Some(blinding),
-        nonce: None,
-    };
-    let result = wallet_send.color_psbt(&mut psbt, coloring_info);
-    assert!(
-        matches!(result, Err(Error::Internal { details: m }) if m.contains(&format!("contract {fake_cid} is unknown")))
-    );
-
-    // wrong output map vout
-    let fake_o_map: HashMap<u32, u64> = HashMap::from_iter([(666, AMOUNT)]);
-    let asset_coloring_info = AssetColoringInfo {
-        output_map: fake_o_map,
-        static_blinding: Some(blinding),
-    };
-    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
-        ContractId::from_str(&asset.asset_id).unwrap(),
-        asset_coloring_info,
-    )]);
-    let coloring_info = ColoringInfo {
-        asset_info_map,
-        static_blinding: Some(blinding),
-        nonce: None,
-    };
-    let result = wallet_send.color_psbt(&mut psbt, coloring_info);
-    let msg = "invalid vout in output_map, does not exist in the given PSBT";
-    assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
-
-    // wrong output map amount
-    let fake_o_map = output_map.keys().map(|k| (*k, 999u64)).collect();
-    let asset_coloring_info = AssetColoringInfo {
-        output_map: fake_o_map,
-        static_blinding: Some(blinding),
-    };
-    let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
-        ContractId::from_str(&asset.asset_id).unwrap(),
-        asset_coloring_info,
-    )]);
-    let coloring_info = ColoringInfo {
-        asset_info_map,
-        static_blinding: Some(blinding),
-        nonce: None,
-    };
-    let result = wallet_send.color_psbt(&mut psbt, coloring_info.clone());
-    let msg = "total amount in output_map (999) greater than available (666)";
-    assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn post_consignment_fail() {
-    initialize();
-
-    // wallets
-    let wallet = get_test_wallet(false, None);
-
-    // fake data
-    let fake_txid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let transfers_dir = wallet.get_transfers_dir().join(fake_txid);
-    let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
-    std::fs::create_dir_all(&transfers_dir).unwrap();
-    std::fs::File::create(&consignment_path).unwrap();
-
-    // proxy error
-    let invalid_proxy_url = "http://127.6.6.6:7777/json-rpc";
-    let result = wallet.post_consignment(
-        invalid_proxy_url,
-        fake_txid.to_string(),
-        consignment_path.clone(),
-        fake_txid.to_string(),
-        Some(0),
-    );
-    assert_matches!(
-        result,
-        Err(Error::Proxy { details: m })
-        if m.contains("error sending request for url")
-            || m.contains("request or response body error for url"));
-
-    // invalid transport endpoint
-    let invalid_proxy_url = &format!("http://{PROXY_HOST_MOD_API}");
-    let result = wallet.post_consignment(
-        invalid_proxy_url,
-        fake_txid.to_string(),
-        consignment_path.clone(),
-        fake_txid.to_string(),
-        Some(0),
-    );
-    assert!(
-        matches!(result, Err(Error::InvalidTransportEndpoint { details: m }) if m == "invalid result")
-    );
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn check_indexer_url_electrum_success() {
-    initialize();
-
-    let result = check_indexer_url(ELECTRUM_URL, BitcoinNetwork::Regtest);
-    assert_matches!(result, Ok(IndexerProtocol::Electrum));
-
-    let result = check_indexer_url(ELECTRUM_2_URL, BitcoinNetwork::Regtest);
-    assert_matches!(result, Ok(IndexerProtocol::Electrum));
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn check_indexer_url_electrum_fail() {
-    initialize();
-
-    let result = check_indexer_url(ELECTRUM_BLOCKSTREAM_URL, BitcoinNetwork::Regtest);
-    let verbose_unsupported =
-        "verbose transactions are unsupported by the provided electrum service";
-    assert_matches!(result, Err(Error::InvalidIndexer { details: m }) if m.contains(verbose_unsupported));
-}
-
-#[cfg(feature = "esplora")]
-#[test]
-#[parallel]
-fn check_indexer_url_esplora_success() {
-    initialize();
-
-    let result = check_indexer_url(ESPLORA_URL, BitcoinNetwork::Regtest);
-    assert_matches!(result, Ok(IndexerProtocol::Esplora));
-}
-
-#[cfg(feature = "esplora")]
-#[test]
-#[parallel]
-fn check_indexer_url_esplora_fail() {
-    initialize();
-
-    let result = check_indexer_url(PROXY_URL, BitcoinNetwork::Regtest);
-    let invalid_indexer = s!("not a valid electrum nor esplora server");
-    assert_matches!(result, Err(Error::InvalidIndexer { details: m }) if m == invalid_indexer);
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn check_proxy_url_success() {
-    initialize();
-
-    assert!(check_proxy_url(PROXY_URL).is_ok());
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn check_proxy_url_fail() {
-    initialize();
-
-    let result = check_proxy_url(PROXY_URL_MOD_PROTO);
-    assert_matches!(result, Err(Error::InvalidProxyProtocol { version: _ }));
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn accept_transfer_fail() {
-    initialize();
-
-    let (mut wallet, _online) = get_empty_wallet!();
-
-    // invalid txid
-    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
-    let result = wallet.accept_transfer(s!("invalidTxid"), 0, consignment_endpoint, 0);
-    assert_matches!(result, Err(Error::InvalidTxid));
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn get_tx_height_fail() {
-    initialize();
-
-    let (wallet, _online) = get_empty_wallet!();
-
-    // invalid txid
-    let result = wallet.get_tx_height(s!("invalidTxid"));
-    assert_matches!(result, Err(Error::InvalidTxid));
 }

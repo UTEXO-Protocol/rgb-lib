@@ -76,6 +76,250 @@ pub fn check_proxy_url(proxy_url: &str) -> Result<(), Error> {
 }
 
 impl Wallet {
+    /// Accept an RGB transfer using a TXID to retrieve its consignment.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn accept_transfer(
+        &mut self,
+        txid: String,
+        vout: u32,
+        consignment_endpoint: RgbTransport,
+        blinding: u64,
+    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
+        info!(self.logger, "Accepting transfer...");
+        let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
+        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
+
+        let consignment_res = self.get_consignment(&proxy_url, txid.clone())?;
+        let consignment_bytes = general_purpose::STANDARD
+            .decode(consignment_res.consignment)
+            .map_err(InternalError::from)?;
+        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
+
+        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding)
+    }
+
+    /// Accept an RGB transfer from a pre-fetched consignment.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn accept_transfer_from_consignment(
+        &mut self,
+        consignment: RgbTransfer,
+        txid: String,
+        vout: u32,
+        blinding: u64,
+    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
+        let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
+        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn accept_transfer_with_consignment(
+        &mut self,
+        consignment: RgbTransfer,
+        witness_id: RgbTxid,
+        vout: u32,
+        blinding: u64,
+    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
+        let schema_id = consignment.schema_id().to_string();
+        let asset_schema: AssetSchema = schema_id.try_into()?;
+        self.check_schema_support(&asset_schema)?;
+        debug!(
+            self.logger,
+            "Got consignment for asset with {} schema", asset_schema
+        );
+
+        let mut runtime = self.rgb_runtime()?;
+
+        let graph_seal = GraphSeal::with_blinded_vout(vout, blinding);
+        runtime.store_secret_seal(graph_seal)?;
+
+        let resolver = OffchainResolver {
+            witness_id,
+            consignment: &consignment,
+            fallback: self.blockchain_resolver(),
+        };
+
+        debug!(self.logger, "Validating consignment...");
+        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+        let trusted_typesystem = asset_schema.types();
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem,
+            ..Default::default()
+        };
+        let valid_consignment = match consignment.clone().validate(&resolver, &validation_config) {
+            Ok(consignment) => consignment,
+            Err(ValidationError::InvalidConsignment(e)) => {
+                error!(self.logger, "Consignment is invalid: {}", e);
+                return Err(Error::InvalidConsignment);
+            }
+            Err(ValidationError::ResolverError(e)) => {
+                warn!(self.logger, "Network error during consignment validation");
+                return Err(Error::Network {
+                    details: e.to_string(),
+                });
+            }
+        };
+        let validity = valid_consignment.validation_status().validity();
+        debug!(self.logger, "Consignment validity: {:?}", validity);
+
+        let valid_contract = valid_consignment.clone().into_valid_contract();
+        runtime
+            .import_contract(valid_contract, self.blockchain_resolver())
+            .expect("failure importing validated contract");
+
+        let received_rgb_assignments =
+            self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
+
+        let _status = runtime.accept_transfer(valid_consignment, &resolver)?;
+
+        info!(self.logger, "Accept transfer completed");
+        Ok((
+            consignment,
+            received_rgb_assignments.into_values().collect(),
+        ))
+    }
+
+    /// Color a PSBT.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn color_psbt(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
+        let prev_outputs = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|txin| txin.previous_output)
+            .collect::<HashSet<OutPoint>>();
+        self.color_psbt_with_prevouts(psbt, coloring_info, prev_outputs)
+    }
+
+    /// Color a PSBT, consume the RGB fascia and return the related consignment.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn color_psbt_and_consume(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+    ) -> Result<Vec<RgbTransfer>, Error> {
+        info!(self.logger, "Coloring PSBT and consuming...");
+        let (fascia, asset_beneficiaries) = self.color_psbt(psbt, coloring_info.clone())?;
+
+        let witness_txid = psbt.get_txid();
+
+        let mut runtime = self.rgb_runtime()?;
+        runtime.consume_fascia(fascia, witness_txid, None)?;
+
+        let mut transfers = vec![];
+        for (contract_id, beneficiaries) in asset_beneficiaries {
+            let mut beneficiaries_witness = vec![];
+            let mut beneficiaries_blinded = vec![];
+            for builder_seal in beneficiaries {
+                match builder_seal {
+                    BuilderSeal::Revealed(seal) => {
+                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
+                        beneficiaries_witness.push(explicit_seal);
+                    }
+                    BuilderSeal::Concealed(secret_seal) => {
+                        beneficiaries_blinded.push(secret_seal);
+                    }
+                };
+            }
+            transfers.push(runtime.transfer(
+                contract_id,
+                beneficiaries_witness,
+                beneficiaries_blinded,
+                Some(witness_txid),
+            )?);
+        }
+
+        info!(self.logger, "Color PSBT and consume completed");
+        Ok(transfers)
+    }
+
+    /// Color a PSBT using a provided set of input outpoints.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    pub fn color_psbt_for_outpoints(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<OutPoint>,
+    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
+        let override_set: HashSet<OutPoint> = input_outpoints.into_iter().collect();
+        if override_set.is_empty() {
+            return Err(Error::InvalidColoringInfo {
+                details: s!("input_outpoints is empty"),
+            });
+        }
+        let psbt_inputs: HashSet<OutPoint> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|txin| txin.previous_output)
+            .collect();
+        if !override_set.is_subset(&psbt_inputs) {
+            return Err(Error::InvalidColoringInfo {
+                details: s!("input_outpoints must be a subset of PSBT inputs"),
+            });
+        }
+        self.color_psbt_with_prevouts(psbt, coloring_info, override_set)
+    }
+
+    /// Color a PSBT with a provided set of input outpoints and consume the resulting fascia.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    pub fn color_psbt_for_outpoints_and_consume(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<OutPoint>,
+    ) -> Result<Vec<RgbTransfer>, Error> {
+        info!(self.logger, "Coloring PSBT and consuming...");
+        let (fascia, asset_beneficiaries) =
+            self.color_psbt_for_outpoints(psbt, coloring_info.clone(), input_outpoints)?;
+
+        let witness_txid = psbt.get_txid();
+
+        let mut runtime = self.rgb_runtime()?;
+        runtime.consume_fascia(fascia, witness_txid, None)?;
+
+        let mut transfers = vec![];
+        for (contract_id, beneficiaries) in asset_beneficiaries {
+            let mut beneficiaries_witness = vec![];
+            let mut beneficiaries_blinded = vec![];
+            for builder_seal in beneficiaries {
+                match builder_seal {
+                    BuilderSeal::Revealed(seal) => {
+                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
+                        beneficiaries_witness.push(explicit_seal);
+                    }
+                    BuilderSeal::Concealed(secret_seal) => {
+                        beneficiaries_blinded.push(secret_seal);
+                    }
+                };
+            }
+            transfers.push(runtime.transfer(
+                contract_id,
+                beneficiaries_witness,
+                beneficiaries_blinded,
+                Some(witness_txid),
+            )?);
+        }
+
+        info!(self.logger, "Color PSBT and consume completed");
+        Ok(transfers)
+    }
+
     fn color_psbt_with_prevouts(
         &self,
         psbt: &mut Psbt,
@@ -231,224 +475,6 @@ impl Wallet {
         Ok((fascia, asset_beneficiaries))
     }
 
-    /// Color a PSBT.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    pub fn color_psbt(
-        &self,
-        psbt: &mut Psbt,
-        coloring_info: ColoringInfo,
-    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
-        let prev_outputs = psbt
-            .unsigned_tx
-            .input
-            .iter()
-            .map(|txin| txin.previous_output)
-            .collect::<HashSet<OutPoint>>();
-        self.color_psbt_with_prevouts(psbt, coloring_info, prev_outputs)
-    }
-
-    /// Color a PSBT, consume the RGB fascia and return the related consignment.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    pub fn color_psbt_and_consume(
-        &self,
-        psbt: &mut Psbt,
-        coloring_info: ColoringInfo,
-    ) -> Result<Vec<RgbTransfer>, Error> {
-        info!(self.logger, "Coloring PSBT and consuming...");
-        let (fascia, asset_beneficiaries) = self.color_psbt(psbt, coloring_info.clone())?;
-
-        let witness_txid = psbt.get_txid();
-
-        let mut runtime = self.rgb_runtime()?;
-        runtime.consume_fascia(fascia, witness_txid, None)?;
-
-        let mut transfers = vec![];
-        for (contract_id, beneficiaries) in asset_beneficiaries {
-            let mut beneficiaries_witness = vec![];
-            let mut beneficiaries_blinded = vec![];
-            for builder_seal in beneficiaries {
-                match builder_seal {
-                    BuilderSeal::Revealed(seal) => {
-                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
-                        beneficiaries_witness.push(explicit_seal);
-                    }
-                    BuilderSeal::Concealed(secret_seal) => {
-                        beneficiaries_blinded.push(secret_seal);
-                    }
-                };
-            }
-            transfers.push(runtime.transfer(
-                contract_id,
-                beneficiaries_witness,
-                beneficiaries_blinded,
-                Some(witness_txid),
-            )?);
-        }
-
-        info!(self.logger, "Color PSBT and consume completed");
-        Ok(transfers)
-    }
-
-    /// Color a PSBT using a provided set of input outpoints.
-    ///
-    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
-    pub fn color_psbt_for_outpoints(
-        &self,
-        psbt: &mut Psbt,
-        coloring_info: ColoringInfo,
-        input_outpoints: Vec<OutPoint>,
-    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
-        let override_set: HashSet<OutPoint> = input_outpoints.into_iter().collect();
-        if override_set.is_empty() {
-            return Err(Error::InvalidColoringInfo {
-                details: s!("input_outpoints is empty"),
-            });
-        }
-        let psbt_inputs: HashSet<OutPoint> = psbt
-            .unsigned_tx
-            .input
-            .iter()
-            .map(|txin| txin.previous_output)
-            .collect();
-        if !override_set.is_subset(&psbt_inputs) {
-            return Err(Error::InvalidColoringInfo {
-                details: s!("input_outpoints must be a subset of PSBT inputs"),
-            });
-        }
-        self.color_psbt_with_prevouts(psbt, coloring_info, override_set)
-    }
-
-    /// Color a PSBT with a provided set of input outpoints and consume the resulting fascia.
-    ///
-    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
-    pub fn color_psbt_for_outpoints_and_consume(
-        &self,
-        psbt: &mut Psbt,
-        coloring_info: ColoringInfo,
-        input_outpoints: Vec<OutPoint>,
-    ) -> Result<Vec<RgbTransfer>, Error> {
-        info!(self.logger, "Coloring PSBT and consuming...");
-        let (fascia, asset_beneficiaries) =
-            self.color_psbt_for_outpoints(psbt, coloring_info.clone(), input_outpoints)?;
-
-        let witness_txid = psbt.get_txid();
-
-        let mut runtime = self.rgb_runtime()?;
-        runtime.consume_fascia(fascia, witness_txid, None)?;
-
-        let mut transfers = vec![];
-        for (contract_id, beneficiaries) in asset_beneficiaries {
-            let mut beneficiaries_witness = vec![];
-            let mut beneficiaries_blinded = vec![];
-            for builder_seal in beneficiaries {
-                match builder_seal {
-                    BuilderSeal::Revealed(seal) => {
-                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
-                        beneficiaries_witness.push(explicit_seal);
-                    }
-                    BuilderSeal::Concealed(secret_seal) => {
-                        beneficiaries_blinded.push(secret_seal);
-                    }
-                };
-            }
-            transfers.push(runtime.transfer(
-                contract_id,
-                beneficiaries_witness,
-                beneficiaries_blinded,
-                Some(witness_txid),
-            )?);
-        }
-
-        info!(self.logger, "Color PSBT and consume completed");
-        Ok(transfers)
-    }
-
-    /// Accept an RGB transfer using a TXID to retrieve its consignment.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn accept_transfer(
-        &mut self,
-        txid: String,
-        vout: u32,
-        consignment_endpoint: RgbTransport,
-        blinding: u64,
-    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
-        info!(self.logger, "Accepting transfer...");
-        let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
-        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
-
-        let consignment_res = self.get_consignment(&proxy_url, txid.clone())?;
-        let consignment_bytes = general_purpose::STANDARD
-            .decode(consignment_res.consignment)
-            .map_err(InternalError::from)?;
-        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
-
-        let schema_id = consignment.schema_id().to_string();
-        let asset_schema: AssetSchema = schema_id.try_into()?;
-        self.check_schema_support(&asset_schema)?;
-        debug!(
-            self.logger,
-            "Got consignment for asset with {} schema", asset_schema
-        );
-
-        let mut runtime = self.rgb_runtime()?;
-
-        let graph_seal = GraphSeal::with_blinded_vout(vout, blinding);
-        runtime.store_secret_seal(graph_seal)?;
-
-        let resolver = OffchainResolver {
-            witness_id,
-            consignment: &consignment,
-            fallback: self.blockchain_resolver(),
-        };
-
-        debug!(self.logger, "Validating consignment...");
-        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
-        let trusted_typesystem = asset_schema.types();
-        let validation_config = ValidationConfig {
-            chain_net: self.chain_net(),
-            trusted_typesystem,
-            ..Default::default()
-        };
-        let valid_consignment = match consignment.clone().validate(&resolver, &validation_config) {
-            Ok(consignment) => consignment,
-            Err(ValidationError::InvalidConsignment(e)) => {
-                error!(self.logger, "Consignment is invalid: {}", e);
-                return Err(Error::InvalidConsignment);
-            }
-            Err(ValidationError::ResolverError(e)) => {
-                warn!(self.logger, "Network error during consignment validation");
-                return Err(Error::Network {
-                    details: e.to_string(),
-                });
-            }
-        };
-        let validity = valid_consignment.validation_status().validity();
-        debug!(self.logger, "Consignment validity: {:?}", validity);
-
-        let valid_contract = valid_consignment.clone().into_valid_contract();
-        runtime
-            .import_contract(valid_contract, self.blockchain_resolver())
-            .expect("failure importing validated contract");
-
-        let received_rgb_assignments =
-            self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
-
-        let _status = runtime.accept_transfer(valid_consignment, &resolver)?;
-
-        info!(self.logger, "Accept transfer completed");
-        Ok((
-            consignment,
-            received_rgb_assignments.into_values().collect(),
-        ))
-    }
-
     /// Consume an RGB fascia.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -503,6 +529,38 @@ impl Wallet {
         Ok(res)
     }
 
+    /// Fetch an RGB consignment by recipient_id (proxy lookup key).
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn fetch_consignment_by_recipient_id(
+        &self,
+        recipient_id: String,
+        consignment_endpoint: RgbTransport,
+    ) -> Result<(RgbTransfer, String, u32), Error> {
+        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
+        let consignment_res = self.get_consignment(&proxy_url, recipient_id)?;
+        let vout = consignment_res.vout.ok_or_else(|| Error::Internal {
+            details: s!("missing vout in consignment response"),
+        })?;
+
+        let consignment_bytes = general_purpose::STANDARD
+            .decode(consignment_res.consignment)
+            .map_err(InternalError::from)?;
+        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
+
+        Ok((consignment, consignment_res.txid, vout))
+    }
+
+    /// Return the consignment file path for a send transfer of an asset.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
+        let transfer_dir = self.get_transfer_dir(transfer_id);
+        let asset_transfer_dir = self.get_asset_transfer_dir(transfer_dir, asset_id);
+        asset_transfer_dir.join(CONSIGNMENT_FILE)
+    }
     /// Get the height for a Bitcoin TX.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -526,39 +584,48 @@ impl Wallet {
         Ok(height)
     }
 
-    /// Update RGB witnesses.
+    /// List the Bitcoin unspents of the vanilla wallet, using BDK's objects, filtered by
+    /// `min_confirmations`.
     ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
+    /// <div class="warning">This method is meant for special usage, for most cases the method
+    /// <code>list_unspents</code> is sufficient</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn update_witnesses(
-        &self,
-        after_height: u32,
-        force_witnesses: Vec<RgbTxid>,
-    ) -> Result<UpdateRes, Error> {
-        info!(self.logger, "Updating witnesses...");
-        let update_res = self.rgb_runtime()?.update_witnesses(
-            self.blockchain_resolver(),
-            after_height,
-            force_witnesses,
-        )?;
-        info!(self.logger, "Update witnesses completed");
-        Ok(update_res)
-    }
+    pub fn list_unspents_vanilla(
+        &mut self,
+        online: Online,
+        min_confirmations: u8,
+        skip_sync: bool,
+    ) -> Result<Vec<LocalOutput>, Error> {
+        info!(self.logger, "Listing unspents vanilla...");
+        self.sync_if_requested(Some(online), skip_sync)?;
 
-    /// Manually set the [`WitnessOrd`] of a witness TX.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn upsert_witness(
-        &self,
-        witness_id: RgbTxid,
-        witness_ord: WitnessOrd,
-    ) -> Result<(), Error> {
-        let mut runtime = self.rgb_runtime()?;
-        runtime.upsert_witness(witness_id, witness_ord)?;
-        Ok(())
+        let unspents = self.internal_unspents();
+
+        let res = if min_confirmations > 0 {
+            unspents
+                .filter_map(|u| {
+                    match self
+                        .indexer()
+                        .get_tx_confirmations(&u.outpoint.txid.to_string())
+                    {
+                        Ok(confirmations) => {
+                            if let Some(confirmations) = confirmations {
+                                if confirmations >= min_confirmations as u64 {
+                                    return Some(Ok(u));
+                                }
+                            }
+                            None
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                })
+                .collect::<Result<Vec<LocalOutput>, Error>>()
+        } else {
+            Ok(unspents.collect())
+        };
+
+        info!(self.logger, "List unspents vanilla completed");
+        res
     }
 
     /// Post a consignment to the proxy server.
@@ -602,6 +669,54 @@ impl Wallet {
         }
 
         info!(self.logger, "Post consignment completed");
+        Ok(())
+    }
+
+    /// Extract the metadata of a new RGB asset and save the asset into the DB.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn save_new_asset(
+        &self,
+        consignment: RgbTransfer,
+        offchain_txid: String,
+    ) -> Result<(), Error> {
+        info!(self.logger, "Saving new asset...");
+        let runtime = self.rgb_runtime()?;
+
+        let contract_id = consignment.contract_id();
+
+        let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
+        let resolver = OffchainResolver {
+            witness_id,
+            consignment: &consignment,
+            fallback: self.blockchain_resolver(),
+        };
+        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+        let trusted_typesystem = asset_schema.types();
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem,
+            ..Default::default()
+        };
+        let valid_transfer = consignment
+            .clone()
+            .validate(&resolver, &validation_config)
+            .expect("valid consignment");
+        let valid_contract = valid_transfer.clone().into_valid_contract();
+
+        self.save_new_asset_internal(
+            &runtime,
+            contract_id,
+            asset_schema,
+            valid_contract,
+            valid_transfer,
+        )?;
+
+        self.update_backup_info(false)?;
+
+        info!(self.logger, "Save new asset completed");
         Ok(())
     }
 
@@ -784,105 +899,38 @@ impl Wallet {
         Ok(())
     }
 
-    /// Extract the metadata of a new RGB asset and save the asset into the DB.
+    /// Update RGB witnesses.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn save_new_asset(
+    pub fn update_witnesses(
         &self,
-        consignment: RgbTransfer,
-        offchain_txid: String,
-    ) -> Result<(), Error> {
-        info!(self.logger, "Saving new asset...");
-        let runtime = self.rgb_runtime()?;
-
-        let contract_id = consignment.contract_id();
-
-        let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
-        let resolver = OffchainResolver {
-            witness_id,
-            consignment: &consignment,
-            fallback: self.blockchain_resolver(),
-        };
-        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
-        let trusted_typesystem = asset_schema.types();
-        let validation_config = ValidationConfig {
-            chain_net: self.chain_net(),
-            trusted_typesystem,
-            ..Default::default()
-        };
-        let valid_transfer = consignment
-            .clone()
-            .validate(&resolver, &validation_config)
-            .expect("valid consignment");
-        let valid_contract = valid_transfer.clone().into_valid_contract();
-
-        self.save_new_asset_internal(
-            &runtime,
-            contract_id,
-            asset_schema,
-            valid_contract,
-            valid_transfer,
+        after_height: u32,
+        force_witnesses: Vec<RgbTxid>,
+    ) -> Result<UpdateRes, Error> {
+        info!(self.logger, "Updating witnesses...");
+        let update_res = self.rgb_runtime()?.update_witnesses(
+            self.blockchain_resolver(),
+            after_height,
+            force_witnesses,
         )?;
-
-        self.update_backup_info(false)?;
-
-        info!(self.logger, "Save new asset completed");
-        Ok(())
+        info!(self.logger, "Update witnesses completed");
+        Ok(update_res)
     }
 
-    /// List the Bitcoin unspents of the vanilla wallet, using BDK's objects, filtered by
-    /// `min_confirmations`.
-    ///
-    /// <div class="warning">This method is meant for special usage, for most cases the method
-    /// <code>list_unspents</code> is sufficient</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn list_unspents_vanilla(
-        &mut self,
-        online: Online,
-        min_confirmations: u8,
-        skip_sync: bool,
-    ) -> Result<Vec<LocalOutput>, Error> {
-        info!(self.logger, "Listing unspents vanilla...");
-        self.sync_if_requested(Some(online), skip_sync)?;
-
-        let unspents = self.internal_unspents();
-
-        let res = if min_confirmations > 0 {
-            unspents
-                .filter_map(|u| {
-                    match self
-                        .indexer()
-                        .get_tx_confirmations(&u.outpoint.txid.to_string())
-                    {
-                        Ok(confirmations) => {
-                            if let Some(confirmations) = confirmations {
-                                if confirmations >= min_confirmations as u64 {
-                                    return Some(Ok(u));
-                                }
-                            }
-                            None
-                        }
-                        Err(e) => Some(Err(e)),
-                    }
-                })
-                .collect::<Result<Vec<LocalOutput>, Error>>()
-        } else {
-            Ok(unspents.collect())
-        };
-
-        info!(self.logger, "List unspents vanilla completed");
-        res
-    }
-
-    /// Return the consignment file path for a send transfer of an asset.
+    /// Manually set the [`WitnessOrd`] of a witness TX.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
-        let transfer_dir = self.get_transfer_dir(transfer_id);
-        let asset_transfer_dir = self.get_asset_transfer_dir(transfer_dir, asset_id);
-        asset_transfer_dir.join(CONSIGNMENT_FILE)
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn upsert_witness(
+        &self,
+        witness_id: RgbTxid,
+        witness_ord: WitnessOrd,
+    ) -> Result<(), Error> {
+        let mut runtime = self.rgb_runtime()?;
+        runtime.upsert_witness(witness_id, witness_ord)?;
+        Ok(())
     }
 }
