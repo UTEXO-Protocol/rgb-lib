@@ -288,4 +288,6 @@ mod rust_only;
 mod send;
 mod send_btc;
 mod sign_psbt;
+#[cfg(feature = "vss")]
+mod vss;
 mod witness_receive;

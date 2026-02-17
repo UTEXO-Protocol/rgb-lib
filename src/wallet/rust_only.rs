@@ -708,6 +708,7 @@ impl Wallet {
         )?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Save new asset completed");
         Ok(())

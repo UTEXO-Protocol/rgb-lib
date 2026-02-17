@@ -217,6 +217,185 @@ impl Wallet {
             Ok(None)
         }
     }
+
+    /// Perform a VSS backup of the wallet
+    ///
+    /// Creates a backup of the wallet directory and uploads it to the VSS server.
+    /// Returns the server-side version number of the uploaded backup.
+    #[cfg(feature = "vss")]
+    pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
+        let prev_backup_info = self.update_backup_info(true)?;
+
+        match self._vss_backup(client).await {
+            Ok(version) => Ok(version),
+            Err(e) => {
+                error!(self.logger, "Error during VSS backup: {e:?}");
+                // Restore previous backup info on failure
+                if let Some(prev_backup_info) = prev_backup_info {
+                    let mut prev_backup_info: DbBackupInfoActMod = prev_backup_info.into();
+                    self.database.update_backup_info(&mut prev_backup_info)?;
+                } else {
+                    self.database.del_backup_info()?;
+                }
+                Err(e)
+            }
+        }
+    }
+
+    #[cfg(feature = "vss")]
+    async fn _vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
+        info!(self.logger, "Starting VSS backup...");
+        let backup_data = super::vss::create_backup_data(&self.wallet_dir, &self.logger)?;
+
+        info!(self.logger, "Uploading to VSS server...");
+        let version = client.upload_backup(backup_data).await?;
+
+        info!(self.logger, "VSS backup completed, version: {}", version);
+        Ok(version)
+    }
+
+    /// Configure VSS backup for this wallet, enabling automatic backups
+    /// after state-changing operations.
+    ///
+    /// Once configured, the wallet will automatically upload backups to the
+    /// VSS server after operations like send, receive, issue, etc.
+    #[cfg(feature = "vss")]
+    pub fn configure_vss_backup(
+        &mut self,
+        config: super::vss::VssBackupConfig,
+    ) -> Result<(), Error> {
+        let client = super::vss::VssBackupClient::new(config)?;
+        self.vss_client = Some(Arc::new(client));
+        info!(self.logger, "VSS auto-backup configured");
+        Ok(())
+    }
+
+    /// Disable VSS auto-backup.
+    #[cfg(feature = "vss")]
+    pub fn disable_vss_auto_backup(&mut self) {
+        self.vss_client = None;
+        info!(self.logger, "VSS auto-backup disabled");
+    }
+
+    /// Trigger an automatic VSS backup if configured.
+    ///
+    /// This is called internally after state-changing operations. It creates
+    /// the backup data synchronously, then spawns an async task for the upload.
+    /// Errors are logged but not propagated (auto-backup is best-effort).
+    /// If a backup is already in progress, the call is skipped.
+    ///
+    /// **Note:** The backup data (zip of the wallet directory) is created
+    /// synchronously before the async upload task is spawned. This adds
+    /// latency proportional to wallet directory size to the calling
+    /// operation. The upload itself runs asynchronously and does not block.
+    #[cfg(feature = "vss")]
+    pub(crate) fn trigger_auto_backup(&self) {
+        use std::sync::atomic::Ordering;
+
+        /// Guard that resets the `AtomicBool` on drop, ensuring the flag is
+        /// cleared even if the async task panics.
+        struct BackupGuard(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for BackupGuard {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+
+        let Some(client) = &self.vss_client else {
+            return;
+        };
+
+        if !client.auto_backup() {
+            return;
+        }
+
+        // Skip if a backup is already in progress (swap returns the previous value;
+        // if it was already true, another backup is running so we skip this one).
+        if self.auto_backup_in_progress.swap(true, Ordering::SeqCst) {
+            debug!(
+                self.logger,
+                "VSS auto-backup: skipping, already in progress"
+            );
+            return;
+        }
+
+        let handle = client.handle().clone();
+
+        // Create backup data synchronously (zip the wallet directory)
+        let backup_data = match super::vss::create_backup_data(&self.wallet_dir, &self.logger) {
+            Ok(data) => data,
+            Err(e) => {
+                error!(self.logger, "VSS auto-backup: failed to create data: {}", e);
+                self.auto_backup_in_progress.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+
+        // Clone what the spawned task needs
+        let client = Arc::clone(client);
+        let backup_mode = client.backup_mode();
+        let logger = self.logger.clone();
+        let database = Arc::clone(&self.database);
+        let guard = BackupGuard(Arc::clone(&self.auto_backup_in_progress));
+
+        let upload_future = async move {
+            let _guard = guard;
+            debug!(logger, "VSS auto-backup: uploading...");
+            match client.upload_backup(backup_data).await {
+                Ok(version) => {
+                    info!(logger, "VSS auto-backup completed, version: {}", version);
+                    // Update backup timestamp on success
+                    if let Some(backup_info) = database.get_backup_info().ok().flatten() {
+                        let mut backup_info: DbBackupInfoActMod = backup_info.into();
+                        backup_info.last_backup_timestamp = sea_orm::ActiveValue::Set(
+                            time::OffsetDateTime::now_utc()
+                                .unix_timestamp_nanos()
+                                .to_string(),
+                        );
+                        let _ = database.update_backup_info(&mut backup_info);
+                    }
+                }
+                Err(e) => {
+                    error!(logger, "VSS auto-backup failed: {}", e);
+                }
+            }
+        };
+
+        match backup_mode {
+            super::vss::VssBackupMode::Async => {
+                handle.spawn(upload_future);
+            }
+            super::vss::VssBackupMode::Blocking => {
+                // Use an OS thread so block_on() is safe even when called
+                // from within a tokio worker thread.
+                let _ = std::thread::spawn(move || handle.block_on(upload_future)).join();
+            }
+        }
+    }
+
+    /// Get VSS backup info
+    ///
+    /// Returns information about the current VSS backup state, including
+    /// whether a backup exists on the server and if a new backup is needed.
+    #[cfg(feature = "vss")]
+    pub async fn vss_backup_info(
+        &self,
+        client: &super::vss::VssBackupClient,
+    ) -> Result<super::vss::VssBackupInfo, Error> {
+        let server_version = client.get_backup_version().await?;
+        let backup_exists = server_version.is_some();
+        let backup_required = self.backup_info()?;
+
+        Ok(super::vss::VssBackupInfo {
+            backup_exists,
+            server_version,
+            backup_required,
+        })
+    }
+
+    /// No-op auto-backup trigger when VSS feature is not enabled.
+    #[cfg(not(feature = "vss"))]
+    pub(crate) fn trigger_auto_backup(&self) {}
 }
 
 /// Restore a backup from the given file and password to the provided target directory.

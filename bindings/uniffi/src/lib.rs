@@ -2,12 +2,24 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard},
+    sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard},
 };
 
+/// Shared tokio runtime for VSS async operations.
+///
+/// vss-client-ng requires a tokio runtime for HTTP networking.
+/// `futures::executor::block_on` does not provide one, so we maintain
+/// a shared runtime for all VSS FFI calls.
+fn vss_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for VSS")
+    })
+}
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, BitcoinNetwork as RgbLibBitcoinNetwork,
     Error as RgbLibError, RecipientType, TransferStatus, TransportType,
+    bdk_wallet::bitcoin::secp256k1::SecretKey,
     keys::Keys,
     wallet::{
         Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
@@ -19,6 +31,10 @@ use rgb_lib::{
         TransactionType, Transfer as RgbLibTransfer, TransferKind, TransferTransportEndpoint,
         TransportEndpoint as RgbLibTransportEndpoint, Unspent as RgbLibUnspent, Utxo,
         Wallet as RgbLibWallet, WalletData as RgbLibWalletData, WitnessData,
+        vss::{
+            VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
+            VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
+        },
     },
 };
 
@@ -849,6 +865,28 @@ impl Wallet {
     fn sync(&self, online: Online) -> Result<(), RgbLibError> {
         self._get_wallet().sync(online)
     }
+
+    fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {
+        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+        self._get_wallet().configure_vss_backup(rgb_lib_config)
+    }
+
+    fn disable_vss_auto_backup(&self) {
+        self._get_wallet().disable_vss_auto_backup()
+    }
+
+    fn vss_backup(&self, client: std::sync::Arc<VssBackupClient>) -> Result<i64, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup(&vss_client))
+    }
+
+    fn vss_backup_info(
+        &self,
+        client: std::sync::Arc<VssBackupClient>,
+    ) -> Result<VssBackupInfo, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup_info(&vss_client))
+    }
 }
 
 fn _convert_recipient_map(
@@ -863,4 +901,64 @@ fn _convert_recipient_map(
         .collect()
 }
 
+pub struct VssBackupConfig {
+    pub server_url: String,
+    pub store_id: String,
+    pub signing_key: Vec<u8>,
+    pub encryption_enabled: bool,
+    pub auto_backup: bool,
+    pub backup_mode: VssBackupMode,
+}
+
+impl TryFrom<VssBackupConfig> for RgbLibVssBackupConfig {
+    type Error = RgbLibError;
+
+    fn try_from(orig: VssBackupConfig) -> Result<Self, Self::Error> {
+        let signing_key =
+            SecretKey::from_slice(&orig.signing_key).map_err(|e| RgbLibError::Internal {
+                details: format!("Invalid signing key: {e}"),
+            })?;
+
+        let mut config = RgbLibVssBackupConfig::new(orig.server_url, orig.store_id, signing_key);
+        config = config.with_encryption(orig.encryption_enabled);
+        config = config.with_auto_backup(orig.auto_backup);
+        config = config.with_backup_mode(orig.backup_mode);
+        Ok(config)
+    }
+}
+
+struct VssBackupClient {
+    client: RwLock<RgbLibVssBackupClient>,
+}
+
+impl VssBackupClient {
+    fn new(config: VssBackupConfig) -> Result<Self, RgbLibError> {
+        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+        let client = RgbLibVssBackupClient::new(rgb_lib_config)?;
+        Ok(VssBackupClient {
+            client: RwLock::new(client),
+        })
+    }
+
+    fn _get_client(&self) -> RwLockReadGuard<'_, RgbLibVssBackupClient> {
+        self.client.read().expect("vss_backup_client")
+    }
+
+    fn encryption_enabled(&self) -> bool {
+        self._get_client().encryption_enabled()
+    }
+
+    fn delete_backup(&self) -> Result<(), RgbLibError> {
+        vss_runtime().block_on(self._get_client().delete_backup())
+    }
+}
+
+fn restore_from_vss(config: VssBackupConfig, target_dir: String) -> Result<String, RgbLibError> {
+    let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+    let wallet_path =
+        vss_runtime().block_on(rgb_lib_restore_from_vss(rgb_lib_config, &target_dir))?;
+    Ok(wallet_path.to_string_lossy().to_string())
+}
+
 uniffi::deps::static_assertions::assert_impl_all!(Wallet: Sync, Send);
+uniffi::deps::static_assertions::assert_impl_all!(VssBackupClient: Sync, Send);

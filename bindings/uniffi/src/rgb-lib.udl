@@ -7,6 +7,9 @@ namespace rgb_lib {
 
   [Throws=RgbLibError]
   void restore_backup(string backup_path, string password, string data_dir);
+
+  [Throws=RgbLibError]
+  string restore_from_vss(VssBackupConfig config, string target_dir);
 };
 
 [Error, Remote]
@@ -91,6 +94,10 @@ interface RgbLibError {
   UnsupportedLayer1(string layer_1);
   UnsupportedSchema(AssetSchema asset_schema);
   UnsupportedTransportType();
+  VssAuth(string details);
+  VssBackupNotFound();
+  VssError(string details);
+  VssVersionConflict(string details);
   WalletDirAlreadyExists(string path);
   WatchOnly();
   WrongPassword();
@@ -491,6 +498,38 @@ dictionary WalletData {
   sequence<AssetSchema> supported_schemas;
 };
 
+[Remote]
+enum VssBackupMode {
+  "Async",
+  "Blocking",
+};
+
+dictionary VssBackupConfig {
+  string server_url;
+  string store_id;
+  sequence<u8> signing_key;
+  boolean encryption_enabled;
+  boolean auto_backup;
+  VssBackupMode backup_mode;
+};
+
+[Remote]
+dictionary VssBackupInfo {
+  boolean backup_exists;
+  i64? server_version;
+  boolean backup_required;
+};
+
+interface VssBackupClient {
+  [Throws=RgbLibError]
+  constructor(VssBackupConfig config);
+
+  boolean encryption_enabled();
+
+  [Throws=RgbLibError]
+  void delete_backup();
+};
+
 interface Wallet {
   [Throws=RgbLibError]
   constructor(WalletData wallet_data);
@@ -650,4 +689,15 @@ interface Wallet {
 
   [Throws=RgbLibError]
   void sync(Online online);
+
+  [Throws=RgbLibError]
+  void configure_vss_backup(VssBackupConfig config);
+
+  void disable_vss_auto_backup();
+
+  [Throws=RgbLibError]
+  i64 vss_backup(VssBackupClient client);
+
+  [Throws=RgbLibError]
+  VssBackupInfo vss_backup_info(VssBackupClient client);
 };

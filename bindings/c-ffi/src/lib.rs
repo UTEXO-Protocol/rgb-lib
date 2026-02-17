@@ -16,6 +16,9 @@ use rgb_lib::{
     wallet::{Invoice, Online, Recipient, RefreshFilter, Wallet, WalletData},
 };
 
+#[cfg(feature = "vss")]
+use rgb_lib::wallet::vss::VssBackupClient;
+
 #[repr(C)]
 pub struct COpaqueStruct {
     ptr: *const c_void,
@@ -506,4 +509,75 @@ pub extern "C" fn rgblib_invoice_data(invoice: &COpaqueStruct) -> CResultString 
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_invoice_string(invoice: &COpaqueStruct) -> CResultString {
     invoice_string(invoice).into()
+}
+
+// VSS backup functions
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn free_vss_backup_client(obj: COpaqueStruct) {
+    unsafe {
+        let _ = Box::from_raw(obj.ptr as *mut VssBackupClient);
+    }
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_new_vss_backup_client(config_json: *const c_char) -> CResult {
+    new_vss_backup_client(config_json).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_vss_backup_client_encryption_enabled(
+    client: &COpaqueStruct,
+) -> CResultString {
+    vss_backup_client_encryption_enabled(client).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_vss_delete_backup(client: &COpaqueStruct) -> CResultString {
+    vss_delete_backup(client).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_configure_vss_backup(
+    wallet: &COpaqueStruct,
+    config_json: *const c_char,
+) -> CResultString {
+    configure_vss_backup(wallet, config_json).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_disable_vss_auto_backup(wallet: &COpaqueStruct) -> CResultString {
+    disable_vss_auto_backup(wallet).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_vss_backup(
+    wallet: &COpaqueStruct,
+    client: &COpaqueStruct,
+) -> CResultString {
+    vss_backup(wallet, client).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_vss_backup_info(
+    wallet: &COpaqueStruct,
+    client: &COpaqueStruct,
+) -> CResultString {
+    vss_backup_info(wallet, client).into()
+}
+
+#[cfg(feature = "vss")]
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_restore_from_vss(
+    config_json: *const c_char,
+    target_dir: *const c_char,
+) -> CResultString {
+    restore_from_vss(config_json, target_dir).into()
 }

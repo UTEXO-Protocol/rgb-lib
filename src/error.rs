@@ -477,6 +477,31 @@ pub enum Error {
     #[error("Transport type is not supported")]
     UnsupportedTransportType,
 
+    /// VSS authentication failed
+    #[error("VSS authentication failed: {details}")]
+    VssAuth {
+        /// Error details
+        details: String,
+    },
+
+    /// VSS backup not found on server
+    #[error("VSS backup not found")]
+    VssBackupNotFound,
+
+    /// VSS server communication error
+    #[error("VSS error: {details}")]
+    VssError {
+        /// Error details
+        details: String,
+    },
+
+    /// VSS version conflict (concurrent modification)
+    #[error("VSS version conflict: {details}")]
+    VssVersionConflict {
+        /// Error details
+        details: String,
+    },
+
     /// The specified wallet directory already exists
     #[error("The specified wallet directory already exists: {path}")]
     WalletDirAlreadyExists {

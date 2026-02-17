@@ -1245,6 +1245,10 @@ pub struct Wallet {
     pub(crate) rest_client: RestClient,
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) online_data: Option<OnlineData>,
+    #[cfg(feature = "vss")]
+    pub(crate) vss_client: Option<Arc<super::vss::VssBackupClient>>,
+    #[cfg(feature = "vss")]
+    pub(crate) auto_backup_in_progress: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Wallet {
@@ -1387,6 +1391,10 @@ impl Wallet {
             rest_client,
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             online_data: None,
+            #[cfg(feature = "vss")]
+            vss_client: None,
+            #[cfg(feature = "vss")]
+            auto_backup_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -1914,6 +1922,7 @@ impl Wallet {
         let asset = AssetNIA::get_asset_details(self, &asset, None, None, None, None, None, None)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Issue asset NIA completed");
         Ok(asset)
@@ -2155,6 +2164,7 @@ impl Wallet {
         )?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Issue asset UDA completed");
         Ok(asset)
@@ -2327,6 +2337,7 @@ impl Wallet {
         let asset = AssetCFA::get_asset_details(self, &asset, None, None, None, None, None, None)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Issue asset CFA completed");
         Ok(asset)
@@ -2559,6 +2570,7 @@ impl Wallet {
         let asset = AssetIFA::get_asset_details(self, &asset, None, None, None, None, None, None)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Issue asset IFA completed");
         Ok(asset)
@@ -2783,6 +2795,7 @@ impl Wallet {
         runtime.store_secret_seal(blind_seal)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Blind receive completed");
         Ok(ReceiveData {
@@ -2850,6 +2863,7 @@ impl Wallet {
             })?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Witness receive completed");
         Ok(ReceiveData {
@@ -3006,6 +3020,7 @@ impl Wallet {
 
         if transfers_changed {
             self.update_backup_info(false)?;
+            self.trigger_auto_backup();
         }
 
         info!(self.logger, "Delete transfer completed");
@@ -3028,6 +3043,7 @@ impl Wallet {
         let address = self._get_new_address(KeychainKind::Internal)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Get address completed");
         Ok(address.to_string())
