@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "utexo-master" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "utexo-master" ]
 
 env:
   CARGO_TERM_COLOR: always

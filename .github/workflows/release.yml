@@ -1,0 +1,295 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.3.0-beta.4)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build uniffi library for supported platforms
+  build-uniffi:
+    name: Build uniffi (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            lib_name: librgblibuniffi.so
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            lib_name: librgblibuniffi.dylib
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build uniffi library
+        working-directory: bindings/uniffi
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uniffi-${{ matrix.target }}
+          path: bindings/uniffi/target/${{ matrix.target }}/release/${{ matrix.lib_name }}
+          retention-days: 5
+
+  # Build C-FFI library for supported platforms
+  build-cffi:
+    name: Build c-ffi (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            lib_name_static: librgblibcffi.a
+            lib_name_shared: librgblibcffi.so
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            lib_name_static: librgblibcffi.a
+            lib_name_shared: librgblibcffi.dylib
+          # Windows x64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            lib_name_static: rgblibcffi.lib
+            lib_name_shared: rgblibcffi.dll
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build c-ffi library
+        working-directory: bindings/c-ffi
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload static library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-static-${{ matrix.target }}
+          path: bindings/c-ffi/target/${{ matrix.target }}/release/${{ matrix.lib_name_static }}
+          retention-days: 5
+
+      - name: Upload shared library artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-shared-${{ matrix.target }}
+          path: bindings/c-ffi/target/${{ matrix.target }}/release/${{ matrix.lib_name_shared }}
+          retention-days: 5
+
+      - name: Upload C++ header artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-hpp-${{ matrix.target }}
+          path: bindings/c-ffi/rgblib.hpp
+          retention-days: 5
+
+  # Generate header file for C-FFI
+  generate-header:
+    name: Generate C header
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Generate header
+        working-directory: bindings/c-ffi
+        run: cargo build
+
+      - name: Upload header artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-header
+          path: bindings/c-ffi/target/rgblibcffi.h
+          retention-days: 5
+
+  # Create GitHub Release with all artifacts
+  release:
+    name: Create Release
+    needs: [build-uniffi, build-cffi, generate-header]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Debug - show artifact structure
+        run: |
+          echo "=== Artifacts structure ==="
+          find artifacts -type f
+          echo "==========================="
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Package uniffi libraries
+          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+            if [ -d "artifacts/uniffi-$target" ]; then
+              echo "Packaging uniffi for $target"
+              cd artifacts/uniffi-$target
+              find . -name "*.so" -o -name "*.dylib" | head -1
+              zip -r "../../release-assets/rgb-lib-uniffi-$target.zip" .
+              cd ../..
+            else
+              echo "WARNING: artifacts/uniffi-$target not found"
+            fi
+          done
+
+          # Package c-ffi libraries
+          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin x86_64-pc-windows-msvc; do
+            echo "Packaging c-ffi for $target"
+            mkdir -p "temp-cffi-$target"
+            
+            find artifacts/cffi-static-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-shared-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-header -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            find artifacts/cffi-hpp-$target -type f -exec cp {} "temp-cffi-$target/" \; 2>/dev/null || true
+            
+            if [ "$(ls -A temp-cffi-$target 2>/dev/null)" ]; then
+              cd "temp-cffi-$target"
+              zip -r "../release-assets/rgb-lib-cffi-$target.zip" .
+              cd ..
+            fi
+            rm -rf "temp-cffi-$target"
+          done
+
+          echo "=== Release assets ==="
+          ls -la release-assets/
+          echo "======================"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, 'alpha') || contains(steps.version.outputs.version, 'beta') || contains(steps.version.outputs.version, 'rc') }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Trigger rebuild of bindings
+  trigger-bindings:
+    name: Trigger bindings rebuild
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger rgb-lib-go workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_GO_PAT }}
+          repository: UTEXO-Protocol/rgb-lib-go
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }
+
+      - name: Trigger rgb-lib-nodejs workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_NODEJS_PAT }}
+          repository: UTEXO-Protocol/rgb-lib-nodejs
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }
+
+      - name: Trigger rgb-lib-c-sharp workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_CSHARP_PAT }}
+          repository: UTEXO-Protocol/rgb-lib-c-sharp
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }
+
+      - name: Trigger rgb-lib-python workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_PYTHON_PAT }}
+          repository: UTEXO-Protocol/rgb-lib-python
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }
+
+      - name: Trigger rgb-sdk-rn workflow
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_SDK_RN_PAT }}
+          repository: UTEXO-Protocol/rgb-sdk-rn
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}",
+              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+            }
