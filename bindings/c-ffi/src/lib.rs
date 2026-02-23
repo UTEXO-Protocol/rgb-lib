@@ -474,6 +474,15 @@ pub extern "C" fn rgblib_sync(wallet: &COpaqueStruct, online: &COpaqueStruct) ->
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_validate_consignment(
+    file_path: *const c_char,
+    indexer_url: *const c_char,
+    bitcoin_network: *const c_char,
+) -> CResultString {
+    validate_consignment(file_path, indexer_url, bitcoin_network).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_witness_receive(
     wallet: &COpaqueStruct,
     asset_id_opt: *const c_char,

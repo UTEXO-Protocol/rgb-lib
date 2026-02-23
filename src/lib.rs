@@ -70,10 +70,12 @@ pub use bdk_wallet;
 pub use bdk_wallet::bitcoin;
 pub use rgbinvoice::RgbTransport;
 pub use rgbstd::{
-    ContractId, Txid as RgbTxid,
+    ChainNet, ContractId, Txid as RgbTxid,
     containers::{ConsignmentExt, Fascia, FileContent, PubWitness, Transfer as RgbTransfer},
+    indexers::AnyResolver,
     persistence::UpdateRes,
     schema::SchemaId,
+    validation::{ValidationConfig, ValidationError},
     vm::WitnessOrd,
 };
 
@@ -172,9 +174,9 @@ use rgbinvoice::{AddressPayload, Beneficiary, RgbInvoice, RgbInvoiceBuilder, XCh
 #[cfg(feature = "electrum")]
 use rgbstd::indexers::electrum_blocking::electrum_client::ConfigBuilder;
 use rgbstd::{
-    Allocation, Amount, ChainNet, Genesis, GraphSeal, Identity, Layer1, Operation, Opout,
-    OutputSeal, OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition,
-    TransitionType, TypeSystem,
+    Allocation, Amount, Genesis, GraphSeal, Identity, Layer1, Operation, Opout, OutputSeal,
+    OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition, TransitionType,
+    TypeSystem,
     containers::{BuilderSeal, Kit, ValidContract, ValidKit, ValidTransfer},
     contract::{AllocatedState, ContractBuilder, IssuerWrapper, TransitionBuilder},
     info::{ContractInfo, SchemaInfo},
@@ -197,9 +199,8 @@ use rgbstd::{
     containers::Consignment,
     contract::SchemaWrapper,
     daggy::Walker,
-    indexers::AnyResolver,
     txout::TxPtr,
-    validation::{OpoutsDagData, ValidationConfig, ValidationError, Validity, Warning},
+    validation::{OpoutsDagData, Validity, Warning},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use schemata::{
