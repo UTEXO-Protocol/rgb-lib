@@ -168,6 +168,68 @@ fn string_to_ptr(other: String) -> *mut c_char {
     cstr.into_raw()
 }
 
+pub(crate) fn validate_consignment(
+    file_path: *const c_char,
+    indexer_url: *const c_char,
+    bitcoin_network: *const c_char,
+) -> Result<String, Error> {
+    use rgb_lib::{
+        AnyResolver, ChainNet, FileContent, RgbTransfer, ValidationConfig, ValidationError,
+    };
+
+    let file_path = ptr_to_string(file_path);
+    let indexer_url = ptr_to_string(indexer_url);
+    let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
+    let chain_net: ChainNet = bitcoin_network.into();
+
+    // Load the consignment from file
+    let consignment = RgbTransfer::load_file(&file_path).map_err(|e| {
+        Error::RgbLib(RgbLibError::Internal {
+            details: format!("Failed to load consignment: {e}"),
+        })
+    })?;
+
+    // Derive the type system from the consignment's schema
+    let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+    let trusted_typesystem = asset_schema.types();
+
+    // Create a blockchain resolver from the indexer URL
+    let resolver = AnyResolver::electrum_blocking(&indexer_url, None).map_err(|e| {
+        Error::RgbLib(RgbLibError::InvalidIndexer {
+            details: format!("Failed to create resolver: {e}"),
+        })
+    })?;
+
+    // Validate
+    let validation_config = ValidationConfig {
+        chain_net,
+        trusted_typesystem,
+        ..Default::default()
+    };
+
+    match consignment.validate(&resolver, &validation_config) {
+        Ok(valid_consignment) => {
+            let status = valid_consignment.validation_status();
+            Ok(serde_json::to_string(&serde_json::json!({
+                "valid": true,
+                "warnings": status.warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>(),
+            }))?)
+        }
+        Err(ValidationError::InvalidConsignment(failure)) => {
+            Ok(serde_json::to_string(&serde_json::json!({
+                "valid": false,
+                "error": "invalid",
+                "details": failure.to_string(),
+            }))?)
+        }
+        Err(ValidationError::ResolverError(e)) => Ok(serde_json::to_string(&serde_json::json!({
+            "valid": false,
+            "error": "resolver",
+            "details": e.to_string(),
+        }))?),
+    }
+}
+
 pub(crate) fn backup(
     wallet: &COpaqueStruct,
     backup_path: *const c_char,
@@ -243,14 +305,8 @@ pub(crate) fn create_utxos_begin(
     let num = convert_optional_number(num_opt)?;
     let size = convert_optional_number(size_opt)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.create_utxos_begin(
-        (*online).clone(),
-        up_to,
-        num,
-        size,
-        fee_rate,
-        skip_sync,
-    )?;
+    let res =
+        wallet.create_utxos_begin((*online).clone(), up_to, num, size, fee_rate, skip_sync)?;
     Ok(res)
 }
 
@@ -288,7 +344,12 @@ pub(crate) fn fail_transfers(
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let batch_transfer_idx = convert_optional_number(batch_transfer_idx_opt)?;
-    let res = wallet.fail_transfers((*online).clone(), batch_transfer_idx, no_asset_only, skip_sync)?;
+    let res = wallet.fail_transfers(
+        (*online).clone(),
+        batch_transfer_idx,
+        no_asset_only,
+        skip_sync,
+    )?;
     Ok(serde_json::to_string(&res)?)
 }
 
