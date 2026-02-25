@@ -282,18 +282,6 @@ jobs:
               "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
             }
 
-      - name: Trigger rgb-sdk-rn workflow
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.RGB_SDK_RN_PAT }}
-          repository: UTEXO-Protocol/rgb-sdk-rn
-          event-type: rgb-lib-release
-          client-payload: |
-            {
-              "version": "${{ steps.version.outputs.version }}",
-              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
-            }
-
       - name: Trigger rgb-lib-kotlin workflow
         uses: peter-evans/repository-dispatch@v3
         with:
