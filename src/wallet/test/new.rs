@@ -86,6 +86,7 @@ fn success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+#[ignore = "electrum TCP port not accessible from GitHub runners"]
 fn signet_electrum_success() {
     create_test_data_dir();
 
