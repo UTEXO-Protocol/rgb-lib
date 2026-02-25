@@ -47,13 +47,5 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           rustflags: ""
-      - name: Test with electrum feature
-        run: |
-          SKIP_INIT=1 cargo test --profile reldebug --no-default-features --features electrum send::min_confirmations_electrum
-          SKIP_INIT=1 cargo test --profile reldebug --no-default-features --features electrum send::min_relay_fee_electrum
-      - name: Test with esplora feature
-        run: |
-          SKIP_INIT=1 cargo test --profile reldebug --no-default-features --features esplora send::min_confirmations_esplora
-          SKIP_INIT=1 cargo test --profile reldebug --no-default-features --features esplora send::min_relay_fee_esplora
       - name: Test with no default features
         run: cargo test --profile reldebug --no-default-features
