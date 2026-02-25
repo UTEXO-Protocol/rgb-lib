@@ -93,6 +93,7 @@ fn signet_electrum_success() {
     let bitcoin_network = BitcoinNetwork::Signet;
     let mut wallet = get_test_wallet_with_net(true, None, bitcoin_network);
     check_wallet(&wallet, bitcoin_network, None);
+    // UTEXO Signet Electrum (electrs on Hetzner), domain pending — using IP temporarily
     let indexer_url = "tcp://46.224.75.237:50001";
     test_go_online(&mut wallet, false, Some(indexer_url));
     assert!(!wallet.watch_only);
@@ -108,6 +109,7 @@ fn signet_esplora_success() {
     let bitcoin_network = BitcoinNetwork::Signet;
     let mut wallet = get_test_wallet_with_net(true, None, bitcoin_network);
     check_wallet(&wallet, bitcoin_network, None);
+    // UTEXO Signet Esplora (electrs REST API on Hetzner)
     let indexer_url = "https://esplora-api.utexo.com";
     test_go_online(&mut wallet, false, Some(indexer_url));
     assert!(!wallet.watch_only);
@@ -169,6 +171,7 @@ fn mainnet_esplora_success() {
     .unwrap();
 
     check_wallet(&wallet, bitcoin_network, None);
+    // UTEXO Mainnet Esplora (Hetzner)
     let indexer_url = "https://esplora-mainnet.utexo.com";
     test_go_online(&mut wallet, false, Some(indexer_url));
     assert!(!wallet.watch_only);
