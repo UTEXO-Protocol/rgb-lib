@@ -290,4 +290,6 @@ mod send_btc;
 mod sign_psbt;
 #[cfg(feature = "vss")]
 mod vss;
+#[cfg(feature = "vss")]
+mod vss_e2e;
 mod witness_receive;

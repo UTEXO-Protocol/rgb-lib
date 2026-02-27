@@ -962,3 +962,115 @@ fn restore_from_vss(config: VssBackupConfig, target_dir: String) -> Result<Strin
 
 uniffi::deps::static_assertions::assert_impl_all!(Wallet: Sync, Send);
 uniffi::deps::static_assertions::assert_impl_all!(VssBackupClient: Sync, Send);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compact(s: &str) -> String {
+        s.split_whitespace().collect()
+    }
+
+    #[test]
+    fn udl_exports_vss_api_surface() {
+        let udl = include_str!("rgb-lib.udl");
+        let udl = compact(udl);
+
+        // Types
+        assert!(
+            udl.contains("enumVssBackupMode"),
+            "missing VssBackupMode in UDL"
+        );
+        assert!(
+            udl.contains("dictionaryVssBackupConfig"),
+            "missing VssBackupConfig in UDL"
+        );
+        assert!(
+            udl.contains("dictionaryVssBackupInfo"),
+            "missing VssBackupInfo in UDL"
+        );
+        assert!(
+            udl.contains("interfaceVssBackupClient"),
+            "missing VssBackupClient in UDL"
+        );
+
+        // Functions / methods
+        assert!(
+            udl.contains("restore_from_vss(VssBackupConfigconfig,stringtarget_dir);"),
+            "missing restore_from_vss(...) in UDL"
+        );
+        assert!(
+            udl.contains("configure_vss_backup(VssBackupConfigconfig);"),
+            "missing Wallet.configure_vss_backup(...) in UDL"
+        );
+        assert!(
+            udl.contains("vss_backup(VssBackupClientclient);"),
+            "missing Wallet.vss_backup(...) in UDL"
+        );
+        assert!(
+            udl.contains("vss_backup_info(VssBackupClientclient);"),
+            "missing Wallet.vss_backup_info(...) in UDL"
+        );
+        assert!(
+            udl.contains("disable_vss_auto_backup();"),
+            "missing Wallet.disable_vss_auto_backup() in UDL"
+        );
+    }
+
+    #[test]
+    fn vss_bindings_smoke_runtime_and_type_conversion() {
+        // Shared runtime must be reusable and safe to call from multiple threads (FFI-style).
+        let rt_ptr_1 = std::ptr::from_ref(vss_runtime());
+        let rt_ptr_2 = std::ptr::from_ref(vss_runtime());
+        assert_eq!(rt_ptr_1, rt_ptr_2, "expected vss_runtime() to be a singleton");
+
+        let threads = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..50 {
+                        let v = vss_runtime().block_on(async { 42u8 });
+                        assert_eq!(v, 42);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for t in threads {
+            t.join().expect("thread join");
+        }
+
+        // Config conversion must validate signing key shape (SDK uses bytes).
+        let bad = VssBackupConfig {
+            server_url: "http://127.0.0.1:1/vss".to_string(),
+            store_id: "qa_udl_smoke_store".to_string(),
+            signing_key: vec![1, 2, 3],
+            encryption_enabled: true,
+            auto_backup: false,
+            backup_mode: VssBackupMode::Async,
+        };
+        let err = match RgbLibVssBackupConfig::try_from(bad) {
+            Ok(_) => panic!("expected invalid signing key error"),
+            Err(e) => e,
+        };
+        match err {
+            RgbLibError::Internal { details } => {
+                assert!(details.contains("Invalid signing key"), "unexpected error: {details}");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+
+        // Use a deterministic unreachable local URL (no DNS dependency). This test must remain
+        // unit-level and must not require a live VSS server.
+        let server_url = "http://127.0.0.1:1/vss".to_string();
+
+        let good = VssBackupConfig {
+            server_url: server_url.clone(),
+            store_id: "qa_udl_smoke_store".to_string(),
+            signing_key: vec![1u8; 32],
+            encryption_enabled: true,
+            auto_backup: false,
+            backup_mode: VssBackupMode::Async,
+        };
+        let client = VssBackupClient::new(good).expect("VssBackupClient::new");
+        assert!(client.encryption_enabled(), "expected encryption_enabled=true");
+    }
+}
