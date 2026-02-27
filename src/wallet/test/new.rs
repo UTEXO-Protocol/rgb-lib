@@ -86,13 +86,31 @@ fn success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn signet_success() {
+#[ignore = "electrum TCP port not accessible from GitHub runners"]
+fn signet_electrum_success() {
     create_test_data_dir();
 
     let bitcoin_network = BitcoinNetwork::Signet;
     let mut wallet = get_test_wallet_with_net(true, None, bitcoin_network);
     check_wallet(&wallet, bitcoin_network, None);
-    let indexer_url = "ssl://electrum.iriswallet.com:50033";
+    // UTEXO Signet Electrum (electrs on Hetzner), domain pending — using IP temporarily
+    let indexer_url = "tcp://46.224.75.237:50001";
+    test_go_online(&mut wallet, false, Some(indexer_url));
+    assert!(!wallet.watch_only);
+    assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
+}
+
+#[cfg(feature = "esplora")]
+#[test]
+#[parallel]
+fn signet_esplora_success() {
+    create_test_data_dir();
+
+    let bitcoin_network = BitcoinNetwork::Signet;
+    let mut wallet = get_test_wallet_with_net(true, None, bitcoin_network);
+    check_wallet(&wallet, bitcoin_network, None);
+    // UTEXO Signet Esplora (electrs REST API on Hetzner)
+    let indexer_url = "https://esplora-api.utexo.com";
     test_go_online(&mut wallet, false, Some(indexer_url));
     assert!(!wallet.watch_only);
     assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
@@ -101,6 +119,7 @@ fn signet_success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+#[ignore = "no testnet electrum server available"]
 fn testnet_success() {
     create_test_data_dir();
 
@@ -116,6 +135,7 @@ fn testnet_success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+#[ignore = "no testnet4 electrum server available"]
 fn testnet4_success() {
     create_test_data_dir();
 
@@ -128,10 +148,10 @@ fn testnet4_success() {
     assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
 }
 
-#[cfg(all(feature = "electrum", feature = "esplora"))]
+#[cfg(feature = "esplora")]
 #[test]
 #[parallel]
-fn mainnet_success() {
+fn mainnet_esplora_success() {
     create_test_data_dir();
 
     let bitcoin_network = BitcoinNetwork::Mainnet;
@@ -146,18 +166,43 @@ fn mainnet_success() {
         mnemonic: Some(keys.mnemonic.clone()),
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
-        // IFA not supported on mainnet
+        supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+    })
+    .unwrap();
+
+    check_wallet(&wallet, bitcoin_network, None);
+    // UTEXO Mainnet Esplora (Hetzner)
+    let indexer_url = "https://esplora-mainnet.utexo.com";
+    test_go_online(&mut wallet, false, Some(indexer_url));
+    assert!(!wallet.watch_only);
+    assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+#[ignore = "no mainnet electrum server available"]
+fn mainnet_electrum_success() {
+    create_test_data_dir();
+
+    let bitcoin_network = BitcoinNetwork::Mainnet;
+    let keys = generate_keys(bitcoin_network);
+    let mut wallet = Wallet::new(WalletData {
+        data_dir: get_test_data_dir_string(),
+        bitcoin_network,
+        database_type: DatabaseType::Sqlite,
+        max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+        account_xpub_colored: keys.account_xpub_colored.clone(),
+        account_xpub_vanilla: keys.account_xpub_vanilla.clone(),
+        mnemonic: Some(keys.mnemonic.clone()),
+        master_fingerprint: keys.master_fingerprint.clone(),
+        vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
     })
     .unwrap();
 
     check_wallet(&wallet, bitcoin_network, None);
     let indexer_url = "ssl://electrum.iriswallet.com:50003";
-    test_go_online(&mut wallet, false, Some(indexer_url));
-    assert!(!wallet.watch_only);
-    assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
-
-    let indexer_url = "https://blockstream.info/api";
     test_go_online(&mut wallet, false, Some(indexer_url));
     assert!(!wallet.watch_only);
     assert_eq!(wallet.wallet_data.bitcoin_network, bitcoin_network);
