@@ -12,11 +12,10 @@ use crate::wallet::test::utils::vss::{
 
 use crate::wallet::test::utils::vss::VssBackupDeleteGuard;
 use crate::wallet::test::utils::vss::{
-    VSS_CHUNK_SIZE_BYTES, build_raw_vss_client, vss_key_exists, write_random_file,
+    VSS_KEY_CHUNK0, VSS_KEY_MANIFEST, build_raw_vss_client, vss_key_exists, write_random_file,
 };
-use crate::wallet::test::utils::vss::{VSS_KEY_CHUNK0, VSS_KEY_MANIFEST};
 
-use crate::wallet::vss::{VssBackupClient, VssBackupConfig, restore_from_vss};
+use crate::wallet::vss::{VSS_CHUNK_SIZE, VssBackupClient, VssBackupConfig, restore_from_vss};
 
 // Block 4 / Scenario 4.2:
 // VSS server unavailable -> vss_backup/restore_from_vss must fail cleanly.
@@ -120,7 +119,6 @@ fn scenario_4_2_vss_unavailable_backup_and_restore_fail_cleanly() {
 #[cfg(feature = "electrum")]
 #[test]
 #[serial]
-#[ignore = "Disruptive + flaky: relies on chunked upload timing and stopping VSS mid-upload; run manually."]
 fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
     initialize();
 
@@ -158,9 +156,9 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
         .block_on(wallet.vss_backup(&client))
         .expect("baseline vss_backup");
 
-    // Force chunked upload with an incompressible >4MB file.
+    // Force chunked upload with an incompressible >= VSS_CHUNK_SIZE file.
     let big_path = wallet.get_wallet_dir().join("qa_big_random.bin");
-    write_random_file(&big_path, VSS_CHUNK_SIZE_BYTES + 256 * 1024).expect("write_random_file");
+    write_random_file(&big_path, VSS_CHUNK_SIZE * 10).expect("write_random_file");
 
     // Background interrupter: wait until chunk 0 is visible, then stop the VSS server.
     let interrupted_after_chunk0 = Arc::new(AtomicBool::new(false));
