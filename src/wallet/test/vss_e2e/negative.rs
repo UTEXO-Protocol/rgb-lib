@@ -252,7 +252,6 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
 #[cfg(feature = "vss")]
 #[test]
 #[parallel]
-#[ignore = "Blocked by known bug: failed vss_backup may incorrectly clear/flip backup_info; keep ignored until fixed."]
 fn scenario_4_3_wrong_url_vss_backup_fails_and_keeps_backup_info() {
     // No `initialize()` needed: this scenario does not require regtest/electrs/proxy/VSS.
     let bad_url = std::env::var("VSS_SERVER_URL_BAD")

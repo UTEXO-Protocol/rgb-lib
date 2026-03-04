@@ -23,7 +23,7 @@ use crate::wallet::vss::{VssBackupClient, VssBackupConfig, restore_from_vss};
 #[cfg(feature = "electrum")]
 #[test]
 #[serial]
-#[ignore = "Blocked by known bug: failed vss_backup may incorrectly clear backup_info; disruptive (stops VSS docker); run manually until fixed."]
+#[ignore = "Disruptive (stops VSS docker service); run manually."]
 fn scenario_4_2_vss_unavailable_backup_and_restore_fail_cleanly() {
     initialize();
 

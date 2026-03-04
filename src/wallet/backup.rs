@@ -90,20 +90,9 @@ impl Wallet {
         password: &str,
         scrypt_params: Option<ScryptParams>,
     ) -> Result<(), Error> {
-        let prev_backup_info = self.update_backup_info(true)?;
-        match self._backup(backup_path, password, scrypt_params) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                error!(self.logger, "Error during backup: {e:?}");
-                if let Some(prev_backup_info) = prev_backup_info {
-                    let mut prev_backup_info: DbBackupInfoActMod = prev_backup_info.into();
-                    self.database.update_backup_info(&mut prev_backup_info)?;
-                } else {
-                    self.database.del_backup_info()?;
-                }
-                Err(e)
-            }
-        }
+        self._backup(backup_path, password, scrypt_params)?;
+        self.update_backup_info(true)?;
+        Ok(())
     }
 
     fn _backup(
@@ -224,22 +213,9 @@ impl Wallet {
     /// Returns the server-side version number of the uploaded backup.
     #[cfg(feature = "vss")]
     pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
-        let prev_backup_info = self.update_backup_info(true)?;
-
-        match self._vss_backup(client).await {
-            Ok(version) => Ok(version),
-            Err(e) => {
-                error!(self.logger, "Error during VSS backup: {e:?}");
-                // Restore previous backup info on failure
-                if let Some(prev_backup_info) = prev_backup_info {
-                    let mut prev_backup_info: DbBackupInfoActMod = prev_backup_info.into();
-                    self.database.update_backup_info(&mut prev_backup_info)?;
-                } else {
-                    self.database.del_backup_info()?;
-                }
-                Err(e)
-            }
-        }
+        let version = self._vss_backup(client).await?;
+        self.update_backup_info(true)?;
+        Ok(version)
     }
 
     #[cfg(feature = "vss")]

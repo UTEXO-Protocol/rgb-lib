@@ -806,3 +806,40 @@ async fn auto_backup_disabled_by_default() {
 
     wallet.disable_vss_auto_backup();
 }
+
+// Verifies that a failed vss_backup() leaves backup_info() unchanged (still true).
+// Uses a non-existent URL so the upload fails immediately without needing any server.
+// Regular (non-async) test: the client's own runtime drives the async call via block_on
+// so the client is dropped outside any async context (avoids nested-runtime drop panic).
+#[cfg(feature = "vss")]
+#[test]
+#[parallel]
+fn vss_backup_failure_preserves_backup_required() {
+    let wallet = get_test_wallet(true, None);
+
+    // Simulate a state-changing operation so backup is required
+    wallet.update_backup_info(false).unwrap();
+    assert!(
+        wallet.backup_info().unwrap(),
+        "backup should be required after a state change"
+    );
+
+    let (signing_key, store_id) = generate_test_keys();
+    let config = VssBackupConfig::new(
+        "http://127.0.0.1:19999/vss".to_string(), // nothing listening here
+        store_id,
+        signing_key,
+    );
+    let client = VssBackupClient::new(config).unwrap();
+
+    let result = client.handle().block_on(wallet.vss_backup(&client));
+    assert!(
+        result.is_err(),
+        "vss_backup should fail with unreachable URL"
+    );
+
+    assert!(
+        wallet.backup_info().unwrap(),
+        "backup_required must remain true after a failed vss_backup"
+    );
+}
