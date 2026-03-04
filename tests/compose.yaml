@@ -86,3 +86,33 @@ services:
       - 50005:50001
     depends_on:
       - bitcoind_signet_custom
+  vss-postgres:
+    image: postgres:16-alpine
+    profiles: ['vss']
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  vss-server:
+    build:
+      context: ./vss-server
+      dockerfile: ./Dockerfile
+    image: vss-server:sigs-auth
+    profiles: ['vss']
+    ports:
+      - 8081:8080
+    environment:
+      VSS_BIND_ADDRESS: "0.0.0.0:8080"
+      VSS_PSQL_USERNAME: postgres
+      VSS_PSQL_PASSWORD: postgres
+      VSS_PSQL_ADDRESS: "vss-postgres:5432"
+      VSS_PSQL_DEFAULT_DB: postgres
+      VSS_PSQL_VSS_DB: vss
+    depends_on:
+      vss-postgres:
+        condition: service_healthy

@@ -784,3 +784,141 @@ pub(crate) fn invoice_string(invoice: &COpaqueStruct) -> Result<String, Error> {
     let invoice = Invoice::from_opaque(invoice)?;
     Ok(invoice.invoice_string())
 }
+
+#[cfg(feature = "vss")]
+mod vss_ffi {
+    use super::*;
+    use rgb_lib::{
+        bdk_wallet::bitcoin::secp256k1::SecretKey,
+        wallet::vss::{
+            VssBackupClient, VssBackupConfig as RgbLibVssBackupConfig, VssBackupMode,
+            restore_from_vss as rgb_lib_restore_from_vss,
+        },
+    };
+    use std::sync::OnceLock;
+
+    impl CReturnType for VssBackupClient {}
+
+    /// Shared tokio runtime for VSS async operations.
+    ///
+    /// vss-client-ng requires a tokio runtime for HTTP networking.
+    /// `futures::executor::block_on` does not provide one, so we maintain
+    /// a shared runtime for all VSS FFI calls.
+    fn vss_runtime() -> &'static tokio::runtime::Runtime {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        RT.get_or_init(|| {
+            tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for VSS")
+        })
+    }
+
+    #[derive(serde::Deserialize)]
+    struct VssBackupConfigJson {
+        server_url: String,
+        store_id: String,
+        signing_key: String,
+        #[serde(default = "default_true")]
+        encryption_enabled: bool,
+        #[serde(default)]
+        auto_backup: bool,
+        #[serde(default = "default_backup_mode")]
+        backup_mode: String,
+    }
+
+    fn default_true() -> bool {
+        true
+    }
+
+    fn default_backup_mode() -> String {
+        "Async".to_string()
+    }
+
+    fn parse_config(config_json: *const c_char) -> Result<RgbLibVssBackupConfig, Error> {
+        let json: VssBackupConfigJson = serde_json::from_str(&ptr_to_string(config_json))?;
+
+        let signing_key = json.signing_key.parse::<SecretKey>().map_err(|e| {
+            Error::RgbLib(RgbLibError::Internal {
+                details: format!("Invalid signing key: {e}"),
+            })
+        })?;
+
+        let backup_mode = match json.backup_mode.as_str() {
+            "Blocking" => VssBackupMode::Blocking,
+            _ => VssBackupMode::Async,
+        };
+
+        let config = RgbLibVssBackupConfig::new(json.server_url, json.store_id, signing_key)
+            .with_encryption(json.encryption_enabled)
+            .with_auto_backup(json.auto_backup)
+            .with_backup_mode(backup_mode);
+        Ok(config)
+    }
+
+    pub(crate) fn new_vss_backup_client(
+        config_json: *const c_char,
+    ) -> Result<VssBackupClient, Error> {
+        let config = parse_config(config_json)?;
+        Ok(VssBackupClient::new(config)?)
+    }
+
+    pub(crate) fn vss_backup_client_encryption_enabled(
+        client: &COpaqueStruct,
+    ) -> Result<String, Error> {
+        let client = VssBackupClient::from_opaque(client)?;
+        Ok(client.encryption_enabled().to_string())
+    }
+
+    pub(crate) fn vss_delete_backup(client: &COpaqueStruct) -> Result<(), Error> {
+        let client = VssBackupClient::from_opaque(client)?;
+        vss_runtime().block_on(client.delete_backup())?;
+        Ok(())
+    }
+
+    pub(crate) fn configure_vss_backup(
+        wallet: &COpaqueStruct,
+        config_json: *const c_char,
+    ) -> Result<(), Error> {
+        let wallet = Wallet::from_opaque(wallet)?;
+        let config = parse_config(config_json)?;
+        wallet.configure_vss_backup(config)?;
+        Ok(())
+    }
+
+    pub(crate) fn disable_vss_auto_backup(wallet: &COpaqueStruct) -> Result<(), Error> {
+        let wallet = Wallet::from_opaque(wallet)?;
+        wallet.disable_vss_auto_backup();
+        Ok(())
+    }
+
+    pub(crate) fn vss_backup(
+        wallet: &COpaqueStruct,
+        client: &COpaqueStruct,
+    ) -> Result<String, Error> {
+        let wallet = Wallet::from_opaque(wallet)?;
+        let client = VssBackupClient::from_opaque(client)?;
+        let version = vss_runtime().block_on(wallet.vss_backup(client))?;
+        Ok(serde_json::to_string(&version)?)
+    }
+
+    pub(crate) fn vss_backup_info(
+        wallet: &COpaqueStruct,
+        client: &COpaqueStruct,
+    ) -> Result<String, Error> {
+        let wallet = Wallet::from_opaque(wallet)?;
+        let client = VssBackupClient::from_opaque(client)?;
+        let info = vss_runtime().block_on(wallet.vss_backup_info(client))?;
+        Ok(serde_json::to_string(&info)?)
+    }
+
+    pub(crate) fn restore_from_vss(
+        config_json: *const c_char,
+        target_dir: *const c_char,
+    ) -> Result<String, Error> {
+        let config = parse_config(config_json)?;
+        let target_dir = ptr_to_string(target_dir);
+        let wallet_path = vss_runtime().block_on(rgb_lib_restore_from_vss(config, &target_dir))?;
+        Ok(wallet_path.to_string_lossy().to_string())
+    }
+}
+
+#[cfg(feature = "vss")]
+pub(crate) use vss_ffi::*;

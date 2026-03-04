@@ -23,6 +23,7 @@ serde = { version = "1.0", default-features = false, features = [
 ] }
 serde_json = { version = "1.0", default-features = false }
 thiserror = { version = "2.0", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 [build-dependencies]
 cbindgen = "0.29.0"
@@ -31,8 +32,9 @@ cbindgen = "0.29.0"
 
 [features]
 default = []
-all = ["camel_case"]
+all = ["camel_case", "vss"]
 camel_case = ["rgb-lib/camel_case"]
+vss = ["rgb-lib/vss", "tokio"]
 
 [patch.crates-io]
 rgb-strict-encoding = { git = "http://github.com/rgb-protocol/rgb-strict-encoding", branch = "master" }

@@ -2,12 +2,24 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard},
+    sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard},
 };
 
+/// Shared tokio runtime for VSS async operations.
+///
+/// vss-client-ng requires a tokio runtime for HTTP networking.
+/// `futures::executor::block_on` does not provide one, so we maintain
+/// a shared runtime for all VSS FFI calls.
+fn vss_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for VSS")
+    })
+}
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, BitcoinNetwork as RgbLibBitcoinNetwork,
     Error as RgbLibError, RecipientType, TransferStatus, TransportType,
+    bdk_wallet::bitcoin::secp256k1::SecretKey,
     keys::Keys,
     wallet::{
         Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
@@ -19,6 +31,10 @@ use rgb_lib::{
         TransactionType, Transfer as RgbLibTransfer, TransferKind, TransferTransportEndpoint,
         TransportEndpoint as RgbLibTransportEndpoint, Unspent as RgbLibUnspent, Utxo,
         Wallet as RgbLibWallet, WalletData as RgbLibWalletData, WitnessData,
+        vss::{
+            VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
+            VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
+        },
     },
 };
 
@@ -849,6 +865,28 @@ impl Wallet {
     fn sync(&self, online: Online) -> Result<(), RgbLibError> {
         self._get_wallet().sync(online)
     }
+
+    fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {
+        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+        self._get_wallet().configure_vss_backup(rgb_lib_config)
+    }
+
+    fn disable_vss_auto_backup(&self) {
+        self._get_wallet().disable_vss_auto_backup()
+    }
+
+    fn vss_backup(&self, client: std::sync::Arc<VssBackupClient>) -> Result<i64, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup(&vss_client))
+    }
+
+    fn vss_backup_info(
+        &self,
+        client: std::sync::Arc<VssBackupClient>,
+    ) -> Result<VssBackupInfo, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup_info(&vss_client))
+    }
 }
 
 fn _convert_recipient_map(
@@ -863,4 +901,185 @@ fn _convert_recipient_map(
         .collect()
 }
 
+pub struct VssBackupConfig {
+    pub server_url: String,
+    pub store_id: String,
+    pub signing_key: Vec<u8>,
+    pub encryption_enabled: bool,
+    pub auto_backup: bool,
+    pub backup_mode: VssBackupMode,
+}
+
+impl TryFrom<VssBackupConfig> for RgbLibVssBackupConfig {
+    type Error = RgbLibError;
+
+    fn try_from(orig: VssBackupConfig) -> Result<Self, Self::Error> {
+        let signing_key =
+            SecretKey::from_slice(&orig.signing_key).map_err(|e| RgbLibError::Internal {
+                details: format!("Invalid signing key: {e}"),
+            })?;
+
+        let mut config = RgbLibVssBackupConfig::new(orig.server_url, orig.store_id, signing_key);
+        config = config.with_encryption(orig.encryption_enabled);
+        config = config.with_auto_backup(orig.auto_backup);
+        config = config.with_backup_mode(orig.backup_mode);
+        Ok(config)
+    }
+}
+
+struct VssBackupClient {
+    client: RwLock<RgbLibVssBackupClient>,
+}
+
+impl VssBackupClient {
+    fn new(config: VssBackupConfig) -> Result<Self, RgbLibError> {
+        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+        let client = RgbLibVssBackupClient::new(rgb_lib_config)?;
+        Ok(VssBackupClient {
+            client: RwLock::new(client),
+        })
+    }
+
+    fn _get_client(&self) -> RwLockReadGuard<'_, RgbLibVssBackupClient> {
+        self.client.read().expect("vss_backup_client")
+    }
+
+    fn encryption_enabled(&self) -> bool {
+        self._get_client().encryption_enabled()
+    }
+
+    fn delete_backup(&self) -> Result<(), RgbLibError> {
+        vss_runtime().block_on(self._get_client().delete_backup())
+    }
+}
+
+fn restore_from_vss(config: VssBackupConfig, target_dir: String) -> Result<String, RgbLibError> {
+    let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+    let wallet_path =
+        vss_runtime().block_on(rgb_lib_restore_from_vss(rgb_lib_config, &target_dir))?;
+    Ok(wallet_path.to_string_lossy().to_string())
+}
+
 uniffi::deps::static_assertions::assert_impl_all!(Wallet: Sync, Send);
+uniffi::deps::static_assertions::assert_impl_all!(VssBackupClient: Sync, Send);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compact(s: &str) -> String {
+        s.split_whitespace().collect()
+    }
+
+    #[test]
+    fn udl_exports_vss_api_surface() {
+        let udl = include_str!("rgb-lib.udl");
+        let udl = compact(udl);
+
+        // Types
+        assert!(
+            udl.contains("enumVssBackupMode"),
+            "missing VssBackupMode in UDL"
+        );
+        assert!(
+            udl.contains("dictionaryVssBackupConfig"),
+            "missing VssBackupConfig in UDL"
+        );
+        assert!(
+            udl.contains("dictionaryVssBackupInfo"),
+            "missing VssBackupInfo in UDL"
+        );
+        assert!(
+            udl.contains("interfaceVssBackupClient"),
+            "missing VssBackupClient in UDL"
+        );
+
+        // Functions / methods
+        assert!(
+            udl.contains("restore_from_vss(VssBackupConfigconfig,stringtarget_dir);"),
+            "missing restore_from_vss(...) in UDL"
+        );
+        assert!(
+            udl.contains("configure_vss_backup(VssBackupConfigconfig);"),
+            "missing Wallet.configure_vss_backup(...) in UDL"
+        );
+        assert!(
+            udl.contains("vss_backup(VssBackupClientclient);"),
+            "missing Wallet.vss_backup(...) in UDL"
+        );
+        assert!(
+            udl.contains("vss_backup_info(VssBackupClientclient);"),
+            "missing Wallet.vss_backup_info(...) in UDL"
+        );
+        assert!(
+            udl.contains("disable_vss_auto_backup();"),
+            "missing Wallet.disable_vss_auto_backup() in UDL"
+        );
+    }
+
+    #[test]
+    fn vss_bindings_smoke_runtime_and_type_conversion() {
+        // Shared runtime must be reusable and safe to call from multiple threads (FFI-style).
+        let rt_ptr_1 = std::ptr::from_ref(vss_runtime());
+        let rt_ptr_2 = std::ptr::from_ref(vss_runtime());
+        assert_eq!(
+            rt_ptr_1, rt_ptr_2,
+            "expected vss_runtime() to be a singleton"
+        );
+
+        let threads = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    for _ in 0..50 {
+                        let v = vss_runtime().block_on(async { 42u8 });
+                        assert_eq!(v, 42);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for t in threads {
+            t.join().expect("thread join");
+        }
+
+        // Config conversion must validate signing key shape (SDK uses bytes).
+        let bad = VssBackupConfig {
+            server_url: "http://127.0.0.1:1/vss".to_string(),
+            store_id: "qa_udl_smoke_store".to_string(),
+            signing_key: vec![1, 2, 3],
+            encryption_enabled: true,
+            auto_backup: false,
+            backup_mode: VssBackupMode::Async,
+        };
+        let err = match RgbLibVssBackupConfig::try_from(bad) {
+            Ok(_) => panic!("expected invalid signing key error"),
+            Err(e) => e,
+        };
+        match err {
+            RgbLibError::Internal { details } => {
+                assert!(
+                    details.contains("Invalid signing key"),
+                    "unexpected error: {details}"
+                );
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+
+        // Use a deterministic unreachable local URL (no DNS dependency). This test must remain
+        // unit-level and must not require a live VSS server.
+        let server_url = "http://127.0.0.1:1/vss".to_string();
+
+        let good = VssBackupConfig {
+            server_url: server_url.clone(),
+            store_id: "qa_udl_smoke_store".to_string(),
+            signing_key: vec![1u8; 32],
+            encryption_enabled: true,
+            auto_backup: false,
+            backup_mode: VssBackupMode::Async,
+        };
+        let client = VssBackupClient::new(good).expect("VssBackupClient::new");
+        assert!(
+            client.encryption_enabled(),
+            "expected encryption_enabled=true"
+        );
+    }
+}

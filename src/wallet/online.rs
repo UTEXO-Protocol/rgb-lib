@@ -834,6 +834,7 @@ impl Wallet {
         }
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Create UTXOs (end) completed");
         Ok(num_utxos_created)
@@ -972,6 +973,7 @@ impl Wallet {
             })?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Drain (end) completed");
         Ok(tx.compute_txid().to_string())
@@ -1092,6 +1094,7 @@ impl Wallet {
 
         if transfers_changed {
             self.update_backup_info(false)?;
+            self.trigger_auto_backup();
         }
 
         info!(self.logger, "Fail transfers completed");
@@ -2211,6 +2214,7 @@ impl Wallet {
 
         if refresh_result.transfers_changed() {
             self.update_backup_info(false)?;
+            self.trigger_auto_backup();
         }
 
         info!(self.logger, "Refresh completed");
@@ -3665,6 +3669,7 @@ impl Wallet {
         };
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Send (end) completed");
         Ok(OperationResult {
@@ -3994,6 +3999,7 @@ impl Wallet {
         self.database.update_asset(&mut updated_asset)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger, "Inflate (end) completed");
         Ok(OperationResult {

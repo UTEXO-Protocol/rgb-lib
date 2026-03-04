@@ -23,6 +23,9 @@ _help() {
     echo "$name prepare_bindings_examples_environment"
     echo "    start and prepare the services required for the bindings examples"
     echo
+    echo "$name prepare_vss_environment"
+    echo "    start and prepare the services required for VSS tests"
+    echo
     echo "$name stop_services"
     echo "    stop services"
     echo
@@ -151,8 +154,8 @@ _start_services() {
 prepare_tests_environment() {
     TESTS=1
 
-    COMPOSE="$COMPOSE --profile tests"
-    EXPOSED_PORTS+=(3001 3002 50002 50003 50004 50005 8094)
+    COMPOSE="$COMPOSE --profile tests --profile vss"
+    EXPOSED_PORTS+=(3001 3002 50002 50003 50004 50005 8094 8081)
 
     PROXY_MOD_PROTO="proxy-mod-proto"
     PROXY_MOD_API="proxy-mod-api"
@@ -161,6 +164,7 @@ prepare_tests_environment() {
     $COMPOSE build $PROXY_MOD_PROTO
     $COMPOSE build $PROXY_MOD_API
     $COMPOSE build esplora
+    $COMPOSE build vss-server
 
     _start_services
 
@@ -185,6 +189,8 @@ prepare_tests_environment() {
     _wait_for_proxy $PROXY_MOD_PROTO
 
     _wait_for_proxy $PROXY_MOD_API
+
+    _wait_for_vss_server vss-server
 }
 
 prepare_bindings_examples_environment() {
@@ -197,6 +203,40 @@ prepare_bindings_examples_environment() {
     _wait_for_electrs electrs
 
     _wait_for_proxy proxy
+}
+
+_wait_for_vss_server() {
+    # wait for VSS server to have completed startup
+    vss_service_name="$1"
+    start_time=$(date +%s)
+    until $COMPOSE logs $vss_service_name 2>&1 |grep -qi 'listening'; do
+        current_time=$(date +%s)
+        if [ $((current_time - start_time)) -gt $TIMEOUT ]; then
+            echo "Timeout waiting for $vss_service_name to start"
+            $COMPOSE logs $vss_service_name
+            exit 1
+        fi
+        sleep 1
+    done
+}
+
+prepare_vss_environment() {
+    COMPOSE="$COMPOSE --profile vss"
+    EXPOSED_PORTS+=(8081)
+
+    $COMPOSE build vss-server
+
+    _start_services
+
+    _wait_for_bitcoind bitcoind
+
+    _prepare_bitcoin_funds
+
+    _wait_for_electrs electrs
+
+    _wait_for_proxy proxy
+
+    _wait_for_vss_server vss-server
 }
 
 mine() {
@@ -214,7 +254,7 @@ case $1 in
     -h|--help)
         _help
         ;;
-    prepare_tests_environment | prepare_bindings_examples_environment | stop_services | mine | sendtoaddress)
+    prepare_tests_environment | prepare_bindings_examples_environment | prepare_vss_environment | stop_services | mine | sendtoaddress)
         "$@"
         ;;
     *)

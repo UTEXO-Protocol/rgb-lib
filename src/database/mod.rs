@@ -471,11 +471,6 @@ impl RgbLibDatabase {
         Ok(())
     }
 
-    pub(crate) fn del_backup_info(&self) -> Result<(), InternalError> {
-        block_on(BackupInfo::delete_many().exec(self.get_connection()))?;
-        Ok(())
-    }
-
     pub(crate) fn del_batch_transfer(
         &self,
         batch_transfer: &DbBatchTransfer,
