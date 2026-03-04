@@ -17,6 +17,7 @@ use vss_client::util::retry::{
 };
 
 pub(crate) const DEFAULT_VSS_SERVER_URL: &str = "http://localhost:8081/vss";
+pub(crate) const VSS_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 // Common VSS object keys used by rgb-lib backups.
 pub(crate) const VSS_KEY_DATA: &str = "backup/data";
@@ -147,6 +148,7 @@ fn transaction_type_code(ty: &TransactionType) -> u8 {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn summarize_transactions(
     wallet: &mut Wallet,
     online: &Online,
@@ -212,8 +214,20 @@ pub(crate) async fn vss_key_exists(
         store_id: store_id.to_string(),
         key: key.to_string(),
     };
-    let resp = raw.get_object(&req).await?;
-    Ok(resp.value.is_some())
+    match raw.get_object(&req).await {
+        Ok(resp) => Ok(resp.value.is_some()),
+        Err(e) => {
+            let msg = format!("{e:?}");
+            if msg.contains("NoSuchKey")
+                || msg.to_lowercase().contains("not found")
+                || msg.contains("Requested key not found")
+            {
+                Ok(false)
+            } else {
+                Err(e.into())
+            }
+        }
+    }
 }
 
 pub(crate) async fn assert_vss_key_missing(
@@ -394,7 +408,9 @@ impl Drop for VssServerRestartGuard {
         if self.restarted {
             return;
         }
-        let _ = start_vss_server();
+        if let Err(e) = start_vss_server() {
+            eprintln!("VssServerRestartGuard: fallback restart failed: {e}");
+        }
     }
 }
 
@@ -403,7 +419,7 @@ pub(crate) fn vss_backup_retry_on_version_conflict(
     wallet: &Wallet,
     client: &VssBackupClient,
     attempts: u8,
-) -> Result<i64, Box<dyn std::error::Error>> {
+) -> Result<i64, Error> {
     for i in 1..=attempts {
         match rt.block_on(wallet.vss_backup(client)) {
             Ok(v) => return Ok(v),
@@ -413,10 +429,12 @@ pub(crate) fn vss_backup_retry_on_version_conflict(
                 );
                 std::thread::sleep(Duration::from_millis(200 * i as u64));
             }
-            Err(e) => return Err(Box::new(e)),
+            Err(e) => return Err(e),
         }
     }
-    Err("vss_backup failed after retries".into())
+    Err(Error::Internal {
+        details: "vss_backup failed after retries".to_string(),
+    })
 }
 
 /// Best-effort cleanup for VSS test data.
@@ -453,7 +471,6 @@ impl Drop for VssBackupDeleteGuard {
             Ok(c) => c,
             Err(_) => return,
         };
-        let rt = tokio_runtime();
-        let _ = rt.block_on(client.delete_backup());
+        let _ = client.handle().block_on(client.delete_backup());
     }
 }

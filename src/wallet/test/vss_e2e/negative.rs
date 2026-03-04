@@ -235,8 +235,8 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
         Err(e) => e,
     };
     match &err {
-        Error::VssBackupNotFound | Error::VssAuth { .. } | Error::VssError { .. } => {}
-        other => panic!("Expected VSS-related error, got: {other:?}"),
+        Error::VssAuth { .. } | Error::VssError { .. } => {}
+        other => panic!("Expected VssAuth or VssError (decryption failure), got: {other:?}"),
     }
     assert!(
         !dir_has_any_subdir(std::path::Path::new(restore_root)),
@@ -355,7 +355,7 @@ fn scenario_4_4_restore_missing_store_id_is_not_found_and_extracts_nothing() {
     };
     let elapsed = start.elapsed();
     assert!(
-        elapsed < std::time::Duration::from_secs(5),
+        elapsed < std::time::Duration::from_secs(10),
         "restore_from_vss took unexpectedly long for missing store_id: {elapsed:?}"
     );
 

@@ -11,11 +11,12 @@ use crate::wallet::test::utils::vss::{
 };
 
 use crate::wallet::test::utils::vss::VssBackupDeleteGuard;
+use crate::wallet::test::utils::vss::{
+    VSS_CHUNK_SIZE_BYTES, build_raw_vss_client, vss_key_exists, write_random_file,
+};
 use crate::wallet::test::utils::vss::{VSS_KEY_CHUNK0, VSS_KEY_MANIFEST};
-use crate::wallet::test::utils::vss::{build_raw_vss_client, vss_key_exists, write_random_file};
 
 use crate::wallet::vss::{VssBackupClient, VssBackupConfig, restore_from_vss};
-const VSS_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 // Block 4 / Scenario 4.2:
 // VSS server unavailable -> vss_backup/restore_from_vss must fail cleanly.

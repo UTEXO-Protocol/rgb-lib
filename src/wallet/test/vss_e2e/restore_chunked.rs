@@ -1,13 +1,13 @@
 use super::*;
 
 use crate::wallet::test::utils::vss::{
-    VSS_KEY_CHUNK_PREFIX, VSS_KEY_FINGERPRINT, VSS_KEY_MANIFEST, VSS_KEY_METADATA,
-    VssBackupDeleteGuard, build_raw_vss_client, generate_signing_key_and_store_id, get_vss_key,
-    tokio_runtime, vss_key_exists, vss_server_url, write_random_file,
+    VSS_CHUNK_SIZE_BYTES, VSS_KEY_CHUNK_PREFIX, VSS_KEY_FINGERPRINT, VSS_KEY_MANIFEST,
+    VSS_KEY_METADATA, VssBackupDeleteGuard, build_raw_vss_client,
+    generate_signing_key_and_store_id, get_vss_key, tokio_runtime, vss_key_exists, vss_server_url,
+    write_random_file,
 };
 
 use crate::wallet::vss::{BackupManifest, VssBackupClient, VssBackupConfig, restore_from_vss};
-const VSS_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 // Block 1 (chunked): encrypted backup >4MB should use chunked upload and still restore correctly.
 #[cfg(feature = "electrum")]
@@ -75,7 +75,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
         for _ in 0..30 {
             if rt
                 .block_on(vss_key_exists(&raw, &store_id, &key))
-                .unwrap_or(false)
+                .expect("chunk key check")
             {
                 ok = true;
                 break;
