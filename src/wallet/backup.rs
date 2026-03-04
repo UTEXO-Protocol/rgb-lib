@@ -90,8 +90,12 @@ impl Wallet {
         password: &str,
         scrypt_params: Option<ScryptParams>,
     ) -> Result<(), Error> {
-        self._backup(backup_path, password, scrypt_params)?;
         self.update_backup_info(true)?;
+        if let Err(e) = self._backup(backup_path, password, scrypt_params) {
+            // Reset: mark wallet as needing a backup again so backup_info() returns true.
+            let _ = self.update_backup_info(false);
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -213,9 +217,15 @@ impl Wallet {
     /// Returns the server-side version number of the uploaded backup.
     #[cfg(feature = "vss")]
     pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
-        let version = self._vss_backup(client).await?;
         self.update_backup_info(true)?;
-        Ok(version)
+        match self._vss_backup(client).await {
+            Ok(version) => Ok(version),
+            Err(e) => {
+                // Reset: mark wallet as needing a backup again so backup_info() returns true.
+                let _ = self.update_backup_info(false);
+                Err(e)
+            }
+        }
     }
 
     #[cfg(feature = "vss")]

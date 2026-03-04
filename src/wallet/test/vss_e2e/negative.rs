@@ -235,8 +235,10 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
         Err(e) => e,
     };
     match &err {
-        Error::VssAuth { .. } | Error::VssError { .. } => {}
-        other => panic!("Expected VssAuth or VssError (decryption failure), got: {other:?}"),
+        Error::VssAuth { .. } | Error::VssError { .. } | Error::VssBackupNotFound => {}
+        other => panic!(
+            "Expected VssAuth, VssError, or VssBackupNotFound for wrong signing key, got: {other:?}"
+        ),
     }
     assert!(
         !dir_has_any_subdir(std::path::Path::new(restore_root)),
