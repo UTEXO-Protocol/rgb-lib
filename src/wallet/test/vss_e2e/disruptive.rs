@@ -119,6 +119,7 @@ fn scenario_4_2_vss_unavailable_backup_and_restore_fail_cleanly() {
 #[cfg(feature = "electrum")]
 #[test]
 #[serial]
+#[ignore = "Disruptive + timing-sensitive (stops VSS docker service); run manually when validating chunked upload atomicity."]
 fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
     initialize();
 
@@ -176,9 +177,10 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
         while start.elapsed() < Duration::from_secs(30) {
             match rt_bg.block_on(vss_key_exists(&raw_bg, &store_id_bg, VSS_KEY_CHUNK0)) {
                 Ok(true) => {
-                    let _ = stop_vss_server();
-                    interrupted_after_chunk0_bg.store(true, Ordering::SeqCst);
-                    break;
+                    if stop_vss_server().is_ok() {
+                        interrupted_after_chunk0_bg.store(true, Ordering::SeqCst);
+                        break;
+                    }
                 }
                 _ => std::thread::sleep(Duration::from_millis(200)),
             }
@@ -187,17 +189,18 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
     });
 
     // Attempt the chunked backup; we expect it to fail once the server is stopped.
-    let chunked_err = match rt.block_on(wallet.vss_backup(&client)) {
+    let chunked_res = rt.block_on(wallet.vss_backup(&client));
+    let interrupter_join = interrupter.join();
+    let chunked_err = match chunked_res {
         Ok(v) => {
-            interrupter.join().ok();
+            interrupter_join.expect("interrupter thread panicked");
             panic!(
                 "Expected chunked vss_backup to fail due to interruption, but it succeeded: {v}"
             );
         }
         Err(e) => e,
     };
-
-    interrupter.join().ok();
+    interrupter_join.expect("interrupter thread panicked");
 
     // Bring VSS back (if we stopped it), then wait until it accepts connections.
     if interrupted_after_chunk0.load(Ordering::SeqCst) {
@@ -228,37 +231,27 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
         "Expected baseline manifest to still exist after interruption"
     );
 
-    // If we couldn't actually interrupt mid-upload (chunk 0 never appeared), we can't validate the
-    // semantics. This commonly happens when chunked uploads time out before the first chunk reaches
-    // the server in this environment.
-    if !interrupter_done.load(Ordering::SeqCst) || !interrupted_after_chunk0.load(Ordering::SeqCst)
-    {
-        if let Error::VssError { details } = &chunked_err {
-            if details.to_lowercase().contains("timeout") {
-                eprintln!(
-                    "SKIP(mid-upload): chunked upload timed out before chunk 0 was observable on the server. Details: {details}"
-                );
-                rt.block_on(client.delete_backup()).ok();
-                return;
-            }
-        }
-        eprintln!("SKIP(mid-upload): did not observe chunk 0 on the server within 30s");
-        rt.block_on(client.delete_backup()).ok();
-        return;
-    }
+    // Ensure this test actually validated the "mid-upload interrupt" semantics.
+    //
+    // We keep this test `#[ignore]` because it is timing-sensitive and disruptive (it stops the
+    // VSS docker service). When explicitly run, it must fail if the environment didn't allow us
+    // to interrupt during chunked upload (e.g. chunk 0 never became observable).
+    assert!(
+        interrupter_done.load(Ordering::SeqCst),
+        "interrupter thread did not complete (unexpected)"
+    );
+    assert!(
+        interrupted_after_chunk0.load(Ordering::SeqCst),
+        "Did not observe chunk 0 on the server within 30s, so we could not validate mid-upload interruption semantics. chunked_err={chunked_err:?}"
+    );
 
-    // Retry backup after server recovery. If chunked upload is still flaky/timeouts, skip.
+    // Retry backup after server recovery.
     match rt.block_on(wallet.vss_backup(&client)) {
         Ok(version_after_retry) => {
             assert!(
                 version_after_retry >= baseline_version,
                 "Expected version to be >= baseline after retry"
             );
-        }
-        Err(Error::VssError { details }) if details.to_lowercase().contains("timeout") => {
-            eprintln!("SKIP: retry chunked backup still times out in this environment: {details}");
-            rt.block_on(client.delete_backup()).ok();
-            return;
         }
         Err(e) => panic!("unexpected retry backup failure: {e:?}"),
     }
