@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>rgb-lib WASM Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }
+    h1 { color: #58a6ff; margin-bottom: 0.5rem; }
+    .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }
+    .status { padding: 0.5rem 1rem; border-radius: 6px; margin-bottom: 2rem; font-size: 0.85rem; }
+    .status.loading { background: #1c1f26; color: #d29922; }
+    .status.ready { background: #0d2818; color: #3fb950; }
+    .status.error { background: #2d1117; color: #f85149; }
+    .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .section h2 { color: #58a6ff; font-size: 1.1rem; margin-bottom: 1rem; }
+    label { display: block; color: #8b949e; font-size: 0.85rem; margin-bottom: 0.3rem; }
+    select, input, textarea {
+      width: 100%; padding: 0.5rem 0.75rem; background: #0d1117; border: 1px solid #30363d;
+      border-radius: 6px; color: #c9d1d9; font-family: monospace; font-size: 0.9rem; margin-bottom: 1rem;
+    }
+    textarea { resize: vertical; min-height: 60px; }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: #58a6ff; }
+    button {
+      padding: 0.5rem 1.25rem; background: #238636; color: #fff; border: none;
+      border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600;
+    }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    .output { margin-top: 1rem; }
+    .output-label { color: #8b949e; font-size: 0.8rem; margin-bottom: 0.3rem; }
+    pre {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 1rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.5;
+      max-height: 400px; overflow-y: auto;
+    }
+    .field-row { display: flex; gap: 1rem; align-items: flex-end; }
+    .field-row > * { flex: 1; }
+    .field-row > button { flex: 0 0 auto; margin-bottom: 1rem; }
+    .copy-btn {
+      background: #30363d; font-size: 0.75rem; padding: 0.3rem 0.6rem; margin-left: 0.5rem;
+    }
+    .copy-btn:hover { background: #484f58; }
+    .round-trip-result { margin-top: 0.5rem; font-size: 0.85rem; padding: 0.4rem 0.75rem; border-radius: 4px; }
+    .round-trip-result.pass { background: #0d2818; color: #3fb950; }
+    .round-trip-result.fail { background: #2d1117; color: #f85149; }
+  </style>
+</head>
+<body>
+  <h1>rgb-lib WASM Smoke Test</h1>
+  <p class="subtitle">Interactive test page for rgb-lib WebAssembly bindings</p>
+  <div id="status" class="status loading">Initializing WASM module...</div>
+
+  <!-- Generate Keys -->
+  <div class="section">
+    <h2>Generate Keys</h2>
+    <div class="field-row">
+      <div>
+        <label for="gen-network">Network</label>
+        <select id="gen-network">
+          <option value="regtest" selected>Regtest</option>
+          <option value="testnet">Testnet</option>
+          <option value="signet">Signet</option>
+          <option value="mainnet">Mainnet</option>
+        </select>
+      </div>
+      <button id="btn-generate" disabled>Generate Keys</button>
+    </div>
+    <div class="output" id="gen-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('gen-result')">Copy</button></div>
+      <pre id="gen-result"></pre>
+    </div>
+  </div>
+
+  <!-- Restore Keys -->
+  <div class="section">
+    <h2>Restore Keys</h2>
+    <div>
+      <label for="restore-network">Network</label>
+      <select id="restore-network">
+        <option value="regtest" selected>Regtest</option>
+        <option value="testnet">Testnet</option>
+        <option value="signet">Signet</option>
+        <option value="mainnet">Mainnet</option>
+      </select>
+    </div>
+    <div>
+      <label for="restore-mnemonic">Mnemonic (BIP39)</label>
+      <textarea id="restore-mnemonic" placeholder="Enter 12-word mnemonic or click 'Generate Keys' first and use the mnemonic from there"></textarea>
+    </div>
+    <button id="btn-restore" disabled>Restore Keys</button>
+    <div class="output" id="restore-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('restore-result')">Copy</button></div>
+      <pre id="restore-result"></pre>
+    </div>
+  </div>
+
+  <!-- Round-Trip Verification -->
+  <div class="section">
+    <h2>Round-Trip Verification</h2>
+    <p style="color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem;">
+      Generates keys, then restores from the mnemonic and verifies all fields match.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="rt-network">Network</label>
+        <select id="rt-network">
+          <option value="regtest" selected>Regtest</option>
+          <option value="testnet">Testnet</option>
+          <option value="signet">Signet</option>
+          <option value="mainnet">Mainnet</option>
+        </select>
+      </div>
+      <button id="btn-roundtrip" disabled>Run Round-Trip Test</button>
+    </div>
+    <div class="output" id="rt-output" style="display:none;">
+      <div id="rt-status"></div>
+      <div class="output-label" style="margin-top: 0.5rem;">Details <button class="copy-btn" onclick="copyOutput('rt-result')">Copy</button></div>
+      <pre id="rt-result"></pre>
+    </div>
+  </div>
+
+  <!-- Create Wallet -->
+  <div class="section">
+    <h2>Create Wallet</h2>
+    <p style="color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem;">
+      Creates a Wallet from WalletData JSON. Generate keys first, then click "Create Wallet" to auto-fill from generated keys.
+    </p>
+    <div>
+      <label for="wallet-data">WalletData JSON</label>
+      <textarea id="wallet-data" rows="8" placeholder='{"data_dir": ":memory:", "bitcoin_network": "regtest", ...}'></textarea>
+    </div>
+    <button id="btn-create-wallet" disabled>Create Wallet</button>
+    <div class="output" id="wallet-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('wallet-result')">Copy</button></div>
+      <pre id="wallet-result"></pre>
+    </div>
+  </div>
+
+  <!-- Issue NIA Asset -->
+  <div class="section">
+    <h2>Issue NIA Asset</h2>
+    <p style="color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem;">
+      Issues a Non-Inflatable Asset on the wallet. Requires a wallet to be created first and UTXOs to be available.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="nia-ticker">Ticker</label>
+        <input id="nia-ticker" type="text" value="TEST" />
+      </div>
+      <div>
+        <label for="nia-name">Name</label>
+        <input id="nia-name" type="text" value="Test Token" />
+      </div>
+      <div>
+        <label for="nia-precision">Precision</label>
+        <input id="nia-precision" type="number" value="0" min="0" max="18" />
+      </div>
+    </div>
+    <div>
+      <label for="nia-amounts">Amounts (comma-separated)</label>
+      <input id="nia-amounts" type="text" value="1000" />
+    </div>
+    <button id="btn-issue-nia" disabled>Issue NIA</button>
+    <div class="output" id="nia-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('nia-result')">Copy</button></div>
+      <pre id="nia-result"></pre>
+    </div>
+  </div>
+
+  <!-- Error Handling Test -->
+  <div class="section">
+    <h2>Error Handling</h2>
+    <p style="color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem;">
+      Tests that invalid inputs return proper error messages instead of panicking.
+    </p>
+    <button id="btn-errors" disabled>Run Error Tests</button>
+    <div class="output" id="err-output" style="display:none;">
+      <pre id="err-result"></pre>
+    </div>
+  </div>
+
+  <script type="module">
+    import init, { generate_keys, restore_keys, WasmWallet } from '/pkg/rgb_lib_wasm.js';
+
+    let currentWallet = null;
+
+    const statusEl = document.getElementById('status');
+    const buttons = document.querySelectorAll('button[id^="btn-"]');
+
+    try {
+      await init();
+      statusEl.textContent = 'WASM module loaded successfully';
+      statusEl.className = 'status ready';
+      buttons.forEach(b => b.disabled = false);
+    } catch (e) {
+      statusEl.textContent = 'Failed to load WASM module: ' + e;
+      statusEl.className = 'status error';
+    }
+
+    // Generate Keys
+    document.getElementById('btn-generate').addEventListener('click', () => {
+      const network = document.getElementById('gen-network').value;
+      const outputDiv = document.getElementById('gen-output');
+      const resultPre = document.getElementById('gen-result');
+      try {
+        const keys = generate_keys(network);
+        resultPre.textContent = JSON.stringify(keys, null, 2);
+        outputDiv.style.display = 'block';
+        // Auto-fill restore mnemonic and wallet data
+        if (keys.mnemonic) {
+          document.getElementById('restore-mnemonic').value = keys.mnemonic;
+          document.getElementById('restore-network').value = network;
+          fillWalletData(keys, network);
+        }
+      } catch (e) {
+        resultPre.textContent = 'Error: ' + e;
+        outputDiv.style.display = 'block';
+      }
+    });
+
+    // Restore Keys
+    document.getElementById('btn-restore').addEventListener('click', () => {
+      const network = document.getElementById('restore-network').value;
+      const mnemonic = document.getElementById('restore-mnemonic').value.trim();
+      const outputDiv = document.getElementById('restore-output');
+      const resultPre = document.getElementById('restore-result');
+      if (!mnemonic) {
+        resultPre.textContent = 'Error: Please enter a mnemonic';
+        outputDiv.style.display = 'block';
+        return;
+      }
+      try {
+        const keys = restore_keys(network, mnemonic);
+        resultPre.textContent = JSON.stringify(keys, null, 2);
+        outputDiv.style.display = 'block';
+      } catch (e) {
+        resultPre.textContent = 'Error: ' + e;
+        outputDiv.style.display = 'block';
+      }
+    });
+
+    // Round-Trip Test
+    document.getElementById('btn-roundtrip').addEventListener('click', () => {
+      const network = document.getElementById('rt-network').value;
+      const outputDiv = document.getElementById('rt-output');
+      const statusDiv = document.getElementById('rt-status');
+      const resultPre = document.getElementById('rt-result');
+      try {
+        const generated = generate_keys(network);
+        const restored = restore_keys(network, generated.mnemonic);
+
+        const fields = Object.keys(generated);
+        const results = {};
+        let allMatch = true;
+        for (const field of fields) {
+          const genVal = JSON.stringify(generated[field]);
+          const resVal = JSON.stringify(restored[field]);
+          const match = genVal === resVal;
+          if (!match) allMatch = false;
+          results[field] = { generated: generated[field], restored: restored[field], match };
+        }
+
+        statusDiv.innerHTML = allMatch
+          ? '<div class="round-trip-result pass">All fields match — round-trip OK</div>'
+          : '<div class="round-trip-result fail">Mismatch detected — see details below</div>';
+
+        const summary = fields.map(f => {
+          const icon = results[f].match ? '\u2705' : '\u274c';
+          const val = typeof results[f].generated === 'string'
+            ? results[f].generated.substring(0, 60) + (results[f].generated.length > 60 ? '...' : '')
+            : JSON.stringify(results[f].generated);
+          return `${icon} ${f}: ${val}`;
+        }).join('\n');
+
+        resultPre.textContent = summary;
+        outputDiv.style.display = 'block';
+      } catch (e) {
+        statusDiv.innerHTML = '<div class="round-trip-result fail">Error: ' + e + '</div>';
+        resultPre.textContent = '';
+        outputDiv.style.display = 'block';
+      }
+    });
+
+    // Error Handling Tests
+    document.getElementById('btn-errors').addEventListener('click', () => {
+      const outputDiv = document.getElementById('err-output');
+      const resultPre = document.getElementById('err-result');
+      const tests = [];
+
+      // Test 1: Invalid network
+      try {
+        generate_keys('invalidnet');
+        tests.push('\u274c generate_keys("invalidnet") — should have thrown');
+      } catch (e) {
+        tests.push('\u2705 generate_keys("invalidnet") — caught: ' + e);
+      }
+
+      // Test 2: Invalid mnemonic
+      try {
+        restore_keys('regtest', 'not a valid mnemonic phrase');
+        tests.push('\u274c restore_keys("regtest", "not a valid...") — should have thrown');
+      } catch (e) {
+        tests.push('\u2705 restore_keys("regtest", "not a valid...") — caught: ' + e);
+      }
+
+      // Test 3: Empty mnemonic
+      try {
+        restore_keys('regtest', '');
+        tests.push('\u274c restore_keys("regtest", "") — should have thrown');
+      } catch (e) {
+        tests.push('\u2705 restore_keys("regtest", "") — caught: ' + e);
+      }
+
+      // Test 4: Valid network strings
+      const networks = ['regtest', 'testnet', 'signet', 'mainnet'];
+      for (const net of networks) {
+        try {
+          const keys = generate_keys(net);
+          const hasFields = keys.mnemonic && keys.account_xpub_vanilla && keys.account_xpub_colored;
+          tests.push(hasFields
+            ? '\u2705 generate_keys("' + net + '") — OK, all fields present'
+            : '\u274c generate_keys("' + net + '") — missing expected fields');
+        } catch (e) {
+          tests.push('\u274c generate_keys("' + net + '") — threw: ' + e);
+        }
+      }
+
+      resultPre.textContent = tests.join('\n');
+      outputDiv.style.display = 'block';
+    });
+
+    // Create Wallet
+    document.getElementById('btn-create-wallet').addEventListener('click', () => {
+      const outputDiv = document.getElementById('wallet-output');
+      const resultPre = document.getElementById('wallet-result');
+      let walletDataJson = document.getElementById('wallet-data').value.trim();
+
+      // If empty, try to build from last generated keys
+      if (!walletDataJson) {
+        resultPre.textContent = 'Error: Please enter WalletData JSON or generate keys first';
+        outputDiv.style.display = 'block';
+        return;
+      }
+
+      try {
+        currentWallet = new WasmWallet(walletDataJson);
+        const wd = currentWallet.get_wallet_data();
+        resultPre.textContent = 'Wallet created successfully!\n\n' + JSON.stringify(wd, null, 2);
+        outputDiv.style.display = 'block';
+        document.getElementById('btn-issue-nia').disabled = false;
+      } catch (e) {
+        resultPre.textContent = 'Error creating wallet: ' + e;
+        outputDiv.style.display = 'block';
+        currentWallet = null;
+      }
+    });
+
+    // Auto-fill wallet data when keys are generated
+    function fillWalletData(keys, network) {
+      // Capitalize network name to match enum variant (e.g. "regtest" -> "Regtest")
+      const netCapitalized = network.charAt(0).toUpperCase() + network.slice(1);
+      const wd = {
+        data_dir: ':memory:',
+        bitcoin_network: netCapitalized,
+        database_type: 'Sqlite',
+        max_allocations_per_utxo: 5,
+        account_xpub_vanilla: keys.account_xpub_vanilla,
+        account_xpub_colored: keys.account_xpub_colored,
+        mnemonic: keys.mnemonic,
+        master_fingerprint: keys.master_fingerprint,
+        vanilla_keychain: null,
+        supported_schemas: ['Nia', 'Uda', 'Cfa', 'Ifa'],
+      };
+      document.getElementById('wallet-data').value = JSON.stringify(wd, null, 2);
+    }
+
+    // Issue NIA Asset
+    document.getElementById('btn-issue-nia').addEventListener('click', () => {
+      const outputDiv = document.getElementById('nia-output');
+      const resultPre = document.getElementById('nia-result');
+      if (!currentWallet) {
+        resultPre.textContent = 'Error: Create a wallet first';
+        outputDiv.style.display = 'block';
+        return;
+      }
+      const ticker = document.getElementById('nia-ticker').value.trim();
+      const name = document.getElementById('nia-name').value.trim();
+      const precision = parseInt(document.getElementById('nia-precision').value, 10);
+      const amountsStr = document.getElementById('nia-amounts').value.trim();
+      const amounts = amountsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+
+      try {
+        const asset = currentWallet.issue_asset_nia(ticker, name, precision, amounts);
+        resultPre.textContent = JSON.stringify(asset, null, 2);
+        outputDiv.style.display = 'block';
+      } catch (e) {
+        resultPre.textContent = 'Error issuing NIA: ' + e;
+        outputDiv.style.display = 'block';
+      }
+    });
+
+    // Copy helper
+    window.copyOutput = function(id) {
+      const text = document.getElementById(id).textContent;
+      navigator.clipboard.writeText(text);
+    };
+  </script>
+</body>
+</html>

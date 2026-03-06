@@ -192,10 +192,13 @@ struct InfoAssetTransfer {
 pub(crate) enum Indexer {
     #[cfg(feature = "electrum")]
     Electrum(Box<BdkElectrumClient<ElectrumClient>>),
-    #[cfg(feature = "esplora")]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "esplora"))]
     Esplora(Box<EsploraClient>),
+    #[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+    EsploraAsync(Box<esplora_client::AsyncClient<crate::utils::WasmSleeper>>),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Indexer {
     pub(crate) fn block_hash(&self, height: usize) -> Result<String, IndexerError> {
         Ok(match self {
@@ -378,6 +381,148 @@ impl Indexer {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl Indexer {
+    pub(crate) async fn block_hash(&self, height: usize) -> Result<String, IndexerError> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let hash = client.get_block_hash(height as u32).await?;
+                hash.to_string()
+            }
+        })
+    }
+
+    pub(crate) async fn broadcast(&self, tx: &BdkTransaction) -> Result<(), IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                client.broadcast(tx).await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn fee_estimation(&self, blocks: u16) -> Result<f64, Error> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let estimate_map = client
+                    .get_fee_estimates()
+                    .await
+                    .map_err(IndexerError::from)?; // in sat/vB
+                if estimate_map.is_empty() {
+                    return Err(Error::CannotEstimateFees);
+                }
+                // map needs to be sorted for interpolation to work
+                let estimate_map = BTreeMap::from_iter(estimate_map);
+                match estimate_map.get(&blocks) {
+                    Some(estimate) => *estimate,
+                    None => {
+                        // find the two closest keys
+                        let mut lower_key = None;
+                        let mut upper_key = None;
+                        for k in estimate_map.keys() {
+                            match k.cmp(&blocks) {
+                                Ordering::Less => {
+                                    lower_key = Some(k);
+                                }
+                                Ordering::Greater => {
+                                    upper_key = Some(k);
+                                    break;
+                                }
+                                _ => unreachable!("already handled"),
+                            }
+                        }
+                        // use linear interpolation formula
+                        match (lower_key, upper_key) {
+                            (Some(x1), Some(x2)) => {
+                                let y1 = estimate_map[x1];
+                                let y2 = estimate_map[x2];
+                                y1 + (blocks as f64 - *x1 as f64) / (*x2 as f64 - *x1 as f64)
+                                    * (y2 - y1)
+                            }
+                            _ => {
+                                return Err(Error::Internal {
+                                    details: s!("esplora map doesn't contain the expected keys"),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    pub(crate) async fn full_scan<K: Ord + Clone + Send, R: Into<FullScanRequest<K>> + Send>(
+        &self,
+        request: R,
+    ) -> Result<FullScanResponse<K>, IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                use bdk_esplora::EsploraAsyncExt;
+                client
+                    .full_scan(request, INDEXER_STOP_GAP, INDEXER_PARALLEL_REQUESTS)
+                    .await
+                    .map_err(|e| IndexerError::EsploraAsync(e.to_string()))
+            }
+        }
+    }
+
+    pub(crate) async fn get_tx_confirmations(&self, txid: &str) -> Result<Option<u64>, Error> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let txid = Txid::from_str(txid).unwrap();
+                let tx_status = client
+                    .get_tx_status(&txid)
+                    .await
+                    .map_err(IndexerError::from)?;
+                if let Some(tx_height) = tx_status.block_height {
+                    let height = client.get_height().await.map_err(IndexerError::from)?;
+                    Some((height - tx_height + 1) as u64)
+                } else if client
+                    .get_tx(&txid)
+                    .await
+                    .map_err(IndexerError::from)?
+                    .is_none()
+                {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
+        })
+    }
+
+    pub(crate) fn populate_tx_cache(
+        &self,
+        #[allow(unused)] bdk_wallet: &PersistedWallet<super::offline::BdkPersister>,
+    ) {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(_) => {}
+        }
+    }
+
+    pub(crate) async fn sync<I: 'static + Send>(
+        &self,
+        request: impl Into<SyncRequest<I>> + Send,
+    ) -> Result<SyncResponse, IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                use bdk_esplora::EsploraAsyncExt;
+                client
+                    .sync(request, INDEXER_PARALLEL_REQUESTS)
+                    .await
+                    .map_err(|e| IndexerError::EsploraAsync(e.to_string()))
+            }
+        }
+    }
+}
+
 pub(crate) struct OnlineData {
     id: u64,
     pub(crate) indexer_url: String,
@@ -466,6 +611,194 @@ impl Wallet {
         Ok(fee_rate)
     }
 
+    pub(crate) fn check_online(&self, online: Online) -> Result<(), Error> {
+        if let Some(online_data) = &self.online_data {
+            if online_data.id != online.id || online_data.indexer_url != online.indexer_url {
+                error!(self.logger, "Cannot change online object");
+                return Err(Error::CannotChangeOnline);
+            }
+        } else {
+            error!(self.logger, "Wallet is offline");
+            return Err(Error::Offline);
+        }
+        Ok(())
+    }
+
+    fn _check_xprv(&self) -> Result<(), Error> {
+        if self.watch_only {
+            error!(self.logger, "Invalid operation for a watch only wallet");
+            return Err(Error::WatchOnly);
+        }
+        Ok(())
+    }
+
+    fn _create_split_tx(
+        &mut self,
+        inputs: &[BdkOutPoint],
+        addresses: &Vec<ScriptBuf>,
+        size: u32,
+        fee_rate: FeeRate,
+    ) -> Result<Psbt, bdk_wallet::error::CreateTxError> {
+        let mut tx_builder = self.bdk_wallet.build_tx();
+        tx_builder
+            .add_utxos(inputs)
+            .map_err(|_| bdk_wallet::error::CreateTxError::UnknownUtxo)?
+            .manually_selected_only()
+            .fee_rate(fee_rate);
+        for address in addresses {
+            tx_builder.add_recipient(address.clone(), BdkAmount::from_sat(size as u64));
+        }
+        tx_builder.finish()
+    }
+
+    pub(crate) fn get_script_pubkey(&self, address: &str) -> Result<ScriptBuf, Error> {
+        Ok(parse_address_str(address, self.bitcoin_network())?.script_pubkey())
+    }
+
+    fn _get_unspendable_bdk_outpoints(&self) -> Result<Vec<BdkOutPoint>, Error> {
+        Ok(self
+            .database
+            .iter_txos()?
+            .into_iter()
+            .map(BdkOutPoint::from)
+            .collect())
+    }
+
+    fn _fail_batch_transfer(
+        &self,
+        batch_transfer: &DbBatchTransfer,
+    ) -> Result<DbBatchTransfer, Error> {
+        let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
+        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+        updated_batch_transfer.expiration = ActiveValue::Set(Some(now().unix_timestamp()));
+        Ok(self
+            .database
+            .update_batch_transfer(&mut updated_batch_transfer)?)
+    }
+
+    fn _get_asset_medias(
+        &self,
+        media_idx: Option<i32>,
+        token: Option<TokenLight>,
+    ) -> Result<Vec<Media>, Error> {
+        let mut asset_medias = vec![];
+        if let Some(token) = token {
+            if let Some(token_media) = token.media {
+                asset_medias.push(token_media);
+            }
+            for (_, attachment_media) in token.attachments {
+                asset_medias.push(attachment_media);
+            }
+        } else if let Some(media_idx) = media_idx {
+            let db_media = self.database.get_media(media_idx)?.unwrap();
+            asset_medias.push(Media::from_db_media(&db_media, self.get_media_dir()))
+        }
+        Ok(asset_medias)
+    }
+
+    fn _fail_batch_transfer_if_no_endpoints(
+        &self,
+        batch_transfer: &DbBatchTransfer,
+        transfer_transport_endpoints_data: &[(DbTransferTransportEndpoint, DbTransportEndpoint)],
+    ) -> Result<Option<DbBatchTransfer>, Error> {
+        if transfer_transport_endpoints_data.is_empty() {
+            Ok(Some(self._fail_batch_transfer(batch_transfer)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(crate) fn extract_received_assignments(
+        &self,
+        consignment: &RgbTransfer,
+        witness_id: RgbTxid,
+        vout: Option<u32>,
+        known_concealed: Option<SecretSeal>,
+    ) -> HashMap<Opout, Assignment> {
+        let mut received = HashMap::new();
+        if let Some(bundle) = consignment
+            .bundles
+            .iter()
+            .find(|ab| ab.witness_id() == witness_id)
+        {
+            for KnownTransition { transition, opid } in bundle.bundle.known_transitions.iter() {
+                for (ass_type, typed_assigns) in transition.assignments.iter() {
+                    for (no, fungible_assignment) in typed_assigns.as_fungible().iter().enumerate()
+                    {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, state, .. } = fungible_assignment {
+                            if Some(*seal) == known_concealed {
+                                match *ass_type {
+                                    OS_ASSET => {
+                                        received
+                                            .insert(opout, Assignment::Fungible(state.as_u64()));
+                                    }
+                                    OS_INFLATION => {
+                                        received.insert(
+                                            opout,
+                                            Assignment::InflationRight(state.as_u64()),
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        };
+                        if let Assign::Revealed { seal, state, .. } = fungible_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                match *ass_type {
+                                    OS_ASSET => {
+                                        received
+                                            .insert(opout, Assignment::Fungible(state.as_u64()));
+                                    }
+                                    OS_INFLATION => {
+                                        received.insert(
+                                            opout,
+                                            Assignment::InflationRight(state.as_u64()),
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        };
+                    }
+                    for (no, structured_assignment) in
+                        typed_assigns.as_structured().iter().enumerate()
+                    {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, .. } = structured_assignment {
+                            if Some(*seal) == known_concealed {
+                                received.insert(opout, Assignment::NonFungible);
+                            }
+                        }
+                        if let Assign::Revealed { seal, .. } = structured_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                received.insert(opout, Assignment::NonFungible);
+                            }
+                        };
+                    }
+                    for (no, void_assignment) in typed_assigns.as_declarative().iter().enumerate() {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, .. } = void_assignment {
+                            if Some(*seal) == known_concealed {
+                                received.insert(opout, Assignment::ReplaceRight);
+                            }
+                        }
+                        if let Assign::Revealed { seal, .. } = void_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                received.insert(opout, Assignment::ReplaceRight);
+                            }
+                        };
+                    }
+                }
+            }
+        }
+
+        received
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Wallet {
     pub(crate) fn sync_db_txos(&mut self, full_scan: bool) -> Result<(), Error> {
         debug!(self.logger, "Syncing TXOs...");
 
@@ -567,6 +900,14 @@ impl Wallet {
                             }
                         }
                     }
+                    #[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+                    IndexerError::EsploraAsync(ref msg) => {
+                        if msg.contains("min relay fee not met") {
+                            return Err(Error::MinFeeNotMet { txid: txid.clone() });
+                        } else if msg.contains("Fee exceeds maximum configured") {
+                            return Err(Error::MaxFeeExceeded { txid: txid.clone() });
+                        }
+                    }
                 }
                 if indexer.get_tx_confirmations(&txid)?.is_none() {
                     return Err(Error::FailedBroadcast {
@@ -622,46 +963,6 @@ impl Wallet {
         let tx = self._broadcast_psbt(signed_psbt, skip_sync)?;
         runtime.upsert_witness(witness_id, WitnessOrd::Tentative)?;
         Ok(tx)
-    }
-
-    pub(crate) fn check_online(&self, online: Online) -> Result<(), Error> {
-        if let Some(online_data) = &self.online_data {
-            if online_data.id != online.id || online_data.indexer_url != online.indexer_url {
-                error!(self.logger, "Cannot change online object");
-                return Err(Error::CannotChangeOnline);
-            }
-        } else {
-            error!(self.logger, "Wallet is offline");
-            return Err(Error::Offline);
-        }
-        Ok(())
-    }
-
-    fn _check_xprv(&self) -> Result<(), Error> {
-        if self.watch_only {
-            error!(self.logger, "Invalid operation for a watch only wallet");
-            return Err(Error::WatchOnly);
-        }
-        Ok(())
-    }
-
-    fn _create_split_tx(
-        &mut self,
-        inputs: &[BdkOutPoint],
-        addresses: &Vec<ScriptBuf>,
-        size: u32,
-        fee_rate: FeeRate,
-    ) -> Result<Psbt, bdk_wallet::error::CreateTxError> {
-        let mut tx_builder = self.bdk_wallet.build_tx();
-        tx_builder
-            .add_utxos(inputs)
-            .map_err(|_| bdk_wallet::error::CreateTxError::UnknownUtxo)?
-            .manually_selected_only()
-            .fee_rate(fee_rate);
-        for address in addresses {
-            tx_builder.add_recipient(address.clone(), BdkAmount::from_sat(size as u64));
-        }
-        tx_builder.finish()
     }
 
     /// Create new UTXOs.
@@ -867,19 +1168,6 @@ impl Wallet {
         self.drain_to_end(online, psbt)
     }
 
-    fn _get_unspendable_bdk_outpoints(&self) -> Result<Vec<BdkOutPoint>, Error> {
-        Ok(self
-            .database
-            .iter_txos()?
-            .into_iter()
-            .map(BdkOutPoint::from)
-            .collect())
-    }
-
-    pub(crate) fn get_script_pubkey(&self, address: &str) -> Result<ScriptBuf, Error> {
-        Ok(parse_address_str(address, self.bitcoin_network())?.script_pubkey())
-    }
-
     /// Prepare the PSBT to send bitcoin funds not in use for RGB allocations, or all funds if
     /// `destroy_assets` is set to true, to the provided Bitcoin `address` with the provided
     /// `fee_rate` (in sat/vB).
@@ -977,18 +1265,6 @@ impl Wallet {
 
         info!(self.logger, "Drain (end) completed");
         Ok(tx.compute_txid().to_string())
-    }
-
-    fn _fail_batch_transfer(
-        &self,
-        batch_transfer: &DbBatchTransfer,
-    ) -> Result<DbBatchTransfer, Error> {
-        let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
-        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-        updated_batch_transfer.expiration = ActiveValue::Set(Some(now().unix_timestamp()));
-        Ok(self
-            .database
-            .update_batch_transfer(&mut updated_batch_transfer)?)
     }
 
     fn _try_fail_batch_transfer(
@@ -1234,42 +1510,10 @@ impl Wallet {
         Ok(online)
     }
 
-    fn _get_asset_medias(
-        &self,
-        media_idx: Option<i32>,
-        token: Option<TokenLight>,
-    ) -> Result<Vec<Media>, Error> {
-        let mut asset_medias = vec![];
-        if let Some(token) = token {
-            if let Some(token_media) = token.media {
-                asset_medias.push(token_media);
-            }
-            for (_, attachment_media) in token.attachments {
-                asset_medias.push(attachment_media);
-            }
-        } else if let Some(media_idx) = media_idx {
-            let db_media = self.database.get_media(media_idx)?.unwrap();
-            asset_medias.push(Media::from_db_media(&db_media, self.get_media_dir()))
-        }
-        Ok(asset_medias)
-    }
-
     fn _get_signed_psbt(&self, transfer_dir: PathBuf) -> Result<Psbt, Error> {
         let psbt_file = transfer_dir.join(SIGNED_PSBT_FILE);
         let psbt_str = fs::read_to_string(psbt_file)?;
         Ok(Psbt::from_str(&psbt_str)?)
-    }
-
-    fn _fail_batch_transfer_if_no_endpoints(
-        &self,
-        batch_transfer: &DbBatchTransfer,
-        transfer_transport_endpoints_data: &[(DbTransferTransportEndpoint, DbTransportEndpoint)],
-    ) -> Result<Option<DbBatchTransfer>, Error> {
-        if transfer_transport_endpoints_data.is_empty() {
-            Ok(Some(self._fail_batch_transfer(batch_transfer)?))
-        } else {
-            Ok(None)
-        }
     }
 
     fn _refuse_consignment(
@@ -1331,94 +1575,6 @@ impl Wallet {
         );
 
         Ok(consignment_res)
-    }
-
-    pub(crate) fn extract_received_assignments(
-        &self,
-        consignment: &RgbTransfer,
-        witness_id: RgbTxid,
-        vout: Option<u32>,
-        known_concealed: Option<SecretSeal>,
-    ) -> HashMap<Opout, Assignment> {
-        let mut received = HashMap::new();
-        if let Some(bundle) = consignment
-            .bundles
-            .iter()
-            .find(|ab| ab.witness_id() == witness_id)
-        {
-            for KnownTransition { transition, opid } in bundle.bundle.known_transitions.iter() {
-                for (ass_type, typed_assigns) in transition.assignments.iter() {
-                    for (no, fungible_assignment) in typed_assigns.as_fungible().iter().enumerate()
-                    {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, state, .. } = fungible_assignment {
-                            if Some(*seal) == known_concealed {
-                                match *ass_type {
-                                    OS_ASSET => {
-                                        received
-                                            .insert(opout, Assignment::Fungible(state.as_u64()));
-                                    }
-                                    OS_INFLATION => {
-                                        received.insert(
-                                            opout,
-                                            Assignment::InflationRight(state.as_u64()),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        };
-                        if let Assign::Revealed { seal, state, .. } = fungible_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                match *ass_type {
-                                    OS_ASSET => {
-                                        received
-                                            .insert(opout, Assignment::Fungible(state.as_u64()));
-                                    }
-                                    OS_INFLATION => {
-                                        received.insert(
-                                            opout,
-                                            Assignment::InflationRight(state.as_u64()),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        };
-                    }
-                    for (no, structured_assignment) in
-                        typed_assigns.as_structured().iter().enumerate()
-                    {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, .. } = structured_assignment {
-                            if Some(*seal) == known_concealed {
-                                received.insert(opout, Assignment::NonFungible);
-                            }
-                        }
-                        if let Assign::Revealed { seal, .. } = structured_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                received.insert(opout, Assignment::NonFungible);
-                            }
-                        };
-                    }
-                    for (no, void_assignment) in typed_assigns.as_declarative().iter().enumerate() {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, .. } = void_assignment {
-                            if Some(*seal) == known_concealed {
-                                received.insert(opout, Assignment::ReplaceRight);
-                            }
-                        }
-                        if let Assign::Revealed { seal, .. } = void_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                received.insert(opout, Assignment::ReplaceRight);
-                            }
-                        };
-                    }
-                }
-            }
-        }
-
-        received
     }
 
     fn _get_reject_list(

@@ -1,11 +1,17 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 const BACKUP_BUFFER_LEN_ENCRYPT: usize = 239; // 255 max, leaving 16 for the checksum
+#[cfg(not(target_arch = "wasm32"))]
 const BACKUP_BUFFER_LEN_DECRYPT: usize = BACKUP_BUFFER_LEN_ENCRYPT + 16;
+#[cfg(not(target_arch = "wasm32"))]
 const BACKUP_KEY_LENGTH: usize = 32;
+#[cfg(not(target_arch = "wasm32"))]
 const BACKUP_NONCE_LENGTH: usize = 19;
+#[cfg(not(target_arch = "wasm32"))]
 const BACKUP_VERSION: u8 = 1;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct BackupPaths {
     encrypted: PathBuf,
     pub(crate) backup_pub_data: PathBuf,
@@ -13,6 +19,7 @@ pub(crate) struct BackupPaths {
     zip: PathBuf,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ScryptParams {
     log_n: u8,
@@ -23,6 +30,7 @@ pub(crate) struct ScryptParams {
     algorithm: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ScryptParams {
     pub(crate) fn new(log_n: Option<u8>, r: Option<u32>, p: Option<u32>) -> ScryptParams {
         ScryptParams {
@@ -36,12 +44,14 @@ impl ScryptParams {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for ScryptParams {
     fn default() -> ScryptParams {
         ScryptParams::new(None, None, None)
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TryInto<Params> for ScryptParams {
     type Error = Error;
 
@@ -52,6 +62,7 @@ impl TryInto<Params> for ScryptParams {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct BackupPubData {
     scrypt_params: ScryptParams,
@@ -60,6 +71,7 @@ pub(crate) struct BackupPubData {
     pub(crate) version: u8,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl BackupPubData {
     fn nonce(&self) -> Result<[u8; BACKUP_NONCE_LENGTH], InternalError> {
         let nonce_bytes = self.nonce.as_bytes();
@@ -69,6 +81,7 @@ impl BackupPubData {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Wallet {
     /// Create a backup of the wallet as a file with the provided name and encrypted with the
     /// provided password.
@@ -384,6 +397,7 @@ impl Wallet {
     pub(crate) fn trigger_auto_backup(&self) {}
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Restore a backup from the given file and password to the provided target directory.
 pub fn restore_backup(backup_path: &str, password: &str, target_dir: &str) -> Result<(), Error> {
     // setup
@@ -439,6 +453,7 @@ pub fn restore_backup(backup_path: &str, password: &str, target_dir: &str) -> Re
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn get_backup_paths(tmp_base_path: &Path) -> Result<BackupPaths, Error> {
     fs::create_dir_all(tmp_base_path)?;
     let tempdir = tempfile::tempdir_in(tmp_base_path)?;
@@ -453,6 +468,7 @@ pub(crate) fn get_backup_paths(tmp_base_path: &Path) -> Result<BackupPaths, Erro
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _get_parent_path(file: &Path) -> Result<PathBuf, Error> {
     if let Some(parent) = file.parent() {
         Ok(parent.to_path_buf())
@@ -463,6 +479,7 @@ fn _get_parent_path(file: &Path) -> Result<PathBuf, Error> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn zip_dir(
     path_in: &PathBuf,
     path_out: &PathBuf,
@@ -523,17 +540,20 @@ pub(crate) fn zip_dir(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _get_zip_archive(zip_path: &PathBuf) -> Result<zip::ZipArchive<std::fs::File>, Error> {
     let file = fs::File::open(zip_path).map_err(InternalError::from)?;
     Ok(zip::ZipArchive::new(file).map_err(InternalError::from)?)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _get_fingerprint_from_zip(zip_path: &PathBuf) -> Result<String, Error> {
     let archive = _get_zip_archive(zip_path)?;
     let fingerprint = archive.name_for_index(0).unwrap_or_default();
     Ok(fingerprint.to_string().replace("/", ""))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Result<(), Error> {
     let mut archive = _get_zip_archive(zip_path)?;
     for i in 0..archive.len() {
@@ -566,6 +586,7 @@ pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Res
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _get_cypher_secrets(
     password: &str,
     backup_pub_data: &BackupPubData,
@@ -593,6 +614,7 @@ fn _get_cypher_secrets(
     Ok(key)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _encrypt_file(
     path_cleartext: &PathBuf,
     path_encrypted: &PathBuf,
@@ -636,6 +658,7 @@ fn _encrypt_file(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _decrypt_file(
     path_encrypted: &PathBuf,
     path_cleartext: &PathBuf,

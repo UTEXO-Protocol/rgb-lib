@@ -31,9 +31,28 @@ pub(crate) const INDEXER_BATCH_SIZE: usize = 5;
 #[cfg(feature = "esplora")]
 pub(crate) const INDEXER_PARALLEL_REQUESTS: usize = 5;
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+#[derive(Clone)]
+pub(crate) struct WasmSleeper;
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl esplora_client::Sleeper for WasmSleeper {
+    type Sleep = core::future::Ready<()>;
+
+    fn sleep(_duration: std::time::Duration) -> Self::Sleep {
+        core::future::ready(())
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) const REST_CLIENT_TIMEOUT: u8 = 90;
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 const PROXY_PROTOCOL_VERSION: &str = "0.2";
 
 /// Supported Bitcoin networks.
@@ -474,7 +493,10 @@ pub(crate) fn calculate_descriptor_from_xpub(
     Ok(format!("tr({key})"))
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn get_rest_client() -> Result<RestClient, Error> {
     RestClient::builder()
         .timeout(Duration::from_secs(REST_CLIENT_TIMEOUT as u64))
@@ -484,7 +506,10 @@ pub(crate) fn get_rest_client() -> Result<RestClient, Error> {
         })
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn check_proxy(proxy_url: &str, rest_client: Option<&RestClient>) -> Result<(), Error> {
     let rest_client = if let Some(rest_client) = rest_client {
         rest_client.clone()
@@ -511,7 +536,10 @@ pub(crate) fn check_proxy(proxy_url: &str, rest_client: Option<&RestClient>) -> 
     })
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn get_indexer_and_resolver(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
@@ -562,7 +590,10 @@ pub(crate) fn get_indexer_and_resolver(
     Ok((indexer, resolver))
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
     #[cfg(feature = "electrum")]
     {
@@ -591,6 +622,14 @@ pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
     None
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
+    use crate::wallet::online::Indexer;
+    let opts = esplora_client::Builder::new(indexer_url);
+    let client = opts.build_async_with_sleeper::<WasmSleeper>().ok()?;
+    Some(Indexer::EsploraAsync(Box::new(client)))
+}
+
 fn convert_time_fmt_error(cause: time::error::Format) -> io::Error {
     io::Error::other(cause)
 }
@@ -605,6 +644,7 @@ fn log_timestamp(io: &mut dyn io::Write) -> io::Result<()> {
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn setup_logger<P: AsRef<Path>>(
     log_path: P,
     log_name: Option<&str>,
@@ -626,8 +666,26 @@ pub(crate) fn setup_logger<P: AsRef<Path>>(
     Ok((logger, async_guard))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn setup_logger<P: AsRef<Path>>(
+    _log_path: P,
+    _log_name: Option<&str>,
+) -> Result<(Logger, ()), Error> {
+    let drain = slog::Discard;
+    let logger = Logger::root(drain, o!());
+    Ok((logger, ()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn now() -> OffsetDateTime {
+    let ms = js_sys::Date::now();
+    let secs = (ms / 1000.0).floor() as i64;
+    OffsetDateTime::from_unix_timestamp(secs).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 pub(crate) struct DumbResolver;
@@ -853,11 +911,13 @@ impl RgbRuntime {
 impl Drop for RgbRuntime {
     fn drop(&mut self) {
         self.stock.store().expect("unable to save stock");
+        #[cfg(not(target_arch = "wasm32"))]
         fs::remove_file(self.wallet_dir.join(RGB_RUNTIME_LOCK_FILE))
             .expect("should be able to drop lockfile")
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
     let lock_file_path = wallet_dir.join(RGB_RUNTIME_LOCK_FILE);
     let t_0 = OffsetDateTime::now_utc();
@@ -886,6 +946,7 @@ fn _write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_rgb_runtime(wallet_dir: PathBuf) -> Result<RgbRuntime, Error> {
     _write_rgb_runtime_lockfile(&wallet_dir)?;
 
@@ -909,6 +970,43 @@ pub(crate) fn load_rgb_runtime(wallet_dir: PathBuf) -> Result<RgbRuntime, Error>
     })?;
 
     Ok(RgbRuntime { stock, wallet_dir })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn load_rgb_runtime(_wallet_dir: PathBuf) -> Result<RgbRuntime, Error> {
+    let stock = Stock::in_memory();
+    Ok(RgbRuntime {
+        stock,
+        wallet_dir: PathBuf::new(),
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) async fn fetch_esplora_broadcast_async(
+    indexer_url: &str,
+    tx_hex: &str,
+) -> Result<(), Error> {
+    use gloo_net::http::Request;
+    let base = indexer_url.trim_end_matches('/');
+    let url = format!("{}/tx", base);
+    let resp = Request::post(&url)
+        .body(tx_hex)
+        .map_err(|e| Error::FailedBroadcast {
+            details: e.to_string(),
+        })?
+        .send()
+        .await
+        .map_err(|e| Error::FailedBroadcast {
+            details: e.to_string(),
+        })?;
+    if !resp.ok() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(Error::FailedBroadcast {
+            details: format!("Esplora POST /tx returned {}: {}", status, text),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]

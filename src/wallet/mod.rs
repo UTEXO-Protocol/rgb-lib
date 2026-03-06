@@ -2,7 +2,10 @@
 //!
 //! This module defines the [`Wallet`] related modules.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod backup;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod memory_store;
 pub(crate) mod offline;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) mod online;

@@ -1,4 +1,5 @@
 #![allow(clippy::too_many_arguments)]
+#![cfg_attr(target_arch = "wasm32", allow(dead_code, unused_imports))]
 #![warn(missing_docs)]
 
 //! A library to manage wallets for RGB assets.
@@ -59,6 +60,9 @@
 //! }
 //! ```
 
+#[cfg(all(target_arch = "wasm32", feature = "electrum"))]
+compile_error!("feature `electrum` is not supported on wasm32; use `esplora`.");
+
 pub(crate) mod api;
 pub(crate) mod database;
 pub(crate) mod error;
@@ -79,12 +83,14 @@ pub use rgbstd::{
     vm::WitnessOrd,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::wallet::backup::restore_backup;
 pub use crate::{
     database::enums::{AssetSchema, Assignment, TransferStatus, TransportType},
     error::Error,
     keys::{generate_keys, restore_keys},
     utils::BitcoinNetwork,
-    wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
+    wallet::{RecipientType, TransactionType, TransferKind, Wallet},
 };
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -106,6 +112,8 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_arch = "wasm32")]
+use crate::database::memory_db::ActiveValue;
 use amplify::{Wrapper, bmap, confinement::Confined, s};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use base64::{Engine as _, engine::general_purpose};
@@ -115,14 +123,16 @@ use bdk_electrum::{
     electrum_client::{Client as ElectrumClient, ElectrumApi, Error as ElectrumError, Param},
 };
 #[cfg(feature = "esplora")]
+use bdk_esplora::esplora_client::Error as EsploraError;
+#[cfg(all(not(target_arch = "wasm32"), feature = "esplora"))]
 use bdk_esplora::{
     EsploraExt,
-    esplora_client::{
-        BlockingClient as EsploraClient, Builder as EsploraBuilder, Error as EsploraError,
-    },
+    esplora_client::{BlockingClient as EsploraClient, Builder as EsploraBuilder},
 };
 #[cfg(feature = "esplora")]
 use bdk_wallet::bitcoin::Txid;
+#[cfg(not(target_arch = "wasm32"))]
+use bdk_wallet::file_store::Store;
 use bdk_wallet::{
     ChangeSet, KeychainKind, LocalOutput, PersistedWallet, SignOptions, Wallet as BdkWallet,
     bitcoin::{
@@ -136,7 +146,6 @@ use bdk_wallet::{
     },
     chain::{CanonicalizationParams, ChainPosition},
     descriptor::Segwitv0,
-    file_store::Store,
     keys::{
         DerivableKey, DescriptorKey,
         DescriptorKey::{Public, Secret},
@@ -158,15 +167,19 @@ use chacha20poly1305::{
     Key, KeyInit, XChaCha20Poly1305,
     aead::{generic_array::GenericArray, stream},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use file_format::FileFormat;
+#[cfg(not(target_arch = "wasm32"))]
 use futures::executor::block_on;
 use psrgbt::{RgbOutExt, RgbPsbtExt};
 use rand::{Rng, distr::Alphanumeric};
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use reqwest::{
     blocking::{Client as RestClient, multipart},
     header::CONTENT_TYPE,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use rgb_lib_migration::{
     ArrayType, ColumnType, Migrator, MigratorTrait, Nullable, Value, ValueType, ValueTypeErr,
 };
@@ -213,6 +226,7 @@ use scrypt::{
     Params, Scrypt,
     password_hash::{PasswordHasher, Salt, SaltString, rand_core::OsRng},
 };
+#[cfg(not(target_arch = "wasm32"))]
 use sea_orm::{
     ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DbErr,
     DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveValue, JsonValue, QueryFilter, QueryOrder,
@@ -221,15 +235,30 @@ use sea_orm::{
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use slog::{Drain, Logger, debug, error, info, o, warn};
+#[cfg(not(target_arch = "wasm32"))]
 use slog_async::AsyncGuard;
+#[cfg(not(target_arch = "wasm32"))]
 use slog_term::{FullFormat, PlainDecorator};
 use strict_encoding::{DecodeError, DeserializeError, FieldName};
+#[cfg(not(target_arch = "wasm32"))]
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use typenum::consts::U32;
+#[cfg(not(target_arch = "wasm32"))]
 use walkdir::WalkDir;
+#[cfg(not(target_arch = "wasm32"))]
 use zip::write::SimpleFileOptions;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::database::RgbLibDatabase;
+use crate::database::{
+    DbAsset, DbAssetActMod, DbAssetTransfer, DbAssetTransferActMod, DbBackupInfo,
+    DbBackupInfoActMod, DbBatchTransfer, DbBatchTransferActMod, DbColoring, DbColoringActMod,
+    DbMedia, DbMediaActMod, DbPendingWitnessScriptActMod, DbToken, DbTokenActMod, DbTokenMedia,
+    DbTokenMediaActMod, DbTransfer, DbTransferActMod, DbTransferTransportEndpoint,
+    DbTransferTransportEndpointActMod, DbTransportEndpoint, DbTransportEndpointActMod, DbTxo,
+    DbTxoActMod, DbWalletTransactionActMod,
+};
 #[cfg(feature = "electrum")]
 use crate::utils::INDEXER_BATCH_SIZE;
 #[cfg(feature = "esplora")]
@@ -243,44 +272,22 @@ use crate::wallet::test::{mock_chain_net, skip_build_dag, skip_check_fee_rate};
 use crate::wallet::test::{mock_input_unspents, mock_vout};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::{
-    api::proxy::{GetConsignmentResponse, Proxy},
-    api::reject_list::RejectList,
+    api::proxy::GetConsignmentResponse,
     database::{DbData, LocalRecipient, LocalRecipientData, LocalWitnessData},
     error::IndexerError,
-    utils::{
-        INDEXER_STOP_GAP, OffchainResolver, check_proxy, get_indexer_and_resolver, get_rest_client,
-        script_buf_from_recipient_id,
-    },
+    utils::{INDEXER_STOP_GAP, OffchainResolver, script_buf_from_recipient_id},
     wallet::{AssignmentsCollection, Indexer},
+};
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use crate::{
+    api::proxy::Proxy,
+    api::reject_list::RejectList,
+    utils::{check_proxy, get_indexer_and_resolver, get_rest_client},
 };
 use crate::{
     database::{
-        LocalRgbAllocation, LocalTransportEndpoint, LocalUnspent, RgbLibDatabase, TransferData,
-        entities::{
-            asset::{ActiveModel as DbAssetActMod, Model as DbAsset},
-            asset_transfer::{ActiveModel as DbAssetTransferActMod, Model as DbAssetTransfer},
-            backup_info::{ActiveModel as DbBackupInfoActMod, Model as DbBackupInfo},
-            batch_transfer::{ActiveModel as DbBatchTransferActMod, Model as DbBatchTransfer},
-            coloring::{ActiveModel as DbColoringActMod, Model as DbColoring},
-            media::{ActiveModel as DbMediaActMod, Model as DbMedia},
-            pending_witness_script::{
-                ActiveModel as DbPendingWitnessScriptActMod, Model as DbPendingWitnessScript,
-            },
-            token::{ActiveModel as DbTokenActMod, Model as DbToken},
-            token_media::{ActiveModel as DbTokenMediaActMod, Model as DbTokenMedia},
-            transfer::{ActiveModel as DbTransferActMod, Model as DbTransfer},
-            transfer_transport_endpoint::{
-                ActiveModel as DbTransferTransportEndpointActMod,
-                Model as DbTransferTransportEndpoint,
-            },
-            transport_endpoint::{
-                ActiveModel as DbTransportEndpointActMod, Model as DbTransportEndpoint,
-            },
-            txo::{ActiveModel as DbTxoActMod, Model as DbTxo},
-            wallet_transaction::{
-                ActiveModel as DbWalletTransactionActMod, Model as DbWalletTransaction,
-            },
-        },
+        LocalRgbAllocation, LocalTransportEndpoint, LocalUnspent, TransferData,
         enums::{ColoringType, RecipientTypeFull, WalletTransactionType},
     },
     error::InternalError,
