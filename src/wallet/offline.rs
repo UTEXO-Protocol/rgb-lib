@@ -2056,6 +2056,669 @@ impl Wallet {
         info!(self.logger, "Issue asset NIA completed");
         Ok(asset)
     }
+
+    /// Finalize a PSBT, optionally providing BDK sign options to tweak the behavior of the
+    /// finalizer.
+    pub fn finalize_psbt(
+        &self,
+        signed_psbt: String,
+        sign_options: Option<SignOptions>,
+    ) -> Result<String, Error> {
+        info!(self.logger, "Finalizing PSBT...");
+        let mut psbt = Psbt::from_str(&signed_psbt)?;
+        let sign_options = sign_options.unwrap_or_default();
+        if !self
+            .bdk_wallet
+            .finalize_psbt(&mut psbt, sign_options)
+            .map_err(InternalError::from)?
+        {
+            return Err(Error::CannotFinalizePsbt);
+        }
+        info!(self.logger, "Finalize PSBT completed");
+        Ok(psbt.to_string())
+    }
+
+    fn _sign_psbt(&self, psbt: &mut Psbt, sign_options: Option<SignOptions>) -> Result<(), Error> {
+        let sign_options = sign_options.unwrap_or_default();
+        self.bdk_wallet
+            .sign(psbt, sign_options)
+            .map_err(InternalError::from)?;
+        Ok(())
+    }
+
+    /// Sign a PSBT, optionally providing BDK sign options.
+    pub fn sign_psbt(
+        &self,
+        unsigned_psbt: String,
+        sign_options: Option<SignOptions>,
+    ) -> Result<String, Error> {
+        info!(self.logger, "Signing PSBT...");
+        let mut psbt = Psbt::from_str(&unsigned_psbt)?;
+        self._sign_psbt(&mut psbt, sign_options)?;
+        info!(self.logger, "Sign PSBT completed");
+        Ok(psbt.to_string())
+    }
+
+    fn _delete_batch_transfer(
+        &self,
+        batch_transfer: &DbBatchTransfer,
+        asset_transfers: &Vec<DbAssetTransfer>,
+        colorings: &[DbColoring],
+        txos: &[DbTxo],
+    ) -> Result<(), Error> {
+        let mut txos_to_delete = HashSet::new();
+        for asset_transfer in asset_transfers {
+            self.database.del_coloring(asset_transfer.idx)?;
+            colorings
+                .iter()
+                .filter(|c| c.asset_transfer_idx == asset_transfer.idx)
+                .for_each(|c| {
+                    if let Some(txo) = txos.iter().find(|t| !t.exists && t.idx == c.txo_idx) {
+                        txos_to_delete.insert(txo.idx);
+                    }
+                });
+        }
+        for txo in txos_to_delete {
+            self.database.del_txo(txo)?;
+        }
+        Ok(self.database.del_batch_transfer(batch_transfer)?)
+    }
+
+    /// Delete eligible transfers from the database and return true if any transfer has been
+    /// deleted.
+    ///
+    /// An optional `batch_transfer_idx` can be provided to operate on a single batch transfer.
+    ///
+    /// If a `batch_transfer_idx` is provided and `no_asset_only` is true, transfers with an
+    /// associated asset ID will not be deleted and instead return an error.
+    ///
+    /// If no `batch_transfer_idx` is provided, all failed transfers will be deleted, and if
+    /// `no_asset_only` is true transfers with an associated asset ID will be skipped.
+    ///
+    /// Eligible transfers are the ones in status [`TransferStatus::Failed`].
+    pub fn delete_transfers(
+        &self,
+        batch_transfer_idx: Option<i32>,
+        no_asset_only: bool,
+    ) -> Result<bool, Error> {
+        info!(
+            self.logger,
+            "Deleting batch transfer with idx {:?}...", batch_transfer_idx
+        );
+
+        let db_data = self.database.get_db_data(false)?;
+        let mut transfers_changed = false;
+
+        if let Some(batch_transfer_idx) = batch_transfer_idx {
+            let batch_transfer = &self
+                .database
+                .get_batch_transfer_or_fail(batch_transfer_idx, &db_data.batch_transfers)?;
+
+            if !batch_transfer.failed() {
+                return Err(Error::CannotDeleteBatchTransfer);
+            }
+
+            let asset_transfers = batch_transfer.get_asset_transfers(&db_data.asset_transfers)?;
+
+            if no_asset_only {
+                let connected_assets = asset_transfers.iter().any(|t| t.asset_id.is_some());
+                if connected_assets {
+                    return Err(Error::CannotDeleteBatchTransfer);
+                }
+            }
+
+            transfers_changed = true;
+            self._delete_batch_transfer(
+                batch_transfer,
+                &asset_transfers,
+                &db_data.colorings,
+                &db_data.txos,
+            )?
+        } else {
+            // delete all failed transfers
+            let mut batch_transfers: Vec<DbBatchTransfer> = db_data
+                .batch_transfers
+                .clone()
+                .into_iter()
+                .filter(|t| t.failed())
+                .collect();
+            for batch_transfer in batch_transfers.iter_mut() {
+                let asset_transfers =
+                    batch_transfer.get_asset_transfers(&db_data.asset_transfers)?;
+                if no_asset_only {
+                    let connected_assets = asset_transfers.iter().any(|t| t.asset_id.is_some());
+                    if connected_assets {
+                        continue;
+                    }
+                }
+                transfers_changed = true;
+                self._delete_batch_transfer(
+                    batch_transfer,
+                    &asset_transfers,
+                    &db_data.colorings,
+                    &db_data.txos,
+                )?
+            }
+        }
+
+        if transfers_changed {
+            self.update_backup_info(false)?;
+            self.trigger_auto_backup();
+        }
+
+        info!(self.logger, "Delete transfer completed");
+        Ok(transfers_changed)
+    }
+
+    /// Return the [`Balance`] for the RGB asset with the provided ID.
+    pub fn get_asset_balance(&self, asset_id: String) -> Result<Balance, Error> {
+        info!(self.logger, "Getting balance for asset '{}'...", asset_id);
+        self.database.check_asset_exists(asset_id.clone())?;
+        let balance = self
+            .database
+            .get_asset_balance(asset_id, None, None, None, None, None);
+        info!(self.logger, "Get asset balance completed");
+        balance
+    }
+
+    /// Return the [`BtcBalance`] of the internal Bitcoin wallets.
+    pub fn get_btc_balance(
+        &mut self,
+        online: Option<Online>,
+        skip_sync: bool,
+    ) -> Result<BtcBalance, Error> {
+        info!(self.logger, "Getting BTC balance...");
+
+        self.sync_if_requested(online, skip_sync)?;
+
+        let vanilla = self._get_btc_balance(KeychainKind::Internal)?;
+        let colored = self._get_btc_balance(KeychainKind::External)?;
+
+        let balance = BtcBalance { vanilla, colored };
+
+        info!(self.logger, "Get BTC balance completed");
+        Ok(balance)
+    }
+
+    /// List the known RGB assets.
+    ///
+    /// Providing an empty `filter_asset_schemas` will list assets for all schemas, otherwise only
+    /// assets for the provided schemas will be listed.
+    ///
+    /// The returned `Assets` will have fields set to `None` for schemas that have not been
+    /// requested.
+    pub fn list_assets(&self, mut filter_asset_schemas: Vec<AssetSchema>) -> Result<Assets, Error> {
+        info!(self.logger, "Listing assets...");
+        if filter_asset_schemas.is_empty() {
+            filter_asset_schemas = AssetSchema::VALUES.to_vec()
+        }
+
+        let batch_transfers = Some(self.database.iter_batch_transfers()?);
+        let colorings = Some(self.database.iter_colorings()?);
+        let txos = Some(self.database.iter_txos()?);
+        let asset_transfers = Some(self.database.iter_asset_transfers()?);
+        let transfers = Some(self.database.iter_transfers()?);
+        let medias = Some(self.database.iter_media()?);
+
+        let assets = self.database.iter_assets()?;
+        let mut nia = None;
+        let mut uda = None;
+        let mut cfa = None;
+        let mut ifa = None;
+        for schema in filter_asset_schemas {
+            match schema {
+                AssetSchema::Nia => {
+                    nia = Some(
+                        assets
+                            .iter()
+                            .filter(|a| a.schema == schema)
+                            .map(|a| {
+                                AssetNIA::get_asset_details(
+                                    self,
+                                    a,
+                                    transfers.clone(),
+                                    asset_transfers.clone(),
+                                    batch_transfers.clone(),
+                                    colorings.clone(),
+                                    txos.clone(),
+                                    medias.clone(),
+                                )
+                            })
+                            .collect::<Result<Vec<AssetNIA>, Error>>()?,
+                    );
+                }
+                AssetSchema::Uda => {
+                    let tokens = self.database.iter_tokens()?;
+                    let token_medias = self.database.iter_token_medias()?;
+                    uda = Some(
+                        assets
+                            .iter()
+                            .filter(|a| a.schema == schema)
+                            .map(|a| {
+                                AssetUDA::get_asset_details(
+                                    self,
+                                    a,
+                                    self.get_asset_token(
+                                        a.idx,
+                                        &medias.clone().unwrap(),
+                                        &tokens,
+                                        &token_medias,
+                                    ),
+                                    transfers.clone(),
+                                    asset_transfers.clone(),
+                                    batch_transfers.clone(),
+                                    colorings.clone(),
+                                    txos.clone(),
+                                    medias.clone(),
+                                )
+                            })
+                            .collect::<Result<Vec<AssetUDA>, Error>>()?,
+                    );
+                }
+                AssetSchema::Cfa => {
+                    cfa = Some(
+                        assets
+                            .iter()
+                            .filter(|a| a.schema == schema)
+                            .map(|a| {
+                                AssetCFA::get_asset_details(
+                                    self,
+                                    a,
+                                    transfers.clone(),
+                                    asset_transfers.clone(),
+                                    batch_transfers.clone(),
+                                    colorings.clone(),
+                                    txos.clone(),
+                                    medias.clone(),
+                                )
+                            })
+                            .collect::<Result<Vec<AssetCFA>, Error>>()?,
+                    );
+                }
+                AssetSchema::Ifa => {
+                    ifa = Some(
+                        assets
+                            .iter()
+                            .filter(|a| a.schema == schema)
+                            .map(|a| {
+                                AssetIFA::get_asset_details(
+                                    self,
+                                    a,
+                                    transfers.clone(),
+                                    asset_transfers.clone(),
+                                    batch_transfers.clone(),
+                                    colorings.clone(),
+                                    txos.clone(),
+                                    medias.clone(),
+                                )
+                            })
+                            .collect::<Result<Vec<AssetIFA>, Error>>()?,
+                    );
+                }
+            }
+        }
+
+        info!(self.logger, "List assets completed");
+        Ok(Assets { nia, uda, cfa, ifa })
+    }
+
+    pub(crate) fn sync_if_requested(
+        &mut self,
+        #[cfg_attr(
+            not(any(feature = "electrum", feature = "esplora")),
+            allow(unused_variables)
+        )]
+        online: Option<Online>,
+        skip_sync: bool,
+    ) -> Result<(), Error> {
+        if !skip_sync {
+            #[cfg(not(any(feature = "electrum", feature = "esplora")))]
+            return Err(Error::Offline);
+            #[cfg(any(feature = "electrum", feature = "esplora"))]
+            {
+                if let Some(online) = online {
+                    self.check_online(online)?;
+                } else {
+                    return Err(Error::OnlineNeeded);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                self.sync_db_txos(false)?;
+                #[cfg(target_arch = "wasm32")]
+                return Err(Error::Offline);
+            }
+        }
+        Ok(())
+    }
+
+    /// List the Bitcoin [`Transaction`]s known to the wallet.
+    pub fn list_transactions(
+        &mut self,
+        online: Option<Online>,
+        skip_sync: bool,
+    ) -> Result<Vec<Transaction>, Error> {
+        info!(self.logger, "Listing transactions...");
+
+        self.sync_if_requested(online, skip_sync)?;
+
+        let mut create_utxos_txids = vec![];
+        let mut drain_txids = vec![];
+        let wallet_transactions = self.database.iter_wallet_transactions()?;
+        for tx in wallet_transactions {
+            match tx.r#type {
+                WalletTransactionType::CreateUtxos => create_utxos_txids.push(tx.txid),
+                WalletTransactionType::Drain => drain_txids.push(tx.txid),
+            }
+        }
+        let rgb_send_txids: Vec<String> = self
+            .database
+            .iter_batch_transfers()?
+            .into_iter()
+            .filter_map(|t| t.txid)
+            .collect();
+        let transactions = self
+            .bdk_wallet
+            .transactions()
+            .map(|t| {
+                let txid = t.tx_node.txid.to_string();
+                let transaction_type = if drain_txids.contains(&txid) {
+                    TransactionType::Drain
+                } else if create_utxos_txids.contains(&txid) {
+                    TransactionType::CreateUtxos
+                } else if rgb_send_txids.contains(&txid) {
+                    TransactionType::RgbSend
+                } else {
+                    TransactionType::User
+                };
+                let confirmation_time = match t.chain_position {
+                    ChainPosition::Confirmed { anchor, .. } => Some(BlockTime {
+                        height: anchor.block_id.height,
+                        timestamp: anchor.confirmation_time,
+                    }),
+                    _ => None,
+                };
+                let (sent, received) = self.bdk_wallet.sent_and_received(&t.tx_node);
+                let fee = self.bdk_wallet.calculate_fee(&t.tx_node).unwrap();
+                Transaction {
+                    transaction_type,
+                    txid,
+                    received: received.to_sat(),
+                    sent: sent.to_sat(),
+                    fee: fee.to_sat(),
+                    confirmation_time,
+                }
+            })
+            .collect();
+        info!(self.logger, "List transactions completed");
+        Ok(transactions)
+    }
+
+    pub(crate) fn normalize_recipient_id(&self, recipient_id: &str) -> String {
+        recipient_id.replace(":", "_")
+    }
+
+    pub(crate) fn get_receive_consignment_path(&self, recipient_id: &str) -> PathBuf {
+        self.get_transfers_dir()
+            .join(self.normalize_recipient_id(recipient_id))
+            .join(CONSIGNMENT_RCV_FILE)
+    }
+
+    pub(crate) fn get_transfer_data(
+        &self,
+        transfer: &DbTransfer,
+        asset_transfer: &DbAssetTransfer,
+        batch_transfer: &DbBatchTransfer,
+        txos: &[DbTxo],
+        colorings: &[DbColoring],
+    ) -> Result<TransferData, Error> {
+        let filtered_coloring = colorings
+            .iter()
+            .filter(|&c| c.asset_transfer_idx == asset_transfer.idx)
+            .cloned();
+
+        let assignments = filtered_coloring
+            .clone()
+            .filter(|c| c.r#type != ColoringType::Input)
+            .map(|c| c.assignment)
+            .collect();
+
+        let kind = if transfer.incoming {
+            if filtered_coloring.clone().count() > 0
+                && filtered_coloring
+                    .clone()
+                    .all(|c| c.r#type == ColoringType::Issue)
+            {
+                TransferKind::Issuance
+            } else {
+                match transfer.recipient_type.as_ref().unwrap() {
+                    RecipientTypeFull::Blind { .. } => TransferKind::ReceiveBlind,
+                    RecipientTypeFull::Witness { .. } => TransferKind::ReceiveWitness,
+                }
+            }
+        } else if filtered_coloring.clone().count() > 0
+            && filtered_coloring
+                .clone()
+                .any(|c| c.r#type == ColoringType::Issue)
+        {
+            // inflation transfer is outgoing and connected to issue colorings
+            TransferKind::Inflation
+        } else {
+            TransferKind::Send
+        };
+
+        let txo_ids: Vec<i32> = filtered_coloring.clone().map(|c| c.txo_idx).collect();
+        let transfer_txos: Vec<DbTxo> = txos
+            .iter()
+            .filter(|&t| txo_ids.contains(&t.idx))
+            .cloned()
+            .collect();
+        let receive_utxo = match &transfer.recipient_type {
+            Some(RecipientTypeFull::Blind { unblinded_utxo }) => Some(unblinded_utxo.clone()),
+            Some(RecipientTypeFull::Witness { vout }) => {
+                let received_txo_idx: Vec<i32> = filtered_coloring
+                    .clone()
+                    // issue coloring from inflation is considered as received
+                    .filter(|c| [ColoringType::Receive, ColoringType::Issue].contains(&c.r#type))
+                    .map(|c| c.txo_idx)
+                    .collect();
+                transfer_txos
+                    .clone()
+                    .into_iter()
+                    .filter(|t| received_txo_idx.contains(&t.idx) && t.vout == vout.unwrap())
+                    .map(|t| t.outpoint())
+                    .collect::<Vec<Outpoint>>()
+                    .first()
+                    .cloned()
+            }
+            _ => None,
+        };
+        let change_utxo = match kind {
+            TransferKind::ReceiveBlind | TransferKind::ReceiveWitness => None,
+            TransferKind::Send | TransferKind::Inflation => {
+                let change_txo_idx: Vec<i32> = filtered_coloring
+                    .filter(|c| c.r#type == ColoringType::Change)
+                    .map(|c| c.txo_idx)
+                    .collect();
+                transfer_txos
+                    .into_iter()
+                    .filter(|t| change_txo_idx.contains(&t.idx))
+                    .map(|t| t.outpoint())
+                    .collect::<Vec<Outpoint>>()
+                    .first()
+                    .cloned()
+            }
+            TransferKind::Issuance => None,
+        };
+
+        let consignment_path = match (&kind, batch_transfer.status) {
+            (TransferKind::Send | TransferKind::Inflation, _) => {
+                Some(self.get_send_consignment_path(
+                    &asset_transfer.asset_id.clone().unwrap(),
+                    &batch_transfer.txid.clone().unwrap(),
+                ))
+            }
+            (
+                TransferKind::ReceiveBlind | TransferKind::ReceiveWitness,
+                TransferStatus::WaitingCounterparty,
+            ) => None,
+            (TransferKind::ReceiveBlind | TransferKind::ReceiveWitness, _) => {
+                Some(self.get_receive_consignment_path(&transfer.recipient_id.clone().unwrap()))
+            }
+            (TransferKind::Issuance, _) => {
+                Some(self._get_issue_consignment_path(&asset_transfer.asset_id.clone().unwrap()))
+            }
+        }
+        .map(|p| p.to_string_lossy().to_string());
+
+        Ok(TransferData {
+            kind,
+            status: batch_transfer.status,
+            batch_transfer_idx: batch_transfer.idx,
+            assignments,
+            txid: batch_transfer.txid.clone(),
+            receive_utxo,
+            change_utxo,
+            created_at: batch_transfer.created_at,
+            updated_at: batch_transfer.updated_at,
+            expiration: batch_transfer.expiration,
+            consignment_path,
+        })
+    }
+
+    /// List the RGB [`Transfer`]s known to the wallet.
+    ///
+    /// When an `asset_id` is not provided, return transfers that are not connected to a specific
+    /// asset.
+    pub fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, Error> {
+        if let Some(asset_id) = &asset_id {
+            info!(self.logger, "Listing transfers for asset '{}'...", asset_id);
+            self.database.check_asset_exists(asset_id.clone())?;
+        } else {
+            info!(self.logger, "Listing transfers...");
+        }
+        let db_data = self.database.get_db_data(false)?;
+        let asset_transfer_ids: Vec<i32> = db_data
+            .asset_transfers
+            .iter()
+            .filter(|t| t.asset_id == asset_id)
+            .filter(|t| t.user_driven)
+            .map(|t| t.idx)
+            .collect();
+        let transfers: Vec<Transfer> = db_data
+            .transfers
+            .into_iter()
+            .filter(|t| asset_transfer_ids.contains(&t.asset_transfer_idx))
+            .map(|t| {
+                let (asset_transfer, batch_transfer) =
+                    t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)?;
+                let tte_data = self.database.get_transfer_transport_endpoints_data(t.idx)?;
+                Ok(Transfer::from_db_transfer(
+                    &t,
+                    self.get_transfer_data(
+                        &t,
+                        &asset_transfer,
+                        &batch_transfer,
+                        &db_data.txos,
+                        &db_data.colorings,
+                    )?,
+                    tte_data
+                        .iter()
+                        .map(|(tte, ce)| {
+                            TransferTransportEndpoint::from_db_transfer_transport_endpoint(tte, ce)
+                        })
+                        .collect(),
+                ))
+            })
+            .collect::<Result<Vec<Transfer>, Error>>()?;
+
+        info!(self.logger, "List transfers completed");
+        Ok(transfers)
+    }
+
+    /// List the [`Unspent`]s known to the wallet.
+    ///
+    /// If `settled` is true only show settled RGB allocations, if false also show pending RGB
+    /// allocations.
+    pub fn list_unspents(
+        &mut self,
+        online: Option<Online>,
+        settled_only: bool,
+        skip_sync: bool,
+    ) -> Result<Vec<Unspent>, Error> {
+        info!(self.logger, "Listing unspents...");
+
+        self.sync_if_requested(online, skip_sync)?;
+
+        let db_data = self.database.get_db_data(false)?;
+
+        let mut allocation_txos = self.database.get_unspent_txos(db_data.txos.clone())?;
+        let spent_txos_ids: Vec<i32> = db_data
+            .txos
+            .clone()
+            .into_iter()
+            .filter(|t| t.spent)
+            .map(|u| u.idx)
+            .collect();
+        let waiting_confs_batch_transfer_ids: Vec<i32> = db_data
+            .batch_transfers
+            .clone()
+            .into_iter()
+            .filter(|t| t.waiting_confirmations())
+            .map(|t| t.idx)
+            .collect();
+        let waiting_confs_transfer_ids: Vec<i32> = db_data
+            .asset_transfers
+            .clone()
+            .into_iter()
+            .filter(|t| waiting_confs_batch_transfer_ids.contains(&t.batch_transfer_idx))
+            .map(|t| t.idx)
+            .collect();
+        let almost_spent_txos_ids: Vec<i32> = db_data
+            .colorings
+            .clone()
+            .into_iter()
+            .filter(|c| {
+                waiting_confs_transfer_ids.contains(&c.asset_transfer_idx)
+                    && spent_txos_ids.contains(&c.txo_idx)
+            })
+            .map(|c| c.txo_idx)
+            .collect();
+        let mut spent_txos = db_data
+            .txos
+            .into_iter()
+            .filter(|t| almost_spent_txos_ids.contains(&t.idx))
+            .collect();
+        allocation_txos.append(&mut spent_txos);
+
+        let mut txos_allocations = self.database.get_rgb_allocations(
+            allocation_txos,
+            Some(db_data.colorings),
+            Some(db_data.batch_transfers),
+            Some(db_data.asset_transfers),
+            Some(db_data.transfers),
+        )?;
+
+        txos_allocations
+            .iter_mut()
+            .for_each(|t| t.rgb_allocations.retain(|a| a.settled() || a.future()));
+
+        txos_allocations.retain(|t| !(t.rgb_allocations.is_empty() && t.utxo.spent));
+
+        let mut unspents: Vec<Unspent> = txos_allocations.into_iter().map(Unspent::from).collect();
+
+        if settled_only {
+            unspents
+                .iter_mut()
+                .for_each(|u| u.rgb_allocations.retain(|a| a.settled));
+        }
+
+        let mut internal_unspents: Vec<Unspent> =
+            self.internal_unspents().map(Unspent::from).collect();
+
+        unspents.append(&mut internal_unspents);
+
+        info!(self.logger, "List unspents completed");
+        Ok(unspents)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3044,159 +3707,6 @@ impl Wallet {
         })
     }
 
-    /// Finalize a PSBT, optionally providing BDK sign options to tweak the behavior of the
-    /// finalizer.
-    pub fn finalize_psbt(
-        &self,
-        signed_psbt: String,
-        sign_options: Option<SignOptions>,
-    ) -> Result<String, Error> {
-        info!(self.logger, "Finalizing PSBT...");
-        let mut psbt = Psbt::from_str(&signed_psbt)?;
-        let sign_options = sign_options.unwrap_or_default();
-        if !self
-            .bdk_wallet
-            .finalize_psbt(&mut psbt, sign_options)
-            .map_err(InternalError::from)?
-        {
-            return Err(Error::CannotFinalizePsbt);
-        }
-        info!(self.logger, "Finalize PSBT completed");
-        Ok(psbt.to_string())
-    }
-
-    fn _sign_psbt(&self, psbt: &mut Psbt, sign_options: Option<SignOptions>) -> Result<(), Error> {
-        let sign_options = sign_options.unwrap_or_default();
-        self.bdk_wallet
-            .sign(psbt, sign_options)
-            .map_err(InternalError::from)?;
-        Ok(())
-    }
-
-    /// Sign a PSBT, optionally providing BDK sign options.
-    pub fn sign_psbt(
-        &self,
-        unsigned_psbt: String,
-        sign_options: Option<SignOptions>,
-    ) -> Result<String, Error> {
-        info!(self.logger, "Signing PSBT...");
-        let mut psbt = Psbt::from_str(&unsigned_psbt)?;
-        self._sign_psbt(&mut psbt, sign_options)?;
-        info!(self.logger, "Sign PSBT completed");
-        Ok(psbt.to_string())
-    }
-
-    fn _delete_batch_transfer(
-        &self,
-        batch_transfer: &DbBatchTransfer,
-        asset_transfers: &Vec<DbAssetTransfer>,
-        colorings: &[DbColoring],
-        txos: &[DbTxo],
-    ) -> Result<(), Error> {
-        let mut txos_to_delete = HashSet::new();
-        for asset_transfer in asset_transfers {
-            self.database.del_coloring(asset_transfer.idx)?;
-            colorings
-                .iter()
-                .filter(|c| c.asset_transfer_idx == asset_transfer.idx)
-                .for_each(|c| {
-                    if let Some(txo) = txos.iter().find(|t| !t.exists && t.idx == c.txo_idx) {
-                        txos_to_delete.insert(txo.idx);
-                    }
-                });
-        }
-        for txo in txos_to_delete {
-            self.database.del_txo(txo)?;
-        }
-        Ok(self.database.del_batch_transfer(batch_transfer)?)
-    }
-
-    /// Delete eligible transfers from the database and return true if any transfer has been
-    /// deleted.
-    ///
-    /// An optional `batch_transfer_idx` can be provided to operate on a single batch transfer.
-    ///
-    /// If a `batch_transfer_idx` is provided and `no_asset_only` is true, transfers with an
-    /// associated asset ID will not be deleted and instead return an error.
-    ///
-    /// If no `batch_transfer_idx` is provided, all failed transfers will be deleted, and if
-    /// `no_asset_only` is true transfers with an associated asset ID will be skipped.
-    ///
-    /// Eligible transfers are the ones in status [`TransferStatus::Failed`].
-    pub fn delete_transfers(
-        &self,
-        batch_transfer_idx: Option<i32>,
-        no_asset_only: bool,
-    ) -> Result<bool, Error> {
-        info!(
-            self.logger,
-            "Deleting batch transfer with idx {:?}...", batch_transfer_idx
-        );
-
-        let db_data = self.database.get_db_data(false)?;
-        let mut transfers_changed = false;
-
-        if let Some(batch_transfer_idx) = batch_transfer_idx {
-            let batch_transfer = &self
-                .database
-                .get_batch_transfer_or_fail(batch_transfer_idx, &db_data.batch_transfers)?;
-
-            if !batch_transfer.failed() {
-                return Err(Error::CannotDeleteBatchTransfer);
-            }
-
-            let asset_transfers = batch_transfer.get_asset_transfers(&db_data.asset_transfers)?;
-
-            if no_asset_only {
-                let connected_assets = asset_transfers.iter().any(|t| t.asset_id.is_some());
-                if connected_assets {
-                    return Err(Error::CannotDeleteBatchTransfer);
-                }
-            }
-
-            transfers_changed = true;
-            self._delete_batch_transfer(
-                batch_transfer,
-                &asset_transfers,
-                &db_data.colorings,
-                &db_data.txos,
-            )?
-        } else {
-            // delete all failed transfers
-            let mut batch_transfers: Vec<DbBatchTransfer> = db_data
-                .batch_transfers
-                .clone()
-                .into_iter()
-                .filter(|t| t.failed())
-                .collect();
-            for batch_transfer in batch_transfers.iter_mut() {
-                let asset_transfers =
-                    batch_transfer.get_asset_transfers(&db_data.asset_transfers)?;
-                if no_asset_only {
-                    let connected_assets = asset_transfers.iter().any(|t| t.asset_id.is_some());
-                    if connected_assets {
-                        continue;
-                    }
-                }
-                transfers_changed = true;
-                self._delete_batch_transfer(
-                    batch_transfer,
-                    &asset_transfers,
-                    &db_data.colorings,
-                    &db_data.txos,
-                )?
-            }
-        }
-
-        if transfers_changed {
-            self.update_backup_info(false)?;
-            self.trigger_auto_backup();
-        }
-
-        info!(self.logger, "Delete transfer completed");
-        Ok(transfers_changed)
-    }
-
     pub(crate) fn _get_new_address(&mut self, keychain: KeychainKind) -> Result<BdkAddress, Error> {
         let address = self.bdk_wallet.reveal_next_address(keychain).address;
         self.bdk_wallet.persist(&mut self.bdk_database)?;
@@ -3217,17 +3727,6 @@ impl Wallet {
 
         info!(self.logger, "Get address completed");
         Ok(address.to_string())
-    }
-
-    /// Return the [`Balance`] for the RGB asset with the provided ID.
-    pub fn get_asset_balance(&self, asset_id: String) -> Result<Balance, Error> {
-        info!(self.logger, "Getting balance for asset '{}'...", asset_id);
-        self.database.check_asset_exists(asset_id.clone())?;
-        let balance = self
-            .database
-            .get_asset_balance(asset_id, None, None, None, None, None);
-        info!(self.logger, "Get asset balance completed");
-        balance
     }
 
     /// Return the [`Metadata`] for the RGB asset with the provided ID.
@@ -3295,502 +3794,6 @@ impl Wallet {
             token,
             reject_list_url: asset.reject_list_url,
         })
-    }
-
-    /// Return the [`BtcBalance`] of the internal Bitcoin wallets.
-    pub fn get_btc_balance(
-        &mut self,
-        online: Option<Online>,
-        skip_sync: bool,
-    ) -> Result<BtcBalance, Error> {
-        info!(self.logger, "Getting BTC balance...");
-
-        self.sync_if_requested(online, skip_sync)?;
-
-        let vanilla = self._get_btc_balance(KeychainKind::Internal)?;
-        let colored = self._get_btc_balance(KeychainKind::External)?;
-
-        let balance = BtcBalance { vanilla, colored };
-
-        info!(self.logger, "Get BTC balance completed");
-        Ok(balance)
-    }
-
-    /// List the known RGB assets.
-    ///
-    /// Providing an empty `filter_asset_schemas` will list assets for all schemas, otherwise only
-    /// assets for the provided schemas will be listed.
-    ///
-    /// The returned `Assets` will have fields set to `None` for schemas that have not been
-    /// requested.
-    pub fn list_assets(&self, mut filter_asset_schemas: Vec<AssetSchema>) -> Result<Assets, Error> {
-        info!(self.logger, "Listing assets...");
-        if filter_asset_schemas.is_empty() {
-            filter_asset_schemas = AssetSchema::VALUES.to_vec()
-        }
-
-        let batch_transfers = Some(self.database.iter_batch_transfers()?);
-        let colorings = Some(self.database.iter_colorings()?);
-        let txos = Some(self.database.iter_txos()?);
-        let asset_transfers = Some(self.database.iter_asset_transfers()?);
-        let transfers = Some(self.database.iter_transfers()?);
-        let medias = Some(self.database.iter_media()?);
-
-        let assets = self.database.iter_assets()?;
-        let mut nia = None;
-        let mut uda = None;
-        let mut cfa = None;
-        let mut ifa = None;
-        for schema in filter_asset_schemas {
-            match schema {
-                AssetSchema::Nia => {
-                    nia = Some(
-                        assets
-                            .iter()
-                            .filter(|a| a.schema == schema)
-                            .map(|a| {
-                                AssetNIA::get_asset_details(
-                                    self,
-                                    a,
-                                    transfers.clone(),
-                                    asset_transfers.clone(),
-                                    batch_transfers.clone(),
-                                    colorings.clone(),
-                                    txos.clone(),
-                                    medias.clone(),
-                                )
-                            })
-                            .collect::<Result<Vec<AssetNIA>, Error>>()?,
-                    );
-                }
-                AssetSchema::Uda => {
-                    let tokens = self.database.iter_tokens()?;
-                    let token_medias = self.database.iter_token_medias()?;
-                    uda = Some(
-                        assets
-                            .iter()
-                            .filter(|a| a.schema == schema)
-                            .map(|a| {
-                                AssetUDA::get_asset_details(
-                                    self,
-                                    a,
-                                    self.get_asset_token(
-                                        a.idx,
-                                        &medias.clone().unwrap(),
-                                        &tokens,
-                                        &token_medias,
-                                    ),
-                                    transfers.clone(),
-                                    asset_transfers.clone(),
-                                    batch_transfers.clone(),
-                                    colorings.clone(),
-                                    txos.clone(),
-                                    medias.clone(),
-                                )
-                            })
-                            .collect::<Result<Vec<AssetUDA>, Error>>()?,
-                    );
-                }
-                AssetSchema::Cfa => {
-                    cfa = Some(
-                        assets
-                            .iter()
-                            .filter(|a| a.schema == schema)
-                            .map(|a| {
-                                AssetCFA::get_asset_details(
-                                    self,
-                                    a,
-                                    transfers.clone(),
-                                    asset_transfers.clone(),
-                                    batch_transfers.clone(),
-                                    colorings.clone(),
-                                    txos.clone(),
-                                    medias.clone(),
-                                )
-                            })
-                            .collect::<Result<Vec<AssetCFA>, Error>>()?,
-                    );
-                }
-                AssetSchema::Ifa => {
-                    ifa = Some(
-                        assets
-                            .iter()
-                            .filter(|a| a.schema == schema)
-                            .map(|a| {
-                                AssetIFA::get_asset_details(
-                                    self,
-                                    a,
-                                    transfers.clone(),
-                                    asset_transfers.clone(),
-                                    batch_transfers.clone(),
-                                    colorings.clone(),
-                                    txos.clone(),
-                                    medias.clone(),
-                                )
-                            })
-                            .collect::<Result<Vec<AssetIFA>, Error>>()?,
-                    );
-                }
-            }
-        }
-
-        info!(self.logger, "List assets completed");
-        Ok(Assets { nia, uda, cfa, ifa })
-    }
-
-    pub(crate) fn sync_if_requested(
-        &mut self,
-        #[cfg_attr(
-            not(any(feature = "electrum", feature = "esplora")),
-            allow(unused_variables)
-        )]
-        online: Option<Online>,
-        skip_sync: bool,
-    ) -> Result<(), Error> {
-        if !skip_sync {
-            #[cfg(not(any(feature = "electrum", feature = "esplora")))]
-            return Err(Error::Offline);
-            #[cfg(any(feature = "electrum", feature = "esplora"))]
-            {
-                if let Some(online) = online {
-                    self.check_online(online)?;
-                } else {
-                    return Err(Error::OnlineNeeded);
-                }
-                self.sync_db_txos(false)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// List the Bitcoin [`Transaction`]s known to the wallet.
-    pub fn list_transactions(
-        &mut self,
-        online: Option<Online>,
-        skip_sync: bool,
-    ) -> Result<Vec<Transaction>, Error> {
-        info!(self.logger, "Listing transactions...");
-
-        self.sync_if_requested(online, skip_sync)?;
-
-        let mut create_utxos_txids = vec![];
-        let mut drain_txids = vec![];
-        let wallet_transactions = self.database.iter_wallet_transactions()?;
-        for tx in wallet_transactions {
-            match tx.r#type {
-                WalletTransactionType::CreateUtxos => create_utxos_txids.push(tx.txid),
-                WalletTransactionType::Drain => drain_txids.push(tx.txid),
-            }
-        }
-        let rgb_send_txids: Vec<String> = self
-            .database
-            .iter_batch_transfers()?
-            .into_iter()
-            .filter_map(|t| t.txid)
-            .collect();
-        let transactions = self
-            .bdk_wallet
-            .transactions()
-            .map(|t| {
-                let txid = t.tx_node.txid.to_string();
-                let transaction_type = if drain_txids.contains(&txid) {
-                    TransactionType::Drain
-                } else if create_utxos_txids.contains(&txid) {
-                    TransactionType::CreateUtxos
-                } else if rgb_send_txids.contains(&txid) {
-                    TransactionType::RgbSend
-                } else {
-                    TransactionType::User
-                };
-                let confirmation_time = match t.chain_position {
-                    ChainPosition::Confirmed { anchor, .. } => Some(BlockTime {
-                        height: anchor.block_id.height,
-                        timestamp: anchor.confirmation_time,
-                    }),
-                    _ => None,
-                };
-                let (sent, received) = self.bdk_wallet.sent_and_received(&t.tx_node);
-                let fee = self.bdk_wallet.calculate_fee(&t.tx_node).unwrap();
-                Transaction {
-                    transaction_type,
-                    txid,
-                    received: received.to_sat(),
-                    sent: sent.to_sat(),
-                    fee: fee.to_sat(),
-                    confirmation_time,
-                }
-            })
-            .collect();
-        info!(self.logger, "List transactions completed");
-        Ok(transactions)
-    }
-
-    pub(crate) fn normalize_recipient_id(&self, recipient_id: &str) -> String {
-        recipient_id.replace(":", "_")
-    }
-
-    pub(crate) fn get_receive_consignment_path(&self, recipient_id: &str) -> PathBuf {
-        self.get_transfers_dir()
-            .join(self.normalize_recipient_id(recipient_id))
-            .join(CONSIGNMENT_RCV_FILE)
-    }
-
-    pub(crate) fn get_transfer_data(
-        &self,
-        transfer: &DbTransfer,
-        asset_transfer: &DbAssetTransfer,
-        batch_transfer: &DbBatchTransfer,
-        txos: &[DbTxo],
-        colorings: &[DbColoring],
-    ) -> Result<TransferData, Error> {
-        let filtered_coloring = colorings
-            .iter()
-            .filter(|&c| c.asset_transfer_idx == asset_transfer.idx)
-            .cloned();
-
-        let assignments = filtered_coloring
-            .clone()
-            .filter(|c| c.r#type != ColoringType::Input)
-            .map(|c| c.assignment)
-            .collect();
-
-        let kind = if transfer.incoming {
-            if filtered_coloring.clone().count() > 0
-                && filtered_coloring
-                    .clone()
-                    .all(|c| c.r#type == ColoringType::Issue)
-            {
-                TransferKind::Issuance
-            } else {
-                match transfer.recipient_type.as_ref().unwrap() {
-                    RecipientTypeFull::Blind { .. } => TransferKind::ReceiveBlind,
-                    RecipientTypeFull::Witness { .. } => TransferKind::ReceiveWitness,
-                }
-            }
-        } else if filtered_coloring.clone().count() > 0
-            && filtered_coloring
-                .clone()
-                .any(|c| c.r#type == ColoringType::Issue)
-        {
-            // inflation transfer is outgoing and connected to issue colorings
-            TransferKind::Inflation
-        } else {
-            TransferKind::Send
-        };
-
-        let txo_ids: Vec<i32> = filtered_coloring.clone().map(|c| c.txo_idx).collect();
-        let transfer_txos: Vec<DbTxo> = txos
-            .iter()
-            .filter(|&t| txo_ids.contains(&t.idx))
-            .cloned()
-            .collect();
-        let receive_utxo = match &transfer.recipient_type {
-            Some(RecipientTypeFull::Blind { unblinded_utxo }) => Some(unblinded_utxo.clone()),
-            Some(RecipientTypeFull::Witness { vout }) => {
-                let received_txo_idx: Vec<i32> = filtered_coloring
-                    .clone()
-                    // issue coloring from inflation is considered as received
-                    .filter(|c| [ColoringType::Receive, ColoringType::Issue].contains(&c.r#type))
-                    .map(|c| c.txo_idx)
-                    .collect();
-                transfer_txos
-                    .clone()
-                    .into_iter()
-                    .filter(|t| received_txo_idx.contains(&t.idx) && t.vout == vout.unwrap())
-                    .map(|t| t.outpoint())
-                    .collect::<Vec<Outpoint>>()
-                    .first()
-                    .cloned()
-            }
-            _ => None,
-        };
-        let change_utxo = match kind {
-            TransferKind::ReceiveBlind | TransferKind::ReceiveWitness => None,
-            TransferKind::Send | TransferKind::Inflation => {
-                let change_txo_idx: Vec<i32> = filtered_coloring
-                    .filter(|c| c.r#type == ColoringType::Change)
-                    .map(|c| c.txo_idx)
-                    .collect();
-                transfer_txos
-                    .into_iter()
-                    .filter(|t| change_txo_idx.contains(&t.idx))
-                    .map(|t| t.outpoint())
-                    .collect::<Vec<Outpoint>>()
-                    .first()
-                    .cloned()
-            }
-            TransferKind::Issuance => None,
-        };
-
-        let consignment_path = match (&kind, batch_transfer.status) {
-            (TransferKind::Send | TransferKind::Inflation, _) => {
-                Some(self.get_send_consignment_path(
-                    &asset_transfer.asset_id.clone().unwrap(),
-                    &batch_transfer.txid.clone().unwrap(),
-                ))
-            }
-            (
-                TransferKind::ReceiveBlind | TransferKind::ReceiveWitness,
-                TransferStatus::WaitingCounterparty,
-            ) => None,
-            (TransferKind::ReceiveBlind | TransferKind::ReceiveWitness, _) => {
-                Some(self.get_receive_consignment_path(&transfer.recipient_id.clone().unwrap()))
-            }
-            (TransferKind::Issuance, _) => {
-                Some(self._get_issue_consignment_path(&asset_transfer.asset_id.clone().unwrap()))
-            }
-        }
-        .map(|p| p.to_string_lossy().to_string());
-
-        Ok(TransferData {
-            kind,
-            status: batch_transfer.status,
-            batch_transfer_idx: batch_transfer.idx,
-            assignments,
-            txid: batch_transfer.txid.clone(),
-            receive_utxo,
-            change_utxo,
-            created_at: batch_transfer.created_at,
-            updated_at: batch_transfer.updated_at,
-            expiration: batch_transfer.expiration,
-            consignment_path,
-        })
-    }
-
-    /// List the RGB [`Transfer`]s known to the wallet.
-    ///
-    /// When an `asset_id` is not provided, return transfers that are not connected to a specific
-    /// asset.
-    pub fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, Error> {
-        if let Some(asset_id) = &asset_id {
-            info!(self.logger, "Listing transfers for asset '{}'...", asset_id);
-            self.database.check_asset_exists(asset_id.clone())?;
-        } else {
-            info!(self.logger, "Listing transfers...");
-        }
-        let db_data = self.database.get_db_data(false)?;
-        let asset_transfer_ids: Vec<i32> = db_data
-            .asset_transfers
-            .iter()
-            .filter(|t| t.asset_id == asset_id)
-            .filter(|t| t.user_driven)
-            .map(|t| t.idx)
-            .collect();
-        let transfers: Vec<Transfer> = db_data
-            .transfers
-            .into_iter()
-            .filter(|t| asset_transfer_ids.contains(&t.asset_transfer_idx))
-            .map(|t| {
-                let (asset_transfer, batch_transfer) =
-                    t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)?;
-                let tte_data = self.database.get_transfer_transport_endpoints_data(t.idx)?;
-                Ok(Transfer::from_db_transfer(
-                    &t,
-                    self.get_transfer_data(
-                        &t,
-                        &asset_transfer,
-                        &batch_transfer,
-                        &db_data.txos,
-                        &db_data.colorings,
-                    )?,
-                    tte_data
-                        .iter()
-                        .map(|(tte, ce)| {
-                            TransferTransportEndpoint::from_db_transfer_transport_endpoint(tte, ce)
-                        })
-                        .collect(),
-                ))
-            })
-            .collect::<Result<Vec<Transfer>, Error>>()?;
-
-        info!(self.logger, "List transfers completed");
-        Ok(transfers)
-    }
-
-    /// List the [`Unspent`]s known to the wallet.
-    ///
-    /// If `settled` is true only show settled RGB allocations, if false also show pending RGB
-    /// allocations.
-    pub fn list_unspents(
-        &mut self,
-        online: Option<Online>,
-        settled_only: bool,
-        skip_sync: bool,
-    ) -> Result<Vec<Unspent>, Error> {
-        info!(self.logger, "Listing unspents...");
-
-        self.sync_if_requested(online, skip_sync)?;
-
-        let db_data = self.database.get_db_data(false)?;
-
-        let mut allocation_txos = self.database.get_unspent_txos(db_data.txos.clone())?;
-        let spent_txos_ids: Vec<i32> = db_data
-            .txos
-            .clone()
-            .into_iter()
-            .filter(|t| t.spent)
-            .map(|u| u.idx)
-            .collect();
-        let waiting_confs_batch_transfer_ids: Vec<i32> = db_data
-            .batch_transfers
-            .clone()
-            .into_iter()
-            .filter(|t| t.waiting_confirmations())
-            .map(|t| t.idx)
-            .collect();
-        let waiting_confs_transfer_ids: Vec<i32> = db_data
-            .asset_transfers
-            .clone()
-            .into_iter()
-            .filter(|t| waiting_confs_batch_transfer_ids.contains(&t.batch_transfer_idx))
-            .map(|t| t.idx)
-            .collect();
-        let almost_spent_txos_ids: Vec<i32> = db_data
-            .colorings
-            .clone()
-            .into_iter()
-            .filter(|c| {
-                waiting_confs_transfer_ids.contains(&c.asset_transfer_idx)
-                    && spent_txos_ids.contains(&c.txo_idx)
-            })
-            .map(|c| c.txo_idx)
-            .collect();
-        let mut spent_txos = db_data
-            .txos
-            .into_iter()
-            .filter(|t| almost_spent_txos_ids.contains(&t.idx))
-            .collect();
-        allocation_txos.append(&mut spent_txos);
-
-        let mut txos_allocations = self.database.get_rgb_allocations(
-            allocation_txos,
-            Some(db_data.colorings),
-            Some(db_data.batch_transfers),
-            Some(db_data.asset_transfers),
-            Some(db_data.transfers),
-        )?;
-
-        txos_allocations
-            .iter_mut()
-            .for_each(|t| t.rgb_allocations.retain(|a| a.settled() || a.future()));
-
-        txos_allocations.retain(|t| !(t.rgb_allocations.is_empty() && t.utxo.spent));
-
-        let mut unspents: Vec<Unspent> = txos_allocations.into_iter().map(Unspent::from).collect();
-
-        if settled_only {
-            unspents
-                .iter_mut()
-                .for_each(|u| u.rgb_allocations.retain(|a| a.settled));
-        }
-
-        let mut internal_unspents: Vec<Unspent> =
-            self.internal_unspents().map(Unspent::from).collect();
-
-        unspents.append(&mut internal_unspents);
-
-        info!(self.logger, "List unspents completed");
-        Ok(unspents)
     }
 }
 

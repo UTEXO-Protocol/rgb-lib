@@ -654,6 +654,147 @@ impl Wallet {
     pub(crate) fn get_script_pubkey(&self, address: &str) -> Result<ScriptBuf, Error> {
         Ok(parse_address_str(address, self.bitcoin_network())?.script_pubkey())
     }
+
+    fn _get_unspendable_bdk_outpoints(&self) -> Result<Vec<BdkOutPoint>, Error> {
+        Ok(self
+            .database
+            .iter_txos()?
+            .into_iter()
+            .map(BdkOutPoint::from)
+            .collect())
+    }
+
+    fn _fail_batch_transfer(
+        &self,
+        batch_transfer: &DbBatchTransfer,
+    ) -> Result<DbBatchTransfer, Error> {
+        let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
+        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+        updated_batch_transfer.expiration = ActiveValue::Set(Some(now().unix_timestamp()));
+        Ok(self
+            .database
+            .update_batch_transfer(&mut updated_batch_transfer)?)
+    }
+
+    fn _get_asset_medias(
+        &self,
+        media_idx: Option<i32>,
+        token: Option<TokenLight>,
+    ) -> Result<Vec<Media>, Error> {
+        let mut asset_medias = vec![];
+        if let Some(token) = token {
+            if let Some(token_media) = token.media {
+                asset_medias.push(token_media);
+            }
+            for (_, attachment_media) in token.attachments {
+                asset_medias.push(attachment_media);
+            }
+        } else if let Some(media_idx) = media_idx {
+            let db_media = self.database.get_media(media_idx)?.unwrap();
+            asset_medias.push(Media::from_db_media(&db_media, self.get_media_dir()))
+        }
+        Ok(asset_medias)
+    }
+
+    fn _fail_batch_transfer_if_no_endpoints(
+        &self,
+        batch_transfer: &DbBatchTransfer,
+        transfer_transport_endpoints_data: &[(DbTransferTransportEndpoint, DbTransportEndpoint)],
+    ) -> Result<Option<DbBatchTransfer>, Error> {
+        if transfer_transport_endpoints_data.is_empty() {
+            Ok(Some(self._fail_batch_transfer(batch_transfer)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub(crate) fn extract_received_assignments(
+        &self,
+        consignment: &RgbTransfer,
+        witness_id: RgbTxid,
+        vout: Option<u32>,
+        known_concealed: Option<SecretSeal>,
+    ) -> HashMap<Opout, Assignment> {
+        let mut received = HashMap::new();
+        if let Some(bundle) = consignment
+            .bundles
+            .iter()
+            .find(|ab| ab.witness_id() == witness_id)
+        {
+            for KnownTransition { transition, opid } in bundle.bundle.known_transitions.iter() {
+                for (ass_type, typed_assigns) in transition.assignments.iter() {
+                    for (no, fungible_assignment) in typed_assigns.as_fungible().iter().enumerate()
+                    {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, state, .. } = fungible_assignment {
+                            if Some(*seal) == known_concealed {
+                                match *ass_type {
+                                    OS_ASSET => {
+                                        received
+                                            .insert(opout, Assignment::Fungible(state.as_u64()));
+                                    }
+                                    OS_INFLATION => {
+                                        received.insert(
+                                            opout,
+                                            Assignment::InflationRight(state.as_u64()),
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        };
+                        if let Assign::Revealed { seal, state, .. } = fungible_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                match *ass_type {
+                                    OS_ASSET => {
+                                        received
+                                            .insert(opout, Assignment::Fungible(state.as_u64()));
+                                    }
+                                    OS_INFLATION => {
+                                        received.insert(
+                                            opout,
+                                            Assignment::InflationRight(state.as_u64()),
+                                        );
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        };
+                    }
+                    for (no, structured_assignment) in
+                        typed_assigns.as_structured().iter().enumerate()
+                    {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, .. } = structured_assignment {
+                            if Some(*seal) == known_concealed {
+                                received.insert(opout, Assignment::NonFungible);
+                            }
+                        }
+                        if let Assign::Revealed { seal, .. } = structured_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                received.insert(opout, Assignment::NonFungible);
+                            }
+                        };
+                    }
+                    for (no, void_assignment) in typed_assigns.as_declarative().iter().enumerate() {
+                        let opout = Opout::new(*opid, *ass_type, no as u16);
+                        if let Assign::ConfidentialSeal { seal, .. } = void_assignment {
+                            if Some(*seal) == known_concealed {
+                                received.insert(opout, Assignment::ReplaceRight);
+                            }
+                        }
+                        if let Assign::Revealed { seal, .. } = void_assignment {
+                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
+                                received.insert(opout, Assignment::ReplaceRight);
+                            }
+                        };
+                    }
+                }
+            }
+        }
+
+        received
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1027,15 +1168,6 @@ impl Wallet {
         self.drain_to_end(online, psbt)
     }
 
-    fn _get_unspendable_bdk_outpoints(&self) -> Result<Vec<BdkOutPoint>, Error> {
-        Ok(self
-            .database
-            .iter_txos()?
-            .into_iter()
-            .map(BdkOutPoint::from)
-            .collect())
-    }
-
     /// Prepare the PSBT to send bitcoin funds not in use for RGB allocations, or all funds if
     /// `destroy_assets` is set to true, to the provided Bitcoin `address` with the provided
     /// `fee_rate` (in sat/vB).
@@ -1133,18 +1265,6 @@ impl Wallet {
 
         info!(self.logger, "Drain (end) completed");
         Ok(tx.compute_txid().to_string())
-    }
-
-    fn _fail_batch_transfer(
-        &self,
-        batch_transfer: &DbBatchTransfer,
-    ) -> Result<DbBatchTransfer, Error> {
-        let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
-        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-        updated_batch_transfer.expiration = ActiveValue::Set(Some(now().unix_timestamp()));
-        Ok(self
-            .database
-            .update_batch_transfer(&mut updated_batch_transfer)?)
     }
 
     fn _try_fail_batch_transfer(
@@ -1390,42 +1510,10 @@ impl Wallet {
         Ok(online)
     }
 
-    fn _get_asset_medias(
-        &self,
-        media_idx: Option<i32>,
-        token: Option<TokenLight>,
-    ) -> Result<Vec<Media>, Error> {
-        let mut asset_medias = vec![];
-        if let Some(token) = token {
-            if let Some(token_media) = token.media {
-                asset_medias.push(token_media);
-            }
-            for (_, attachment_media) in token.attachments {
-                asset_medias.push(attachment_media);
-            }
-        } else if let Some(media_idx) = media_idx {
-            let db_media = self.database.get_media(media_idx)?.unwrap();
-            asset_medias.push(Media::from_db_media(&db_media, self.get_media_dir()))
-        }
-        Ok(asset_medias)
-    }
-
     fn _get_signed_psbt(&self, transfer_dir: PathBuf) -> Result<Psbt, Error> {
         let psbt_file = transfer_dir.join(SIGNED_PSBT_FILE);
         let psbt_str = fs::read_to_string(psbt_file)?;
         Ok(Psbt::from_str(&psbt_str)?)
-    }
-
-    fn _fail_batch_transfer_if_no_endpoints(
-        &self,
-        batch_transfer: &DbBatchTransfer,
-        transfer_transport_endpoints_data: &[(DbTransferTransportEndpoint, DbTransportEndpoint)],
-    ) -> Result<Option<DbBatchTransfer>, Error> {
-        if transfer_transport_endpoints_data.is_empty() {
-            Ok(Some(self._fail_batch_transfer(batch_transfer)?))
-        } else {
-            Ok(None)
-        }
     }
 
     fn _refuse_consignment(
@@ -1487,94 +1575,6 @@ impl Wallet {
         );
 
         Ok(consignment_res)
-    }
-
-    pub(crate) fn extract_received_assignments(
-        &self,
-        consignment: &RgbTransfer,
-        witness_id: RgbTxid,
-        vout: Option<u32>,
-        known_concealed: Option<SecretSeal>,
-    ) -> HashMap<Opout, Assignment> {
-        let mut received = HashMap::new();
-        if let Some(bundle) = consignment
-            .bundles
-            .iter()
-            .find(|ab| ab.witness_id() == witness_id)
-        {
-            for KnownTransition { transition, opid } in bundle.bundle.known_transitions.iter() {
-                for (ass_type, typed_assigns) in transition.assignments.iter() {
-                    for (no, fungible_assignment) in typed_assigns.as_fungible().iter().enumerate()
-                    {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, state, .. } = fungible_assignment {
-                            if Some(*seal) == known_concealed {
-                                match *ass_type {
-                                    OS_ASSET => {
-                                        received
-                                            .insert(opout, Assignment::Fungible(state.as_u64()));
-                                    }
-                                    OS_INFLATION => {
-                                        received.insert(
-                                            opout,
-                                            Assignment::InflationRight(state.as_u64()),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        };
-                        if let Assign::Revealed { seal, state, .. } = fungible_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                match *ass_type {
-                                    OS_ASSET => {
-                                        received
-                                            .insert(opout, Assignment::Fungible(state.as_u64()));
-                                    }
-                                    OS_INFLATION => {
-                                        received.insert(
-                                            opout,
-                                            Assignment::InflationRight(state.as_u64()),
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        };
-                    }
-                    for (no, structured_assignment) in
-                        typed_assigns.as_structured().iter().enumerate()
-                    {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, .. } = structured_assignment {
-                            if Some(*seal) == known_concealed {
-                                received.insert(opout, Assignment::NonFungible);
-                            }
-                        }
-                        if let Assign::Revealed { seal, .. } = structured_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                received.insert(opout, Assignment::NonFungible);
-                            }
-                        };
-                    }
-                    for (no, void_assignment) in typed_assigns.as_declarative().iter().enumerate() {
-                        let opout = Opout::new(*opid, *ass_type, no as u16);
-                        if let Assign::ConfidentialSeal { seal, .. } = void_assignment {
-                            if Some(*seal) == known_concealed {
-                                received.insert(opout, Assignment::ReplaceRight);
-                            }
-                        }
-                        if let Assign::Revealed { seal, .. } = void_assignment {
-                            if seal.txid == TxPtr::WitnessTx && Some(seal.vout.into_u32()) == vout {
-                                received.insert(opout, Assignment::ReplaceRight);
-                            }
-                        };
-                    }
-                }
-            }
-        }
-
-        received
     }
 
     fn _get_reject_list(

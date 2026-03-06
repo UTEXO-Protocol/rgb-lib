@@ -371,6 +371,20 @@ impl DbAssetActMod {
     }
 }
 
+impl From<DbBatchTransfer> for DbBatchTransferActMod {
+    fn from(m: DbBatchTransfer) -> Self {
+        Self {
+            idx: ActiveValue::Unchanged(m.idx),
+            txid: ActiveValue::Unchanged(m.txid),
+            status: ActiveValue::Unchanged(m.status),
+            created_at: ActiveValue::Unchanged(m.created_at),
+            updated_at: ActiveValue::Unchanged(m.updated_at),
+            expiration: ActiveValue::Unchanged(m.expiration),
+            min_confirmations: ActiveValue::Unchanged(m.min_confirmations),
+        }
+    }
+}
+
 impl From<DbBackupInfo> for DbBackupInfoActMod {
     fn from(m: DbBackupInfo) -> Self {
         Self {
