@@ -3031,7 +3031,7 @@ fn fail() {
 
     // unsupported layer 1
     println!("setting MOCK_CHAIN_NET");
-    *MOCK_CHAIN_NET.lock().unwrap() = Some(ChainNet::LiquidTestnet);
+    MOCK_CHAIN_NET.replace(Some(ChainNet::LiquidTestnet));
     let receive_data_liquid = test_witness_receive(&mut rcv_wallet);
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),
@@ -4545,7 +4545,7 @@ fn witness_multiple_inputs_success() {
 
 #[cfg(feature = "electrum")]
 #[test]
-#[serial]
+#[parallel]
 fn witness_fail_wrong_vout() {
     initialize();
 
@@ -4586,7 +4586,7 @@ fn witness_fail_wrong_vout() {
         ],
     )]);
     println!("setting MOCK_VOUT");
-    *MOCK_VOUT.lock().unwrap() = Some(2);
+    MOCK_VOUT.replace(Some(2));
     let txid = test_send(&mut wallet, &online, &recipient_map);
     assert!(!txid.is_empty());
 
@@ -4838,7 +4838,7 @@ fn min_confirmations_esplora() {
 
 #[cfg(feature = "electrum")]
 #[test]
-#[serial]
+#[parallel]
 fn spend_double_receive() {
     initialize();
 
@@ -5020,10 +5020,7 @@ fn spend_double_receive() {
     });
     assert_eq!(input_unspents.len(), 1);
     println!("setting MOCK_INPUT_UNSPENTS");
-    MOCK_INPUT_UNSPENTS
-        .lock()
-        .unwrap()
-        .push(input_unspents.first().unwrap().clone());
+    MOCK_INPUT_UNSPENTS.with_borrow_mut(|v| v.push(input_unspents.first().unwrap().clone()));
     // send (will use the manually-selected input unspent)
     let txid_3 = test_send(&mut wallet_2, &online_2, &recipient_map);
     assert!(!txid_3.is_empty());
@@ -5570,7 +5567,7 @@ fn _min_relay_fee_common(
 
     // check fee amount is the expected one
     println!("setting MOCK_CHECK_FEE_RATE");
-    *MOCK_CHECK_FEE_RATE.lock().unwrap() = vec![true, true];
+    MOCK_CHECK_FEE_RATE.replace(vec![true, true]);
     let psbt_str = wallet
         .send_begin(
             online.clone(),
@@ -5586,7 +5583,7 @@ fn _min_relay_fee_common(
 
     // actual send
     println!("setting MOCK_CHECK_FEE_RATE");
-    *MOCK_CHECK_FEE_RATE.lock().unwrap() = vec![true, true];
+    MOCK_CHECK_FEE_RATE.replace(vec![true, true]);
     let send_result = wallet
         .send(
             online.clone(),
@@ -5622,7 +5619,7 @@ fn _min_relay_fee_common(
 
 #[cfg(feature = "electrum")]
 #[test]
-#[serial]
+#[parallel]
 fn min_relay_fee_electrum() {
     initialize();
 
@@ -5643,7 +5640,7 @@ fn min_relay_fee_electrum() {
 
 #[cfg(feature = "esplora")]
 #[test]
-#[serial]
+#[parallel]
 fn min_relay_fee_esplora() {
     initialize();
 
@@ -6189,7 +6186,8 @@ fn test_reject_list_scenario_1() {
     );
 
     // skip build dag check to see that receiver would refuse
-    *MOCK_SKIP_BUILD_DAG.lock().unwrap() = vec![true];
+    println!("setting MOCK_SKIP_BUILD_DAG");
+    MOCK_SKIP_BUILD_DAG.replace(Some(()));
     let _txid = test_send(&mut wallet_2, &online_2, &recipient_map_2);
     test_refresh_all(&mut wallet_3, &online_3);
     assert!(check_test_transfer_status_recipient(
@@ -6306,7 +6304,8 @@ fn test_reject_list_scenario_2() {
     );
 
     // skip build dag check to see that receiver would refuse
-    *MOCK_SKIP_BUILD_DAG.lock().unwrap() = vec![true];
+    println!("setting MOCK_SKIP_BUILD_DAG");
+    MOCK_SKIP_BUILD_DAG.replace(Some(()));
     let _txid = test_send(&mut wallet_3, &online_3, &recipient_map_3);
     test_refresh_all(&mut wallet_4, &online_4);
     assert!(check_test_transfer_status_recipient(
@@ -6670,6 +6669,7 @@ fn pending_witness_txo() {
     //
 
     // send
+    stop_mining();
     let receive_data = test_witness_receive(&mut rcv_wallet);
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),
@@ -6749,7 +6749,7 @@ fn pending_witness_txo() {
     assert!(rcv_pending_witness_scripts.is_empty());
 
     // mine + refresh the recipient to move the transfer to Settled
-    mine(false, false);
+    mine(false, true);
     test_refresh_all(&mut rcv_wallet, &rcv_online);
     test_refresh_all(&mut wallet, &online); // so that change is spendable
     let rcv_transfer = get_test_transfer_recipient(&rcv_wallet, &receive_data.recipient_id);
@@ -6769,6 +6769,7 @@ fn pending_witness_txo() {
     let (mut rcv_wallet, rcv_online) = get_empty_wallet!();
 
     // send (donation)
+    stop_mining();
     let receive_data = test_witness_receive(&mut rcv_wallet);
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),
@@ -6842,7 +6843,7 @@ fn pending_witness_txo() {
 
     // refresh + mine to move the transfer to Settled
     test_refresh_all(&mut wallet, &online);
-    mine(false, false);
+    mine(false, true);
     test_refresh_all(&mut rcv_wallet, &rcv_online);
     let rcv_transfer = get_test_transfer_recipient(&rcv_wallet, &receive_data.recipient_id);
     let (rcv_transfer_data, _) = get_test_transfer_data(&rcv_wallet, &rcv_transfer);
@@ -7640,6 +7641,7 @@ fn allocations() {
     check_allocations(&wallet_2, &unspents_colorable, &amounts_all, &[], false);
 
     // send the 2 smallest allocations from wallet 2
+    stop_mining();
     let receive_data = test_blind_receive(&wallet_1);
     let recipient_map = HashMap::from([(
         asset_1.asset_id.clone(),
@@ -7694,7 +7696,7 @@ fn allocations() {
     check_unspents(&unspents_colorable, &amounts_user, &amounts_auto, true);
 
     // settle transfer
-    mine(false, false);
+    mine(false, true);
     test_refresh_all(&mut wallet_1, &online_1);
     test_refresh_all(&mut wallet_2, &online_2);
     // check allocation colorings (no input colorings, same change colorings)

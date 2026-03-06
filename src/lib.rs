@@ -83,7 +83,7 @@ pub use crate::{
     database::enums::{AssetSchema, Assignment, TransferStatus, TransportType},
     error::Error,
     keys::{generate_keys, restore_keys},
-    utils::BitcoinNetwork,
+    utils::{BitcoinNetwork, block_on},
     wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
 };
 
@@ -102,7 +102,7 @@ use std::{
     panic,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -159,7 +159,6 @@ use chacha20poly1305::{
     aead::{generic_array::GenericArray, stream},
 };
 use file_format::FileFormat;
-use futures::executor::block_on;
 use psrgbt::{RgbOutExt, RgbPsbtExt};
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(any(feature = "electrum", feature = "esplora"))]

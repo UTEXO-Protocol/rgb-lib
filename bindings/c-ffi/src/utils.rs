@@ -383,6 +383,16 @@ pub(crate) fn get_asset_balance(
     Ok(serde_json::to_string(&res)?)
 }
 
+pub(crate) fn get_asset_metadata(
+    wallet: &COpaqueStruct,
+    asset_id: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let asset_id = ptr_to_string(asset_id);
+    let res = wallet.get_asset_metadata(asset_id)?;
+    Ok(serde_json::to_string(&res)?)
+}
+
 pub(crate) fn get_btc_balance(
     wallet: &COpaqueStruct,
     online: *const COpaqueStruct,
