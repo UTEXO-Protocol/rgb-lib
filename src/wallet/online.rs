@@ -192,10 +192,13 @@ struct InfoAssetTransfer {
 pub(crate) enum Indexer {
     #[cfg(feature = "electrum")]
     Electrum(Box<BdkElectrumClient<ElectrumClient>>),
-    #[cfg(feature = "esplora")]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "esplora"))]
     Esplora(Box<EsploraClient>),
+    #[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+    EsploraAsync(Box<esplora_client::AsyncClient<crate::utils::WasmSleeper>>),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Indexer {
     pub(crate) fn block_hash(&self, height: usize) -> Result<String, IndexerError> {
         Ok(match self {
@@ -378,6 +381,148 @@ impl Indexer {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl Indexer {
+    pub(crate) async fn block_hash(&self, height: usize) -> Result<String, IndexerError> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let hash = client.get_block_hash(height as u32).await?;
+                hash.to_string()
+            }
+        })
+    }
+
+    pub(crate) async fn broadcast(&self, tx: &BdkTransaction) -> Result<(), IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                client.broadcast(tx).await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) async fn fee_estimation(&self, blocks: u16) -> Result<f64, Error> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let estimate_map = client
+                    .get_fee_estimates()
+                    .await
+                    .map_err(IndexerError::from)?; // in sat/vB
+                if estimate_map.is_empty() {
+                    return Err(Error::CannotEstimateFees);
+                }
+                // map needs to be sorted for interpolation to work
+                let estimate_map = BTreeMap::from_iter(estimate_map);
+                match estimate_map.get(&blocks) {
+                    Some(estimate) => *estimate,
+                    None => {
+                        // find the two closest keys
+                        let mut lower_key = None;
+                        let mut upper_key = None;
+                        for k in estimate_map.keys() {
+                            match k.cmp(&blocks) {
+                                Ordering::Less => {
+                                    lower_key = Some(k);
+                                }
+                                Ordering::Greater => {
+                                    upper_key = Some(k);
+                                    break;
+                                }
+                                _ => unreachable!("already handled"),
+                            }
+                        }
+                        // use linear interpolation formula
+                        match (lower_key, upper_key) {
+                            (Some(x1), Some(x2)) => {
+                                let y1 = estimate_map[x1];
+                                let y2 = estimate_map[x2];
+                                y1 + (blocks as f64 - *x1 as f64) / (*x2 as f64 - *x1 as f64)
+                                    * (y2 - y1)
+                            }
+                            _ => {
+                                return Err(Error::Internal {
+                                    details: s!("esplora map doesn't contain the expected keys"),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    pub(crate) async fn full_scan<K: Ord + Clone + Send, R: Into<FullScanRequest<K>> + Send>(
+        &self,
+        request: R,
+    ) -> Result<FullScanResponse<K>, IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                use bdk_esplora::EsploraAsyncExt;
+                client
+                    .full_scan(request, INDEXER_STOP_GAP, INDEXER_PARALLEL_REQUESTS)
+                    .await
+                    .map_err(|e| IndexerError::EsploraAsync(e.to_string()))
+            }
+        }
+    }
+
+    pub(crate) async fn get_tx_confirmations(&self, txid: &str) -> Result<Option<u64>, Error> {
+        Ok(match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                let txid = Txid::from_str(txid).unwrap();
+                let tx_status = client
+                    .get_tx_status(&txid)
+                    .await
+                    .map_err(IndexerError::from)?;
+                if let Some(tx_height) = tx_status.block_height {
+                    let height = client.get_height().await.map_err(IndexerError::from)?;
+                    Some((height - tx_height + 1) as u64)
+                } else if client
+                    .get_tx(&txid)
+                    .await
+                    .map_err(IndexerError::from)?
+                    .is_none()
+                {
+                    None
+                } else {
+                    Some(0)
+                }
+            }
+        })
+    }
+
+    pub(crate) fn populate_tx_cache(
+        &self,
+        #[allow(unused)] bdk_wallet: &PersistedWallet<super::offline::BdkPersister>,
+    ) {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(_) => {}
+        }
+    }
+
+    pub(crate) async fn sync<I: 'static + Send>(
+        &self,
+        request: impl Into<SyncRequest<I>> + Send,
+    ) -> Result<SyncResponse, IndexerError> {
+        match self {
+            #[cfg(feature = "esplora")]
+            Indexer::EsploraAsync(client) => {
+                use bdk_esplora::EsploraAsyncExt;
+                client
+                    .sync(request, INDEXER_PARALLEL_REQUESTS)
+                    .await
+                    .map_err(|e| IndexerError::EsploraAsync(e.to_string()))
+            }
+        }
+    }
+}
+
 pub(crate) struct OnlineData {
     id: u64,
     pub(crate) indexer_url: String,
@@ -466,6 +611,53 @@ impl Wallet {
         Ok(fee_rate)
     }
 
+    pub(crate) fn check_online(&self, online: Online) -> Result<(), Error> {
+        if let Some(online_data) = &self.online_data {
+            if online_data.id != online.id || online_data.indexer_url != online.indexer_url {
+                error!(self.logger, "Cannot change online object");
+                return Err(Error::CannotChangeOnline);
+            }
+        } else {
+            error!(self.logger, "Wallet is offline");
+            return Err(Error::Offline);
+        }
+        Ok(())
+    }
+
+    fn _check_xprv(&self) -> Result<(), Error> {
+        if self.watch_only {
+            error!(self.logger, "Invalid operation for a watch only wallet");
+            return Err(Error::WatchOnly);
+        }
+        Ok(())
+    }
+
+    fn _create_split_tx(
+        &mut self,
+        inputs: &[BdkOutPoint],
+        addresses: &Vec<ScriptBuf>,
+        size: u32,
+        fee_rate: FeeRate,
+    ) -> Result<Psbt, bdk_wallet::error::CreateTxError> {
+        let mut tx_builder = self.bdk_wallet.build_tx();
+        tx_builder
+            .add_utxos(inputs)
+            .map_err(|_| bdk_wallet::error::CreateTxError::UnknownUtxo)?
+            .manually_selected_only()
+            .fee_rate(fee_rate);
+        for address in addresses {
+            tx_builder.add_recipient(address.clone(), BdkAmount::from_sat(size as u64));
+        }
+        tx_builder.finish()
+    }
+
+    pub(crate) fn get_script_pubkey(&self, address: &str) -> Result<ScriptBuf, Error> {
+        Ok(parse_address_str(address, self.bitcoin_network())?.script_pubkey())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Wallet {
     pub(crate) fn sync_db_txos(&mut self, full_scan: bool) -> Result<(), Error> {
         debug!(self.logger, "Syncing TXOs...");
 
@@ -567,6 +759,14 @@ impl Wallet {
                             }
                         }
                     }
+                    #[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+                    IndexerError::EsploraAsync(ref msg) => {
+                        if msg.contains("min relay fee not met") {
+                            return Err(Error::MinFeeNotMet { txid: txid.clone() });
+                        } else if msg.contains("Fee exceeds maximum configured") {
+                            return Err(Error::MaxFeeExceeded { txid: txid.clone() });
+                        }
+                    }
                 }
                 if indexer.get_tx_confirmations(&txid)?.is_none() {
                     return Err(Error::FailedBroadcast {
@@ -622,46 +822,6 @@ impl Wallet {
         let tx = self._broadcast_psbt(signed_psbt, skip_sync)?;
         runtime.upsert_witness(witness_id, WitnessOrd::Tentative)?;
         Ok(tx)
-    }
-
-    pub(crate) fn check_online(&self, online: Online) -> Result<(), Error> {
-        if let Some(online_data) = &self.online_data {
-            if online_data.id != online.id || online_data.indexer_url != online.indexer_url {
-                error!(self.logger, "Cannot change online object");
-                return Err(Error::CannotChangeOnline);
-            }
-        } else {
-            error!(self.logger, "Wallet is offline");
-            return Err(Error::Offline);
-        }
-        Ok(())
-    }
-
-    fn _check_xprv(&self) -> Result<(), Error> {
-        if self.watch_only {
-            error!(self.logger, "Invalid operation for a watch only wallet");
-            return Err(Error::WatchOnly);
-        }
-        Ok(())
-    }
-
-    fn _create_split_tx(
-        &mut self,
-        inputs: &[BdkOutPoint],
-        addresses: &Vec<ScriptBuf>,
-        size: u32,
-        fee_rate: FeeRate,
-    ) -> Result<Psbt, bdk_wallet::error::CreateTxError> {
-        let mut tx_builder = self.bdk_wallet.build_tx();
-        tx_builder
-            .add_utxos(inputs)
-            .map_err(|_| bdk_wallet::error::CreateTxError::UnknownUtxo)?
-            .manually_selected_only()
-            .fee_rate(fee_rate);
-        for address in addresses {
-            tx_builder.add_recipient(address.clone(), BdkAmount::from_sat(size as u64));
-        }
-        tx_builder.finish()
     }
 
     /// Create new UTXOs.
@@ -874,10 +1034,6 @@ impl Wallet {
             .into_iter()
             .map(BdkOutPoint::from)
             .collect())
-    }
-
-    pub(crate) fn get_script_pubkey(&self, address: &str) -> Result<ScriptBuf, Error> {
-        Ok(parse_address_str(address, self.bitcoin_network())?.script_pubkey())
     }
 
     /// Prepare the PSBT to send bitcoin funds not in use for RGB allocations, or all funds if

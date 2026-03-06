@@ -106,6 +106,7 @@ pub(crate) trait Proxy {
     ) -> Result<JsonRpcResponse<bool>, Error>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Proxy for RestClient {
     fn get_info(self, url: &str) -> Result<JsonRpcResponse<ServerInfoResponse>, Error> {
         let body: JsonRpcRequest<NullRequest> = JsonRpcRequest {

@@ -4,6 +4,7 @@ pub(crate) trait RejectList {
     fn get_reject_list(self, url: &str) -> Result<String, Error>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RejectList for RestClient {
     fn get_reject_list(self, url: &str) -> Result<String, Error> {
         Ok(self

@@ -18,7 +18,10 @@ use time::OffsetDateTime;
 
 use super::*;
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 use crate::wallet::{
     rust_only::{check_indexer_url, check_proxy_url},
     test::utils::chain::*,

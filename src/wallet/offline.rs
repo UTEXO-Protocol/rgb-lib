@@ -108,7 +108,9 @@ impl Media {
             file_path,
         }
     }
+}
 
+impl Media {
     pub(crate) fn from_db_media<P: AsRef<Path>>(db_media: &DbMedia, media_dir: P) -> Self {
         let digest = db_media.digest.clone();
         let file_path = media_dir
@@ -1227,6 +1229,24 @@ pub struct WalletData {
     pub supported_schemas: Vec<AssetSchema>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type BdkPersister = Store<ChangeSet>;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) type BdkPersister = super::memory_store::MemoryStore<ChangeSet>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type LoggerGuard = slog_async::AsyncGuard;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) type LoggerGuard = ();
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type RgbLibDb = RgbLibDatabase;
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) type RgbLibDb = crate::database::memory_db::InMemoryDb;
+
 /// An RGB wallet.
 ///
 /// This should not be manually constructed but should be obtained from the [`Wallet::new`]
@@ -1234,13 +1254,14 @@ pub struct WalletData {
 pub struct Wallet {
     pub(crate) wallet_data: WalletData,
     pub(crate) logger: Logger,
-    pub(crate) _logger_guard: AsyncGuard,
+    pub(crate) _logger_guard: LoggerGuard,
     #[cfg_attr(not(any(feature = "electrum", feature = "esplora")), allow(dead_code))]
     pub(crate) watch_only: bool,
-    pub(crate) database: Arc<RgbLibDatabase>,
+    pub(crate) database: Arc<RgbLibDb>,
     pub(crate) wallet_dir: PathBuf,
-    pub(crate) bdk_wallet: PersistedWallet<Store<ChangeSet>>,
-    pub(crate) bdk_database: Store<ChangeSet>,
+    pub(crate) bdk_wallet: PersistedWallet<BdkPersister>,
+    pub(crate) bdk_database: BdkPersister,
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) rest_client: RestClient,
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1253,6 +1274,7 @@ pub struct Wallet {
 
 impl Wallet {
     /// Create a new RGB wallet based on the provided [`WalletData`].
+    #[allow(clippy::arc_with_non_send_sync)] // wasm32 is single-threaded; Arc matches native API
     pub fn new(wallet_data: WalletData) -> Result<Self, Error> {
         let wdata = wallet_data.clone();
 
@@ -1262,11 +1284,16 @@ impl Wallet {
         let xpub_btc = str_to_xpub(&wdata.account_xpub_vanilla, bdk_network)?;
 
         // wallet directory and file logging setup
-        let data_dir_path = Path::new(&wdata.data_dir);
-        if !data_dir_path.exists() {
-            return Err(Error::InexistentDataDir);
-        }
-        let data_dir_path = fs::canonicalize(data_dir_path)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let data_dir_path = {
+            let data_dir_path = Path::new(&wdata.data_dir);
+            if !data_dir_path.exists() {
+                return Err(Error::InexistentDataDir);
+            }
+            fs::canonicalize(data_dir_path)?
+        };
+        #[cfg(target_arch = "wasm32")]
+        let data_dir_path = PathBuf::from(&wdata.data_dir);
         if let Some(mnemonic) = &wdata.mnemonic {
             // check master fingerprint derived from mnemonic matches provided one
             let mnemonic = Mnemonic::parse_in(Language::English, mnemonic)?;
@@ -1282,6 +1309,7 @@ impl Wallet {
             }
         }
         let wallet_dir = data_dir_path.join(&wdata.master_fingerprint);
+        #[cfg(not(target_arch = "wasm32"))]
         if !wallet_dir.exists() {
             fs::create_dir(&wallet_dir)?;
             fs::create_dir(wallet_dir.join(ASSETS_DIR))?;
@@ -1323,15 +1351,22 @@ impl Wallet {
             .check_genesis_hash(BlockHash::from_byte_array(
                 chain_net.chain_hash().to_bytes(),
             ));
-        let bdk_db_name = if watch_only {
-            format!("{BDK_DB_NAME}_watch_only")
-        } else {
+        if !watch_only {
             wallet_params = wallet_params.extract_keys();
-            BDK_DB_NAME.to_string()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut bdk_database: BdkPersister = {
+            let bdk_db_name = if watch_only {
+                format!("{BDK_DB_NAME}_watch_only")
+            } else {
+                BDK_DB_NAME.to_string()
+            };
+            let bdk_db_path = wallet_dir.join(bdk_db_name);
+            let (db, _) = Store::<ChangeSet>::load_or_create(BDK_DB_NAME.as_bytes(), bdk_db_path)?;
+            db
         };
-        let bdk_db_path = wallet_dir.join(bdk_db_name);
-        let (mut bdk_database, _) =
-            Store::<ChangeSet>::load_or_create(BDK_DB_NAME.as_bytes(), bdk_db_path)?;
+        #[cfg(target_arch = "wasm32")]
+        let mut bdk_database: BdkPersister = super::memory_store::MemoryStore::new();
         let bdk_wallet = match wallet_params.load_wallet(&mut bdk_database)? {
             Some(wallet) => wallet,
             None => BdkWallet::create(desc_colored, desc_vanilla)
@@ -1361,19 +1396,25 @@ impl Wallet {
         }
 
         // RGB-LIB setup
-        let db_path = wallet_dir.join(RGB_LIB_DB_NAME);
-        let display_db_path = adjust_canonicalization(db_path);
-        let connection_string = format!("sqlite:{display_db_path}?mode=rwc");
-        let mut opt = ConnectOptions::new(connection_string);
-        opt.max_connections(1)
-            .min_connections(0)
-            .connect_timeout(Duration::from_secs(8))
-            .idle_timeout(Duration::from_secs(8))
-            .max_lifetime(Duration::from_secs(8));
-        let db_cnn = block_on(Database::connect(opt));
-        let connection = db_cnn.map_err(InternalError::from)?;
-        block_on(Migrator::up(&connection, None)).map_err(InternalError::from)?;
-        let database = RgbLibDatabase::new(connection);
+        #[cfg(not(target_arch = "wasm32"))]
+        let database = {
+            let db_path = wallet_dir.join(RGB_LIB_DB_NAME);
+            let display_db_path = adjust_canonicalization(db_path);
+            let connection_string = format!("sqlite:{display_db_path}?mode=rwc");
+            let mut opt = ConnectOptions::new(connection_string);
+            opt.max_connections(1)
+                .min_connections(0)
+                .connect_timeout(Duration::from_secs(8))
+                .idle_timeout(Duration::from_secs(8))
+                .max_lifetime(Duration::from_secs(8));
+            let db_cnn = block_on(Database::connect(opt));
+            let connection = db_cnn.map_err(InternalError::from)?;
+            block_on(Migrator::up(&connection, None)).map_err(InternalError::from)?;
+            RgbLibDatabase::new(connection)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let database = crate::database::memory_db::InMemoryDb::new();
+        #[cfg(not(target_arch = "wasm32"))]
         #[cfg(any(feature = "electrum", feature = "esplora"))]
         let rest_client = get_rest_client()?;
 
@@ -1387,6 +1428,7 @@ impl Wallet {
             wallet_dir,
             bdk_wallet,
             bdk_database,
+            #[cfg(not(target_arch = "wasm32"))]
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             rest_client,
             #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1540,7 +1582,9 @@ impl Wallet {
             Error::InsufficientAllocationSlots
         })
     }
+}
 
+impl Wallet {
     pub(crate) fn get_utxo(
         &self,
         exclude_utxos: &[Outpoint],
@@ -1694,60 +1738,6 @@ impl Wallet {
         Ok(total_inflation)
     }
 
-    fn _file_details<P: AsRef<Path>>(
-        &self,
-        original_file_path: P,
-    ) -> Result<(Attachment, Media), Error> {
-        if !original_file_path.as_ref().exists() {
-            return Err(Error::InvalidFilePath {
-                file_path: original_file_path.as_ref().to_string_lossy().to_string(),
-            });
-        }
-        let file_bytes = fs::read(&original_file_path)?;
-        if file_bytes.is_empty() {
-            return Err(Error::EmptyFile {
-                file_path: original_file_path.as_ref().to_string_lossy().to_string(),
-            });
-        }
-        let file_hash: sha256::Hash = Sha256Hash::hash(&file_bytes[..]);
-        let digest_bytes = file_hash.to_byte_array();
-        let mime = FileFormat::from_file(original_file_path.as_ref())?
-            .media_type()
-            .to_string();
-        let media_ty: &'static str = Box::leak(mime.clone().into_boxed_str());
-        let media_type = MediaType::with(media_ty);
-        let digest = file_hash.to_string();
-        let file_path = self
-            .get_media_dir()
-            .join(&digest)
-            .to_string_lossy()
-            .to_string();
-        Ok((
-            Attachment {
-                ty: media_type,
-                digest: digest_bytes.into(),
-            },
-            Media {
-                digest,
-                mime,
-                file_path,
-            },
-        ))
-    }
-
-    pub(crate) fn copy_media_and_save<P: AsRef<Path>>(
-        &self,
-        original_file_path: P,
-        media: &Media,
-    ) -> Result<i32, Error> {
-        let src = original_file_path.as_ref().to_string_lossy().to_string();
-        let dst = media.clone().file_path;
-        if src != dst {
-            fs::copy(src, dst)?;
-        }
-        self.get_or_insert_media(media.get_digest(), media.mime.clone())
-    }
-
     pub(crate) fn new_asset_terms(
         &self,
         text: RicardianContract,
@@ -1770,6 +1760,143 @@ impl Wallet {
 
     fn _get_issue_consignment_path(&self, asset_id: &str) -> PathBuf {
         self.wallet_dir.join(ASSETS_DIR).join(asset_id)
+    }
+
+    pub(crate) fn new_token_data(
+        &self,
+        index: TokenIndex,
+        media_data: &Option<(Attachment, Media)>,
+        attachments: BTreeMap<u8, Attachment>,
+    ) -> TokenData {
+        TokenData {
+            index,
+            media: media_data
+                .as_ref()
+                .map(|(attachment, _)| attachment.clone()),
+            attachments: Confined::try_from(attachments.clone()).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn get_or_insert_media(&self, digest: String, mime: String) -> Result<i32, Error> {
+        Ok(match self.database.get_media_by_digest(digest.clone())? {
+            Some(media) => media.idx,
+            None => self.database.set_media(DbMediaActMod {
+                digest: ActiveValue::Set(digest),
+                mime: ActiveValue::Set(mime),
+                ..Default::default()
+            })?,
+        })
+    }
+
+    pub(crate) fn save_token_media(
+        &self,
+        token_idx: i32,
+        digest: String,
+        mime: String,
+        attachment_id: Option<u8>,
+    ) -> Result<(), Error> {
+        let media_idx = self.get_or_insert_media(digest, mime)?;
+
+        self.database.set_token_media(DbTokenMediaActMod {
+            token_idx: ActiveValue::Set(token_idx),
+            media_idx: ActiveValue::Set(media_idx),
+            attachment_id: ActiveValue::Set(attachment_id),
+            ..Default::default()
+        })?;
+
+        Ok(())
+    }
+
+    pub(crate) fn add_asset_to_db(
+        &self,
+        asset_id: String,
+        schema: &AssetSchema,
+        added_at: Option<i64>,
+        timestamp: i64,
+        asset_data: LocalAssetData,
+    ) -> Result<DbAsset, Error> {
+        let added_at = added_at.unwrap_or_else(|| now().unix_timestamp());
+        let mut db_asset = DbAssetActMod {
+            idx: ActiveValue::NotSet,
+            media_idx: ActiveValue::Set(asset_data.media_idx),
+            id: ActiveValue::Set(asset_id),
+            schema: ActiveValue::Set(*schema),
+            added_at: ActiveValue::Set(added_at),
+            details: ActiveValue::Set(asset_data.details),
+            initial_supply: ActiveValue::Set(asset_data.initial_supply.to_string()),
+            max_supply: ActiveValue::Set(asset_data.max_supply.map(|s| s.to_string())),
+            known_circulating_supply: ActiveValue::Set(
+                asset_data.known_circulating_supply.map(|s| s.to_string()),
+            ),
+            name: ActiveValue::Set(asset_data.name),
+            precision: ActiveValue::Set(asset_data.precision),
+            ticker: ActiveValue::Set(asset_data.ticker),
+            timestamp: ActiveValue::Set(timestamp),
+            reject_list_url: ActiveValue::Set(asset_data.reject_list_url),
+        };
+        let idx = self.database.set_asset(db_asset.clone())?;
+        db_asset.idx = ActiveValue::Set(idx);
+        Ok(db_asset.try_into_model().unwrap())
+    }
+
+    pub(crate) fn get_asset_token(
+        &self,
+        asset_idx: i32,
+        medias: &[DbMedia],
+        tokens: &[DbToken],
+        token_medias: &[DbTokenMedia],
+    ) -> Option<TokenLight> {
+        if let Some(db_token) = tokens.iter().find(|t| t.asset_idx == asset_idx) {
+            let mut media = None;
+            let mut attachments = HashMap::new();
+            let media_dir = self.get_media_dir();
+            token_medias
+                .iter()
+                .filter(|tm| tm.token_idx == db_token.idx)
+                .for_each(|tm| {
+                    let db_media = medias.iter().find(|m| m.idx == tm.media_idx).unwrap();
+                    let media_tkn = Media::from_db_media(db_media, &media_dir);
+                    if let Some(attachment_id) = tm.attachment_id {
+                        attachments.insert(attachment_id, media_tkn);
+                    } else {
+                        media = Some(media_tkn);
+                    }
+                });
+
+            Some(TokenLight {
+                index: db_token.index,
+                ticker: db_token.ticker.clone(),
+                name: db_token.name.clone(),
+                details: db_token.details.clone(),
+                embedded_media: db_token.embedded_media,
+                media,
+                attachments,
+                reserves: db_token.reserves,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn _get_btc_balance(&self, keychain: KeychainKind) -> Result<Balance, Error> {
+        let chain = self.bdk_wallet.local_chain();
+        let chain_tip = self.bdk_wallet.latest_checkpoint().block_id();
+        let outpoints = self.filter_unspents(keychain).map(|lo| ((), lo.outpoint));
+        let balance = self.bdk_wallet.as_ref().balance(
+            chain,
+            chain_tip,
+            CanonicalizationParams::default(),
+            outpoints,
+            |_, _| false,
+        );
+
+        let future = balance.total();
+        Ok(Balance {
+            settled: balance.confirmed.to_sat(),
+            future: future.to_sat(),
+            spendable: future.to_sat() - balance.immature.to_sat(),
+        })
     }
 
     /// Issue a new RGB NIA asset with the provided `ticker`, `name`, `precision` and `amounts`,
@@ -1867,6 +1994,8 @@ impl Wallet {
         runtime
             .import_contract(validated_contract.clone(), &DumbResolver)
             .expect("failure importing issued contract");
+        // Persist consignment to disk on native; skipped on wasm32 (in-memory only).
+        #[cfg(not(target_arch = "wasm32"))]
         validated_contract.save_file(self._get_issue_consignment_path(&asset_id))?;
 
         let asset_data = LocalAssetData {
@@ -1927,21 +2056,62 @@ impl Wallet {
         info!(self.logger, "Issue asset NIA completed");
         Ok(asset)
     }
+}
 
-    pub(crate) fn new_token_data(
+#[cfg(not(target_arch = "wasm32"))]
+impl Wallet {
+    fn _file_details<P: AsRef<Path>>(
         &self,
-        index: TokenIndex,
-        media_data: &Option<(Attachment, Media)>,
-        attachments: BTreeMap<u8, Attachment>,
-    ) -> TokenData {
-        TokenData {
-            index,
-            media: media_data
-                .as_ref()
-                .map(|(attachment, _)| attachment.clone()),
-            attachments: Confined::try_from(attachments.clone()).unwrap(),
-            ..Default::default()
+        original_file_path: P,
+    ) -> Result<(Attachment, Media), Error> {
+        if !original_file_path.as_ref().exists() {
+            return Err(Error::InvalidFilePath {
+                file_path: original_file_path.as_ref().to_string_lossy().to_string(),
+            });
         }
+        let file_bytes = fs::read(&original_file_path)?;
+        if file_bytes.is_empty() {
+            return Err(Error::EmptyFile {
+                file_path: original_file_path.as_ref().to_string_lossy().to_string(),
+            });
+        }
+        let file_hash: sha256::Hash = Sha256Hash::hash(&file_bytes[..]);
+        let digest_bytes = file_hash.to_byte_array();
+        let mime = FileFormat::from_file(original_file_path.as_ref())?
+            .media_type()
+            .to_string();
+        let media_ty: &'static str = Box::leak(mime.clone().into_boxed_str());
+        let media_type = MediaType::with(media_ty);
+        let digest = file_hash.to_string();
+        let file_path = self
+            .get_media_dir()
+            .join(&digest)
+            .to_string_lossy()
+            .to_string();
+        Ok((
+            Attachment {
+                ty: media_type,
+                digest: digest_bytes.into(),
+            },
+            Media {
+                digest,
+                mime,
+                file_path,
+            },
+        ))
+    }
+
+    pub(crate) fn copy_media_and_save<P: AsRef<Path>>(
+        &self,
+        original_file_path: P,
+        media: &Media,
+    ) -> Result<i32, Error> {
+        let src = original_file_path.as_ref().to_string_lossy().to_string();
+        let dst = media.clone().file_path;
+        if src != dst {
+            fs::copy(src, dst)?;
+        }
+        self.get_or_insert_media(media.get_digest(), media.mime.clone())
     }
 
     /// Issue a new RGB UDA asset with the provided `ticker`, `name`, optional `details` and
@@ -3127,127 +3297,6 @@ impl Wallet {
         })
     }
 
-    pub(crate) fn get_or_insert_media(&self, digest: String, mime: String) -> Result<i32, Error> {
-        Ok(match self.database.get_media_by_digest(digest.clone())? {
-            Some(media) => media.idx,
-            None => self.database.set_media(DbMediaActMod {
-                digest: ActiveValue::Set(digest),
-                mime: ActiveValue::Set(mime),
-                ..Default::default()
-            })?,
-        })
-    }
-
-    pub(crate) fn save_token_media(
-        &self,
-        token_idx: i32,
-        digest: String,
-        mime: String,
-        attachment_id: Option<u8>,
-    ) -> Result<(), Error> {
-        let media_idx = self.get_or_insert_media(digest, mime)?;
-
-        self.database.set_token_media(DbTokenMediaActMod {
-            token_idx: ActiveValue::Set(token_idx),
-            media_idx: ActiveValue::Set(media_idx),
-            attachment_id: ActiveValue::Set(attachment_id),
-            ..Default::default()
-        })?;
-
-        Ok(())
-    }
-
-    pub(crate) fn add_asset_to_db(
-        &self,
-        asset_id: String,
-        schema: &AssetSchema,
-        added_at: Option<i64>,
-        timestamp: i64,
-        asset_data: LocalAssetData,
-    ) -> Result<DbAsset, Error> {
-        let added_at = added_at.unwrap_or_else(|| now().unix_timestamp());
-        let mut db_asset = DbAssetActMod {
-            idx: ActiveValue::NotSet,
-            media_idx: ActiveValue::Set(asset_data.media_idx),
-            id: ActiveValue::Set(asset_id),
-            schema: ActiveValue::Set(*schema),
-            added_at: ActiveValue::Set(added_at),
-            details: ActiveValue::Set(asset_data.details),
-            initial_supply: ActiveValue::Set(asset_data.initial_supply.to_string()),
-            max_supply: ActiveValue::Set(asset_data.max_supply.map(|s| s.to_string())),
-            known_circulating_supply: ActiveValue::Set(
-                asset_data.known_circulating_supply.map(|s| s.to_string()),
-            ),
-            name: ActiveValue::Set(asset_data.name),
-            precision: ActiveValue::Set(asset_data.precision),
-            ticker: ActiveValue::Set(asset_data.ticker),
-            timestamp: ActiveValue::Set(timestamp),
-            reject_list_url: ActiveValue::Set(asset_data.reject_list_url),
-        };
-        let idx = self.database.set_asset(db_asset.clone())?;
-        db_asset.idx = ActiveValue::Set(idx);
-        Ok(db_asset.try_into_model().unwrap())
-    }
-
-    pub(crate) fn get_asset_token(
-        &self,
-        asset_idx: i32,
-        medias: &[DbMedia],
-        tokens: &[DbToken],
-        token_medias: &[DbTokenMedia],
-    ) -> Option<TokenLight> {
-        if let Some(db_token) = tokens.iter().find(|t| t.asset_idx == asset_idx) {
-            let mut media = None;
-            let mut attachments = HashMap::new();
-            let media_dir = self.get_media_dir();
-            token_medias
-                .iter()
-                .filter(|tm| tm.token_idx == db_token.idx)
-                .for_each(|tm| {
-                    let db_media = medias.iter().find(|m| m.idx == tm.media_idx).unwrap();
-                    let media_tkn = Media::from_db_media(db_media, &media_dir);
-                    if let Some(attachment_id) = tm.attachment_id {
-                        attachments.insert(attachment_id, media_tkn);
-                    } else {
-                        media = Some(media_tkn);
-                    }
-                });
-
-            Some(TokenLight {
-                index: db_token.index,
-                ticker: db_token.ticker.clone(),
-                name: db_token.name.clone(),
-                details: db_token.details.clone(),
-                embedded_media: db_token.embedded_media,
-                media,
-                attachments,
-                reserves: db_token.reserves,
-            })
-        } else {
-            None
-        }
-    }
-
-    fn _get_btc_balance(&self, keychain: KeychainKind) -> Result<Balance, Error> {
-        let chain = self.bdk_wallet.local_chain();
-        let chain_tip = self.bdk_wallet.latest_checkpoint().block_id();
-        let outpoints = self.filter_unspents(keychain).map(|lo| ((), lo.outpoint));
-        let balance = self.bdk_wallet.as_ref().balance(
-            chain,
-            chain_tip,
-            CanonicalizationParams::default(),
-            outpoints,
-            |_, _| false,
-        );
-
-        let future = balance.total();
-        Ok(Balance {
-            settled: balance.confirmed.to_sat(),
-            future: future.to_sat(),
-            spendable: future.to_sat() - balance.immature.to_sat(),
-        })
-    }
-
     /// Return the [`BtcBalance`] of the internal Bitcoin wallets.
     pub fn get_btc_balance(
         &mut self,
@@ -3743,4 +3792,17 @@ impl Wallet {
         info!(self.logger, "List unspents completed");
         Ok(unspents)
     }
+}
+
+/// No-ops on wasm32: backup.rs module is gated out and in-memory data is volatile.
+#[cfg(target_arch = "wasm32")]
+impl Wallet {
+    pub(crate) fn update_backup_info(
+        &self,
+        _doing_backup: bool,
+    ) -> Result<Option<DbBackupInfo>, Error> {
+        Ok(None)
+    }
+
+    pub(crate) fn trigger_auto_backup(&self) {}
 }

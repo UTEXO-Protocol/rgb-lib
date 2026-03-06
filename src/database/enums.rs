@@ -1,22 +1,24 @@
 use super::*;
 
 /// The schema of an asset.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, EnumIter, DeriveActiveEnum,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    derive(EnumIter, DeriveActiveEnum),
+    sea_orm(rs_type = "u8", db_type = "TinyUnsigned")
 )]
-#[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
 pub enum AssetSchema {
     /// NIA schema
-    #[sea_orm(num_value = 1)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 1))]
     Nia = 1,
     /// UDA schema
-    #[sea_orm(num_value = 2)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 2))]
     Uda = 2,
     /// CFA schema
-    #[sea_orm(num_value = 3)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 3))]
     Cfa = 3,
     /// IFA schema
-    #[sea_orm(num_value = 4)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 4))]
     Ifa = 4,
 }
 
@@ -128,19 +130,24 @@ impl From<AssetSchema> for SchemaId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    derive(EnumIter, DeriveActiveEnum),
+    sea_orm(rs_type = "u8", db_type = "TinyUnsigned")
+)]
 pub enum ColoringType {
-    #[sea_orm(num_value = 1)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 1))]
     Receive = 1,
-    #[sea_orm(num_value = 2)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 2))]
     Issue = 2,
-    #[sea_orm(num_value = 3)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 3))]
     Input = 3,
-    #[sea_orm(num_value = 4)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 4))]
     Change = 4,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl IntoActiveValue<ColoringType> for ColoringType {
     fn into_active_value(self) -> ActiveValue<ColoringType> {
         ActiveValue::Set(self)
@@ -156,12 +163,14 @@ pub enum RecipientTypeFull {
     Witness { vout: Option<u32> },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<RecipientTypeFull> for Value {
     fn from(value: RecipientTypeFull) -> Self {
         Value::Json(Some(Box::new(serde_json::to_value(value).unwrap())))
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TryFrom<Value> for RecipientTypeFull {
     type Error = sea_orm::DbErr;
 
@@ -175,6 +184,7 @@ impl TryFrom<Value> for RecipientTypeFull {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ValueType for RecipientTypeFull {
     fn type_name() -> String {
         "json".to_string()
@@ -196,6 +206,7 @@ impl ValueType for RecipientTypeFull {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TryGetable for RecipientTypeFull {
     fn try_get_by<I: sea_orm::ColIdx>(res: &QueryResult, index: I) -> Result<Self, TryGetError> {
         let json_value_opt: Option<JsonValue> = res.try_get_by(index)?;
@@ -209,6 +220,7 @@ impl TryGetable for RecipientTypeFull {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Nullable for RecipientTypeFull {
     fn null() -> Value {
         Value::Json(None)
@@ -216,41 +228,37 @@ impl Nullable for RecipientTypeFull {
 }
 
 /// The type of an RGB transport.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Deserialize, Serialize)]
-#[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    derive(EnumIter, DeriveActiveEnum),
+    sea_orm(rs_type = "u8", db_type = "TinyUnsigned")
+)]
 pub enum TransportType {
     /// HTTP(s) JSON-RPC ([specification](https://github.com/RGB-Tools/rgb-http-json-rpc))
-    #[sea_orm(num_value = 1)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 1))]
     JsonRpc = 1,
 }
 
 /// The status of a [`crate::wallet::Transfer`].
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    Ord,
-    PartialOrd,
-    EnumIter,
-    DeriveActiveEnum,
-    Deserialize,
-    Serialize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, Deserialize, Serialize)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    derive(EnumIter, DeriveActiveEnum),
+    sea_orm(rs_type = "u8", db_type = "TinyUnsigned")
 )]
-#[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
 pub enum TransferStatus {
     /// Waiting for the counterparty to take action
-    #[sea_orm(num_value = 1)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 1))]
     WaitingCounterparty = 1,
     /// Waiting for the transfer transaction to reach the required number of confirmations
-    #[sea_orm(num_value = 2)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 2))]
     WaitingConfirmations = 2,
     /// Settled transfer, this status is final
-    #[sea_orm(num_value = 3)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 3))]
     Settled = 3,
     /// Failed transfer, this status is final
-    #[sea_orm(num_value = 4)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 4))]
     Failed = 4,
 }
 
@@ -280,12 +288,16 @@ impl TransferStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
-#[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    derive(EnumIter, DeriveActiveEnum),
+    sea_orm(rs_type = "u8", db_type = "TinyUnsigned")
+)]
 pub enum WalletTransactionType {
-    #[sea_orm(num_value = 1)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 1))]
     CreateUtxos = 1,
-    #[sea_orm(num_value = 2)]
+    #[cfg_attr(not(target_arch = "wasm32"), sea_orm(num_value = 2))]
     Drain = 2,
 }
 
@@ -349,12 +361,14 @@ impl Assignment {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<Assignment> for Value {
     fn from(value: Assignment) -> Self {
         Value::Json(Some(Box::new(serde_json::to_value(value).unwrap())))
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TryFrom<Value> for Assignment {
     type Error = sea_orm::DbErr;
 
@@ -368,6 +382,7 @@ impl TryFrom<Value> for Assignment {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ValueType for Assignment {
     fn type_name() -> String {
         "json".to_string()
@@ -389,6 +404,7 @@ impl ValueType for Assignment {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TryGetable for Assignment {
     fn try_get_by<I: sea_orm::ColIdx>(res: &QueryResult, index: I) -> Result<Self, TryGetError> {
         let json_value_opt: Option<JsonValue> = res.try_get_by(index)?;
@@ -400,6 +416,7 @@ impl TryGetable for Assignment {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Nullable for Assignment {
     fn null() -> Value {
         Value::Json(None)
