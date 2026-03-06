@@ -2719,6 +2719,326 @@ impl Wallet {
         info!(self.logger, "List unspents completed");
         Ok(unspents)
     }
+
+    fn _receive(
+        &self,
+        asset_id: Option<String>,
+        assignment: Assignment,
+        duration_seconds: Option<u32>,
+        transport_endpoints: Vec<String>,
+        min_confirmations: u8,
+        beneficiary: Beneficiary,
+        recipient_type: RecipientTypeFull,
+    ) -> Result<(String, String, Option<i64>, i32), Error> {
+        #[cfg(test)]
+        let network = mock_chain_net(self);
+        #[cfg(not(test))]
+        let network: ChainNet = self.bitcoin_network().into();
+
+        let beneficiary = XChainNet::with(network, beneficiary);
+        let recipient_id = beneficiary.to_string();
+        debug!(self.logger, "Recipient ID: {recipient_id}");
+        let (schema, contract_id) = if let Some(aid) = asset_id.clone() {
+            let asset = self.database.check_asset_exists(aid.clone())?;
+            let contract_id = ContractId::from_str(&aid).expect("invalid contract ID");
+            (Some(asset.schema), Some(contract_id))
+        } else {
+            (None, None)
+        };
+
+        self.check_transport_endpoints(&transport_endpoints)?;
+        let mut transport_endpoints_dedup = transport_endpoints.clone();
+        transport_endpoints_dedup.sort();
+        transport_endpoints_dedup.dedup();
+        if transport_endpoints_dedup.len() != transport_endpoints.len() {
+            return Err(Error::InvalidTransportEndpoints {
+                details: s!("no duplicate transport endpoints allowed"),
+            });
+        }
+        let mut endpoints: Vec<String> = vec![];
+        for endpoint_str in &transport_endpoints {
+            let rgb_transport = RgbTransport::from_str(endpoint_str)?;
+            match &rgb_transport {
+                RgbTransport::JsonRpc { .. } => {
+                    endpoints.push(
+                        TransportEndpoint::try_from(rgb_transport)
+                            .unwrap()
+                            .endpoint
+                            .clone(),
+                    );
+                }
+                _ => {
+                    return Err(Error::UnsupportedTransportType);
+                }
+            }
+        }
+
+        let mut invoice_builder = RgbInvoiceBuilder::new(beneficiary);
+        if let Some(schema) = schema {
+            invoice_builder = invoice_builder.set_schema(schema.into());
+        }
+        if let Some(contract_id) = contract_id {
+            invoice_builder = invoice_builder.set_contract(contract_id);
+        }
+        let transports: Vec<&str> = transport_endpoints.iter().map(AsRef::as_ref).collect();
+        invoice_builder = invoice_builder.add_transports(transports).unwrap();
+        let detected_assignment = match (&assignment, schema) {
+            (
+                Assignment::Fungible(amt),
+                Some(AssetSchema::Nia) | Some(AssetSchema::Cfa) | Some(AssetSchema::Ifa) | None,
+            ) => {
+                invoice_builder = invoice_builder.set_amount_raw(*amt);
+                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
+                assignment
+            }
+            (Assignment::Any, Some(AssetSchema::Nia) | Some(AssetSchema::Cfa)) => {
+                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
+                Assignment::Fungible(0)
+            }
+            (Assignment::NonFungible | Assignment::Any, Some(AssetSchema::Uda)) => {
+                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
+                Assignment::NonFungible
+            }
+            (Assignment::ReplaceRight, Some(AssetSchema::Ifa)) => {
+                invoice_builder = invoice_builder.set_void();
+                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_REPLACE_RIGHT);
+                Assignment::ReplaceRight
+            }
+            (Assignment::InflationRight(amt), Some(AssetSchema::Ifa)) => {
+                invoice_builder = invoice_builder.set_amount_raw(*amt);
+                invoice_builder =
+                    invoice_builder.set_assignment_name(RGB_STATE_INFLATION_ALLOWANCE);
+                assignment
+            }
+            (Assignment::Any, _) => Assignment::Any,
+            _ => return Err(Error::InvalidAssignment),
+        };
+        let created_at = now().unix_timestamp();
+        let expiry = if duration_seconds == Some(0) {
+            None
+        } else {
+            let duration_seconds = duration_seconds.unwrap_or(DURATION_RCV_TRANSFER) as i64;
+            let expiry = created_at + duration_seconds;
+            invoice_builder = invoice_builder.set_expiry_timestamp(expiry);
+            Some(expiry)
+        };
+
+        let invoice = invoice_builder.finish();
+        let invoice_string = invoice.to_string();
+
+        let batch_transfer = DbBatchTransferActMod {
+            status: ActiveValue::Set(TransferStatus::WaitingCounterparty),
+            expiration: ActiveValue::Set(expiry),
+            created_at: ActiveValue::Set(created_at),
+            min_confirmations: ActiveValue::Set(min_confirmations),
+            ..Default::default()
+        };
+        let batch_transfer_idx = self.database.set_batch_transfer(batch_transfer)?;
+        let asset_transfer = DbAssetTransferActMod {
+            user_driven: ActiveValue::Set(true),
+            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
+            asset_id: ActiveValue::Set(asset_id),
+            ..Default::default()
+        };
+        let asset_transfer_idx = self.database.set_asset_transfer(asset_transfer)?;
+        let transfer = DbTransferActMod {
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            requested_assignment: ActiveValue::Set(Some(detected_assignment)),
+            incoming: ActiveValue::Set(true),
+            recipient_id: ActiveValue::Set(Some(recipient_id.clone())),
+            recipient_type: ActiveValue::Set(Some(recipient_type)),
+            invoice_string: ActiveValue::Set(Some(invoice_string.clone())),
+            ..Default::default()
+        };
+        let transfer_idx = self.database.set_transfer(transfer)?;
+        for endpoint in endpoints {
+            self.save_transfer_transport_endpoint(
+                transfer_idx,
+                &LocalTransportEndpoint {
+                    endpoint,
+                    transport_type: TransportType::JsonRpc,
+                    used: false,
+                    usable: true,
+                },
+            )?;
+        }
+
+        Ok((recipient_id, invoice_string, expiry, batch_transfer_idx))
+    }
+
+    /// Blind an UTXO to receive RGB assets and return the resulting [`ReceiveData`].
+    ///
+    /// An optional asset ID can be specified, which will be embedded in the invoice, resulting in
+    /// the refusal of the transfer is the asset doesn't match.
+    ///
+    /// An optional amount can be specified, which will be embedded in the invoice. It will not be
+    /// checked when accepting the transfer.
+    ///
+    /// An optional duration (in seconds) can be specified, which will set the expiration of the
+    /// invoice. A duration of 0 seconds means no expiration.
+    ///
+    /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
+    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
+    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
+    /// endpoint string encodes an
+    /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
+    /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
+    /// `rpcs://example.com`).
+    ///
+    /// The `min_confirmations` number determines the minimum number of confirmations needed for
+    /// the transaction anchoring the transfer for it to be considered final and move (while
+    /// refreshing) to the [`TransferStatus::Settled`] status.
+    pub fn blind_receive(
+        &self,
+        asset_id: Option<String>,
+        assignment: Assignment,
+        duration_seconds: Option<u32>,
+        transport_endpoints: Vec<String>,
+        min_confirmations: u8,
+    ) -> Result<ReceiveData, Error> {
+        info!(
+            self.logger,
+            "Receiving via blinded UTXO for asset '{:?}' with duration '{:?}'...",
+            asset_id,
+            duration_seconds
+        );
+
+        let mut unspents: Vec<LocalUnspent> = self.database.get_rgb_allocations(
+            self.database.get_unspent_txos(vec![])?,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        unspents.retain(|u| {
+            !(u.rgb_allocations
+                .iter()
+                .any(|a| !a.incoming && a.status.waiting_counterparty()))
+        });
+        let utxo = self.get_utxo(&[], Some(&unspents), true, None)?;
+        let unblinded_utxo = utxo.outpoint();
+        debug!(
+            self.logger,
+            "Blinding outpoint '{}'",
+            unblinded_utxo.to_string()
+        );
+        let blind_seal = self.get_blind_seal(utxo.clone()).transmutate();
+        let beneficiary = Beneficiary::BlindedSeal(blind_seal.conceal());
+
+        let (recipient_id, invoice, expiration_timestamp, batch_transfer_idx) = self._receive(
+            asset_id,
+            assignment,
+            duration_seconds,
+            transport_endpoints,
+            min_confirmations,
+            beneficiary,
+            RecipientTypeFull::Blind { unblinded_utxo },
+        )?;
+
+        let mut runtime = self.rgb_runtime()?;
+        runtime.store_secret_seal(blind_seal)?;
+
+        self.update_backup_info(false)?;
+        self.trigger_auto_backup();
+
+        info!(self.logger, "Blind receive completed");
+        Ok(ReceiveData {
+            invoice,
+            recipient_id,
+            expiration_timestamp,
+            batch_transfer_idx,
+        })
+    }
+
+    /// Create an address to receive RGB assets and return the resulting [`ReceiveData`].
+    ///
+    /// An optional asset ID can be specified, which will be embedded in the invoice, resulting in
+    /// the refusal of the transfer is the asset doesn't match.
+    ///
+    /// An optional amount can be specified, which will be embedded in the invoice. It will not be
+    /// checked when accepting the transfer.
+    ///
+    /// An optional duration (in seconds) can be specified, which will set the expiration of the
+    /// invoice. A duration of 0 seconds means no expiration.
+    ///
+    /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
+    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
+    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
+    /// endpoint string encodes an
+    /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
+    /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
+    /// `rpcs://example.com`).
+    ///
+    /// The `min_confirmations` number determines the minimum number of confirmations needed for
+    /// the transaction anchoring the transfer for it to be considered final and move (while
+    /// refreshing) to the [`TransferStatus::Settled`] status.
+    pub fn witness_receive(
+        &mut self,
+        asset_id: Option<String>,
+        assignment: Assignment,
+        duration_seconds: Option<u32>,
+        transport_endpoints: Vec<String>,
+        min_confirmations: u8,
+    ) -> Result<ReceiveData, Error> {
+        info!(
+            self.logger,
+            "Receiving via witness TX for asset '{:?}' with duration '{:?}'...",
+            asset_id,
+            duration_seconds
+        );
+
+        let script_pubkey = self.get_new_address()?.script_pubkey();
+        let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
+
+        let (recipient_id, invoice, expiration_timestamp, batch_transfer_idx) = self._receive(
+            asset_id,
+            assignment,
+            duration_seconds,
+            transport_endpoints,
+            min_confirmations,
+            beneficiary,
+            RecipientTypeFull::Witness { vout: None },
+        )?;
+
+        self.database
+            .set_pending_witness_script(DbPendingWitnessScriptActMod {
+                script: ActiveValue::Set(script_pubkey.to_hex_string()),
+                ..Default::default()
+            })?;
+
+        self.update_backup_info(false)?;
+        self.trigger_auto_backup();
+
+        info!(self.logger, "Witness receive completed");
+        Ok(ReceiveData {
+            invoice,
+            recipient_id,
+            expiration_timestamp,
+            batch_transfer_idx,
+        })
+    }
+
+    pub(crate) fn _get_new_address(&mut self, keychain: KeychainKind) -> Result<BdkAddress, Error> {
+        let address = self.bdk_wallet.reveal_next_address(keychain).address;
+        self.bdk_wallet.persist(&mut self.bdk_database)?;
+        Ok(address)
+    }
+
+    pub(crate) fn get_new_address(&mut self) -> Result<BdkAddress, Error> {
+        self._get_new_address(KeychainKind::External)
+    }
+
+    /// Return a new Bitcoin address from the vanilla wallet.
+    pub fn get_address(&mut self) -> Result<String, Error> {
+        info!(self.logger, "Getting address...");
+        let address = self._get_new_address(KeychainKind::Internal)?;
+
+        self.update_backup_info(false)?;
+        self.trigger_auto_backup();
+
+        info!(self.logger, "Get address completed");
+        Ok(address.to_string())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3407,326 +3727,6 @@ impl Wallet {
 
         info!(self.logger, "Issue asset IFA completed");
         Ok(asset)
-    }
-
-    fn _receive(
-        &self,
-        asset_id: Option<String>,
-        assignment: Assignment,
-        duration_seconds: Option<u32>,
-        transport_endpoints: Vec<String>,
-        min_confirmations: u8,
-        beneficiary: Beneficiary,
-        recipient_type: RecipientTypeFull,
-    ) -> Result<(String, String, Option<i64>, i32), Error> {
-        #[cfg(test)]
-        let network = mock_chain_net(self);
-        #[cfg(not(test))]
-        let network: ChainNet = self.bitcoin_network().into();
-
-        let beneficiary = XChainNet::with(network, beneficiary);
-        let recipient_id = beneficiary.to_string();
-        debug!(self.logger, "Recipient ID: {recipient_id}");
-        let (schema, contract_id) = if let Some(aid) = asset_id.clone() {
-            let asset = self.database.check_asset_exists(aid.clone())?;
-            let contract_id = ContractId::from_str(&aid).expect("invalid contract ID");
-            (Some(asset.schema), Some(contract_id))
-        } else {
-            (None, None)
-        };
-
-        self.check_transport_endpoints(&transport_endpoints)?;
-        let mut transport_endpoints_dedup = transport_endpoints.clone();
-        transport_endpoints_dedup.sort();
-        transport_endpoints_dedup.dedup();
-        if transport_endpoints_dedup.len() != transport_endpoints.len() {
-            return Err(Error::InvalidTransportEndpoints {
-                details: s!("no duplicate transport endpoints allowed"),
-            });
-        }
-        let mut endpoints: Vec<String> = vec![];
-        for endpoint_str in &transport_endpoints {
-            let rgb_transport = RgbTransport::from_str(endpoint_str)?;
-            match &rgb_transport {
-                RgbTransport::JsonRpc { .. } => {
-                    endpoints.push(
-                        TransportEndpoint::try_from(rgb_transport)
-                            .unwrap()
-                            .endpoint
-                            .clone(),
-                    );
-                }
-                _ => {
-                    return Err(Error::UnsupportedTransportType);
-                }
-            }
-        }
-
-        let mut invoice_builder = RgbInvoiceBuilder::new(beneficiary);
-        if let Some(schema) = schema {
-            invoice_builder = invoice_builder.set_schema(schema.into());
-        }
-        if let Some(contract_id) = contract_id {
-            invoice_builder = invoice_builder.set_contract(contract_id);
-        }
-        let transports: Vec<&str> = transport_endpoints.iter().map(AsRef::as_ref).collect();
-        invoice_builder = invoice_builder.add_transports(transports).unwrap();
-        let detected_assignment = match (&assignment, schema) {
-            (
-                Assignment::Fungible(amt),
-                Some(AssetSchema::Nia) | Some(AssetSchema::Cfa) | Some(AssetSchema::Ifa) | None,
-            ) => {
-                invoice_builder = invoice_builder.set_amount_raw(*amt);
-                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
-                assignment
-            }
-            (Assignment::Any, Some(AssetSchema::Nia) | Some(AssetSchema::Cfa)) => {
-                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
-                Assignment::Fungible(0)
-            }
-            (Assignment::NonFungible | Assignment::Any, Some(AssetSchema::Uda)) => {
-                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
-                Assignment::NonFungible
-            }
-            (Assignment::ReplaceRight, Some(AssetSchema::Ifa)) => {
-                invoice_builder = invoice_builder.set_void();
-                invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_REPLACE_RIGHT);
-                Assignment::ReplaceRight
-            }
-            (Assignment::InflationRight(amt), Some(AssetSchema::Ifa)) => {
-                invoice_builder = invoice_builder.set_amount_raw(*amt);
-                invoice_builder =
-                    invoice_builder.set_assignment_name(RGB_STATE_INFLATION_ALLOWANCE);
-                assignment
-            }
-            (Assignment::Any, _) => Assignment::Any,
-            _ => return Err(Error::InvalidAssignment),
-        };
-        let created_at = now().unix_timestamp();
-        let expiry = if duration_seconds == Some(0) {
-            None
-        } else {
-            let duration_seconds = duration_seconds.unwrap_or(DURATION_RCV_TRANSFER) as i64;
-            let expiry = created_at + duration_seconds;
-            invoice_builder = invoice_builder.set_expiry_timestamp(expiry);
-            Some(expiry)
-        };
-
-        let invoice = invoice_builder.finish();
-        let invoice_string = invoice.to_string();
-
-        let batch_transfer = DbBatchTransferActMod {
-            status: ActiveValue::Set(TransferStatus::WaitingCounterparty),
-            expiration: ActiveValue::Set(expiry),
-            created_at: ActiveValue::Set(created_at),
-            min_confirmations: ActiveValue::Set(min_confirmations),
-            ..Default::default()
-        };
-        let batch_transfer_idx = self.database.set_batch_transfer(batch_transfer)?;
-        let asset_transfer = DbAssetTransferActMod {
-            user_driven: ActiveValue::Set(true),
-            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
-            asset_id: ActiveValue::Set(asset_id),
-            ..Default::default()
-        };
-        let asset_transfer_idx = self.database.set_asset_transfer(asset_transfer)?;
-        let transfer = DbTransferActMod {
-            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-            requested_assignment: ActiveValue::Set(Some(detected_assignment)),
-            incoming: ActiveValue::Set(true),
-            recipient_id: ActiveValue::Set(Some(recipient_id.clone())),
-            recipient_type: ActiveValue::Set(Some(recipient_type)),
-            invoice_string: ActiveValue::Set(Some(invoice_string.clone())),
-            ..Default::default()
-        };
-        let transfer_idx = self.database.set_transfer(transfer)?;
-        for endpoint in endpoints {
-            self.save_transfer_transport_endpoint(
-                transfer_idx,
-                &LocalTransportEndpoint {
-                    endpoint,
-                    transport_type: TransportType::JsonRpc,
-                    used: false,
-                    usable: true,
-                },
-            )?;
-        }
-
-        Ok((recipient_id, invoice_string, expiry, batch_transfer_idx))
-    }
-
-    /// Blind an UTXO to receive RGB assets and return the resulting [`ReceiveData`].
-    ///
-    /// An optional asset ID can be specified, which will be embedded in the invoice, resulting in
-    /// the refusal of the transfer is the asset doesn't match.
-    ///
-    /// An optional amount can be specified, which will be embedded in the invoice. It will not be
-    /// checked when accepting the transfer.
-    ///
-    /// An optional duration (in seconds) can be specified, which will set the expiration of the
-    /// invoice. A duration of 0 seconds means no expiration.
-    ///
-    /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
-    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
-    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
-    /// endpoint string encodes an
-    /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
-    /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
-    /// `rpcs://example.com`).
-    ///
-    /// The `min_confirmations` number determines the minimum number of confirmations needed for
-    /// the transaction anchoring the transfer for it to be considered final and move (while
-    /// refreshing) to the [`TransferStatus::Settled`] status.
-    pub fn blind_receive(
-        &self,
-        asset_id: Option<String>,
-        assignment: Assignment,
-        duration_seconds: Option<u32>,
-        transport_endpoints: Vec<String>,
-        min_confirmations: u8,
-    ) -> Result<ReceiveData, Error> {
-        info!(
-            self.logger,
-            "Receiving via blinded UTXO for asset '{:?}' with duration '{:?}'...",
-            asset_id,
-            duration_seconds
-        );
-
-        let mut unspents: Vec<LocalUnspent> = self.database.get_rgb_allocations(
-            self.database.get_unspent_txos(vec![])?,
-            None,
-            None,
-            None,
-            None,
-        )?;
-        unspents.retain(|u| {
-            !(u.rgb_allocations
-                .iter()
-                .any(|a| !a.incoming && a.status.waiting_counterparty()))
-        });
-        let utxo = self.get_utxo(&[], Some(&unspents), true, None)?;
-        let unblinded_utxo = utxo.outpoint();
-        debug!(
-            self.logger,
-            "Blinding outpoint '{}'",
-            unblinded_utxo.to_string()
-        );
-        let blind_seal = self.get_blind_seal(utxo.clone()).transmutate();
-        let beneficiary = Beneficiary::BlindedSeal(blind_seal.conceal());
-
-        let (recipient_id, invoice, expiration_timestamp, batch_transfer_idx) = self._receive(
-            asset_id,
-            assignment,
-            duration_seconds,
-            transport_endpoints,
-            min_confirmations,
-            beneficiary,
-            RecipientTypeFull::Blind { unblinded_utxo },
-        )?;
-
-        let mut runtime = self.rgb_runtime()?;
-        runtime.store_secret_seal(blind_seal)?;
-
-        self.update_backup_info(false)?;
-        self.trigger_auto_backup();
-
-        info!(self.logger, "Blind receive completed");
-        Ok(ReceiveData {
-            invoice,
-            recipient_id,
-            expiration_timestamp,
-            batch_transfer_idx,
-        })
-    }
-
-    /// Create an address to receive RGB assets and return the resulting [`ReceiveData`].
-    ///
-    /// An optional asset ID can be specified, which will be embedded in the invoice, resulting in
-    /// the refusal of the transfer is the asset doesn't match.
-    ///
-    /// An optional amount can be specified, which will be embedded in the invoice. It will not be
-    /// checked when accepting the transfer.
-    ///
-    /// An optional duration (in seconds) can be specified, which will set the expiration of the
-    /// invoice. A duration of 0 seconds means no expiration.
-    ///
-    /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
-    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
-    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
-    /// endpoint string encodes an
-    /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
-    /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
-    /// `rpcs://example.com`).
-    ///
-    /// The `min_confirmations` number determines the minimum number of confirmations needed for
-    /// the transaction anchoring the transfer for it to be considered final and move (while
-    /// refreshing) to the [`TransferStatus::Settled`] status.
-    pub fn witness_receive(
-        &mut self,
-        asset_id: Option<String>,
-        assignment: Assignment,
-        duration_seconds: Option<u32>,
-        transport_endpoints: Vec<String>,
-        min_confirmations: u8,
-    ) -> Result<ReceiveData, Error> {
-        info!(
-            self.logger,
-            "Receiving via witness TX for asset '{:?}' with duration '{:?}'...",
-            asset_id,
-            duration_seconds
-        );
-
-        let script_pubkey = self.get_new_address()?.script_pubkey();
-        let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
-
-        let (recipient_id, invoice, expiration_timestamp, batch_transfer_idx) = self._receive(
-            asset_id,
-            assignment,
-            duration_seconds,
-            transport_endpoints,
-            min_confirmations,
-            beneficiary,
-            RecipientTypeFull::Witness { vout: None },
-        )?;
-
-        self.database
-            .set_pending_witness_script(DbPendingWitnessScriptActMod {
-                script: ActiveValue::Set(script_pubkey.to_hex_string()),
-                ..Default::default()
-            })?;
-
-        self.update_backup_info(false)?;
-        self.trigger_auto_backup();
-
-        info!(self.logger, "Witness receive completed");
-        Ok(ReceiveData {
-            invoice,
-            recipient_id,
-            expiration_timestamp,
-            batch_transfer_idx,
-        })
-    }
-
-    pub(crate) fn _get_new_address(&mut self, keychain: KeychainKind) -> Result<BdkAddress, Error> {
-        let address = self.bdk_wallet.reveal_next_address(keychain).address;
-        self.bdk_wallet.persist(&mut self.bdk_database)?;
-        Ok(address)
-    }
-
-    pub(crate) fn get_new_address(&mut self) -> Result<BdkAddress, Error> {
-        self._get_new_address(KeychainKind::External)
-    }
-
-    /// Return a new Bitcoin address from the vanilla wallet.
-    pub fn get_address(&mut self) -> Result<String, Error> {
-        info!(self.logger, "Getting address...");
-        let address = self._get_new_address(KeychainKind::Internal)?;
-
-        self.update_backup_info(false)?;
-        self.trigger_auto_backup();
-
-        info!(self.logger, "Get address completed");
-        Ok(address.to_string())
     }
 
     /// Return the [`Metadata`] for the RGB asset with the provided ID.

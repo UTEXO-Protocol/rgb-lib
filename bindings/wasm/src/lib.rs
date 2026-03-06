@@ -171,6 +171,73 @@ impl WasmWallet {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Blind an UTXO to receive RGB assets. Returns ReceiveData as a JS object.
+    ///
+    /// `assignment_js` is a JS object like `{ "Fungible": 100 }` or `"NonFungible"` or `"Any"`.
+    /// `transport_endpoints_js` is a JS array of endpoint strings.
+    pub fn blind_receive(
+        &self,
+        asset_id: Option<String>,
+        assignment_js: JsValue,
+        duration_seconds: Option<u32>,
+        transport_endpoints_js: JsValue,
+        min_confirmations: u8,
+    ) -> Result<JsValue, JsValue> {
+        let assignment: rgb_lib::Assignment = serde_wasm_bindgen::from_value(assignment_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid assignment: {e}")))?;
+        let transport_endpoints: Vec<String> =
+            serde_wasm_bindgen::from_value(transport_endpoints_js)
+                .map_err(|e| JsValue::from_str(&format!("Invalid transport endpoints: {e}")))?;
+        let data = self
+            .inner
+            .borrow()
+            .blind_receive(
+                asset_id,
+                assignment,
+                duration_seconds,
+                transport_endpoints,
+                min_confirmations,
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&data).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Create an address to receive RGB assets via witness TX. Returns ReceiveData as a JS object.
+    pub fn witness_receive(
+        &self,
+        asset_id: Option<String>,
+        assignment_js: JsValue,
+        duration_seconds: Option<u32>,
+        transport_endpoints_js: JsValue,
+        min_confirmations: u8,
+    ) -> Result<JsValue, JsValue> {
+        let assignment: rgb_lib::Assignment = serde_wasm_bindgen::from_value(assignment_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid assignment: {e}")))?;
+        let transport_endpoints: Vec<String> =
+            serde_wasm_bindgen::from_value(transport_endpoints_js)
+                .map_err(|e| JsValue::from_str(&format!("Invalid transport endpoints: {e}")))?;
+        let data = self
+            .inner
+            .borrow_mut()
+            .witness_receive(
+                asset_id,
+                assignment,
+                duration_seconds,
+                transport_endpoints,
+                min_confirmations,
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&data).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Return a new Bitcoin address from the vanilla wallet.
+    pub fn get_address(&self) -> Result<String, JsValue> {
+        self.inner
+            .borrow_mut()
+            .get_address()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Delete failed transfers. Returns true if any were deleted.
     pub fn delete_transfers(
         &self,

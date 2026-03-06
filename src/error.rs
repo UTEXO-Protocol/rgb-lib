@@ -799,6 +799,13 @@ impl From<bdk_wallet::LoadWithPersistError<std::convert::Infallible>> for Error 
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+impl From<std::convert::Infallible> for Error {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::IO {
