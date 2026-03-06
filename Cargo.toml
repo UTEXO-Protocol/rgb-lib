@@ -35,9 +35,7 @@ chacha20poly1305 = { version = "0.10.1", default-features = false, features = [
     "alloc",
     "stream",
 ] }
-futures = { version = "0.3", default-features = false, features = [
-    "executor",
-] }
+tokio = { version = "1", default-features = false, features = ["rt"] }
 generic-array = "=0.14.7"  # temporary pin while waiting for chacha20poly1305 update
 hex = { version = "0.4.3", default-features = false }
 rand = { version = "0.9.1", default-features = false }
@@ -53,9 +51,9 @@ scrypt = { version = "0.11.0", default-features = false, features = [
     "simple",
     "std",
 ] }
-sea-orm = { version = "1.1.12", default-features = false, features = [
+sea-orm = { version = "1.1.19", default-features = false, features = [
     "macros",
-    "runtime-async-std-rustls",
+    "runtime-tokio-rustls",
     "sqlx-sqlite",
     "with-json",
 ] }
@@ -87,7 +85,6 @@ vss-client = { package = "vss-client-ng", git = "https://github.com/lightningdev
 ] }
 hkdf = { version = "0.12", default-features = false, optional = true }
 sha2 = { version = "0.10", default-features = false, optional = true }
-tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
 
 # RGB-related deps
 amplify = { version = "=4.8.1", default-features = false }
@@ -124,7 +121,7 @@ esplora = [
     "reqwest",
     "rgb-ops/esplora_blocking",
 ]
-vss = ["vss-client", "hkdf", "sha2", "tokio"]
+vss = ["vss-client", "hkdf", "sha2"]
 camel_case = ["default"]
 
 [[example]]
