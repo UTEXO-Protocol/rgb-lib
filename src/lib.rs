@@ -263,6 +263,12 @@ use crate::database::{
 use crate::utils::INDEXER_BATCH_SIZE;
 #[cfg(feature = "esplora")]
 use crate::utils::INDEXER_PARALLEL_REQUESTS;
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use crate::utils::OffchainResolver;
+#[cfg(target_arch = "wasm32")]
+#[cfg(feature = "esplora")]
+use crate::utils::{OffchainResolverWasm, WasmResolver};
 #[cfg(test)]
 use crate::wallet::test::{mock_asset_terms, mock_contract_details, mock_token_data};
 #[cfg(test)]
@@ -275,7 +281,7 @@ use crate::{
     api::proxy::GetConsignmentResponse,
     database::{DbData, LocalRecipient, LocalRecipientData, LocalWitnessData},
     error::IndexerError,
-    utils::{INDEXER_STOP_GAP, OffchainResolver, script_buf_from_recipient_id},
+    utils::{INDEXER_STOP_GAP, script_buf_from_recipient_id},
     wallet::{AssignmentsCollection, Indexer},
 };
 #[cfg(not(target_arch = "wasm32"))]

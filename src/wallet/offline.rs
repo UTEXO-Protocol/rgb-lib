@@ -1264,8 +1264,21 @@ pub struct Wallet {
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) rest_client: RestClient,
+    #[cfg(target_arch = "wasm32")]
+    #[cfg(feature = "esplora")]
+    pub(crate) wasm_proxy_client: crate::api::proxy::WasmProxyClient,
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) online_data: Option<OnlineData>,
+    /// In-memory storage for transfer artifacts (replaces filesystem on wasm32).
+    /// Key: txid
+    #[cfg(target_arch = "wasm32")]
+    #[cfg(feature = "esplora")]
+    pub(crate) transfer_artifacts: HashMap<String, super::online::TransferArtifacts>,
+    /// In-memory storage for received consignment bytes (replaces filesystem on wasm32).
+    /// Key: recipient_id
+    #[cfg(target_arch = "wasm32")]
+    #[cfg(feature = "esplora")]
+    pub(crate) received_consignments: HashMap<String, Vec<u8>>,
     #[cfg(feature = "vss")]
     pub(crate) vss_client: Option<Arc<super::vss::VssBackupClient>>,
     #[cfg(feature = "vss")]
@@ -1417,6 +1430,9 @@ impl Wallet {
         #[cfg(not(target_arch = "wasm32"))]
         #[cfg(any(feature = "electrum", feature = "esplora"))]
         let rest_client = get_rest_client()?;
+        #[cfg(target_arch = "wasm32")]
+        #[cfg(feature = "esplora")]
+        let wasm_proxy_client = crate::api::proxy::WasmProxyClient::new()?;
 
         info!(logger, "New wallet completed");
         Ok(Wallet {
@@ -1431,8 +1447,17 @@ impl Wallet {
             #[cfg(not(target_arch = "wasm32"))]
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             rest_client,
+            #[cfg(target_arch = "wasm32")]
+            #[cfg(feature = "esplora")]
+            wasm_proxy_client,
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             online_data: None,
+            #[cfg(target_arch = "wasm32")]
+            #[cfg(feature = "esplora")]
+            transfer_artifacts: HashMap::new(),
+            #[cfg(target_arch = "wasm32")]
+            #[cfg(feature = "esplora")]
+            received_consignments: HashMap::new(),
             #[cfg(feature = "vss")]
             vss_client: None,
             #[cfg(feature = "vss")]

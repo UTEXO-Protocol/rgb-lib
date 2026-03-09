@@ -409,6 +409,64 @@ impl From<DbBackupInfo> for DbBackupInfoActMod {
     }
 }
 
+impl From<DbAssetTransfer> for DbAssetTransferActMod {
+    fn from(m: DbAssetTransfer) -> Self {
+        Self {
+            idx: ActiveValue::Unchanged(m.idx),
+            user_driven: ActiveValue::Unchanged(m.user_driven),
+            batch_transfer_idx: ActiveValue::Unchanged(m.batch_transfer_idx),
+            asset_id: ActiveValue::Unchanged(m.asset_id),
+        }
+    }
+}
+
+impl From<DbTransfer> for DbTransferActMod {
+    fn from(m: DbTransfer) -> Self {
+        Self {
+            idx: ActiveValue::Unchanged(m.idx),
+            asset_transfer_idx: ActiveValue::Unchanged(m.asset_transfer_idx),
+            requested_assignment: ActiveValue::Unchanged(m.requested_assignment),
+            incoming: ActiveValue::Unchanged(m.incoming),
+            recipient_type: ActiveValue::Unchanged(m.recipient_type),
+            recipient_id: ActiveValue::Unchanged(m.recipient_id),
+            ack: ActiveValue::Unchanged(m.ack),
+            invoice_string: ActiveValue::Unchanged(m.invoice_string),
+        }
+    }
+}
+
+impl From<DbTransferTransportEndpoint> for DbTransferTransportEndpointActMod {
+    fn from(m: DbTransferTransportEndpoint) -> Self {
+        Self {
+            idx: ActiveValue::Unchanged(m.idx),
+            transfer_idx: ActiveValue::Unchanged(m.transfer_idx),
+            transport_endpoint_idx: ActiveValue::Unchanged(m.transport_endpoint_idx),
+            used: ActiveValue::Unchanged(m.used),
+        }
+    }
+}
+
+impl From<DbAsset> for DbAssetActMod {
+    fn from(m: DbAsset) -> Self {
+        Self {
+            idx: ActiveValue::Unchanged(m.idx),
+            media_idx: ActiveValue::Unchanged(m.media_idx),
+            id: ActiveValue::Unchanged(m.id),
+            schema: ActiveValue::Unchanged(m.schema),
+            added_at: ActiveValue::Unchanged(m.added_at),
+            details: ActiveValue::Unchanged(m.details),
+            initial_supply: ActiveValue::Unchanged(m.initial_supply),
+            name: ActiveValue::Unchanged(m.name),
+            precision: ActiveValue::Unchanged(m.precision),
+            ticker: ActiveValue::Unchanged(m.ticker),
+            timestamp: ActiveValue::Unchanged(m.timestamp),
+            max_supply: ActiveValue::Unchanged(m.max_supply),
+            known_circulating_supply: ActiveValue::Unchanged(m.known_circulating_supply),
+            reject_list_url: ActiveValue::Unchanged(m.reject_list_url),
+        }
+    }
+}
+
 /// In-memory store: one Vec per entity, next_id per table for insert idx.
 /// RefCell for interior mutability so methods can take &self (Arc<Backend>).
 pub struct InMemoryDb {

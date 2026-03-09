@@ -119,7 +119,7 @@ esplora-client = { version = "0.12", default-features = false, features = [
     "async-https",
 ] }
 getrandom = { version = "0.2", features = ["js"] }
-gloo-net = { version = "0.6", default-features = false, features = ["http"] }
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 js-sys = "0.3"
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
@@ -127,6 +127,7 @@ reqwest = { version = "0.12", optional = true, default-features = false, feature
     "json",
 ] }
 time = { version = "0.3.41", default-features = false, features = ["wasm-bindgen"] }
+web-sys = { version = "0.3", features = ["FormData", "Blob", "BlobPropertyBag"] }
 
 [dev-dependencies]
 copy_dir = { version = "0.1.3", default-features = false }

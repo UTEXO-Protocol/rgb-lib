@@ -49,17 +49,16 @@ impl esplora_client::Sleeper for WasmSleeper {
     any(feature = "electrum", feature = "esplora")
 ))]
 pub(crate) const REST_CLIENT_TIMEOUT: u8 = 90;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "electrum", feature = "esplora")
-))]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 const PROXY_PROTOCOL_VERSION: &str = "0.2";
 
 // sea-orm with runtime-tokio-rustls needs a tokio runtime for connection pool management
+#[cfg(not(target_arch = "wasm32"))]
 static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().expect("failed to create the runtime"));
 
 /// Block on a future, spawning a new thread if already inside a Tokio runtime.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn block_on<F>(future: F) -> F::Output
 where
     F: std::future::Future + Send,
@@ -558,6 +557,30 @@ pub(crate) fn check_proxy(proxy_url: &str, rest_client: Option<&RestClient>) -> 
     })
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) async fn check_proxy_async(proxy_url: &str) -> Result<(), Error> {
+    use crate::api::proxy::WasmProxyClient;
+    let client = WasmProxyClient::new()?;
+    let mut err_details = s!("unable to connect to proxy");
+    if let Ok(server_info) = client.get_info(proxy_url).await {
+        if let Some(info) = server_info.result {
+            if info.protocol_version == *PROXY_PROTOCOL_VERSION {
+                return Ok(());
+            } else {
+                return Err(Error::InvalidProxyProtocol {
+                    version: info.protocol_version,
+                });
+            }
+        }
+        if let Some(err) = server_info.error {
+            err_details = err.message;
+        }
+    }
+    Err(Error::Proxy {
+        details: err_details,
+    })
+}
+
 #[cfg(all(
     not(target_arch = "wasm32"),
     any(feature = "electrum", feature = "esplora")
@@ -1031,15 +1054,101 @@ pub(crate) async fn fetch_esplora_broadcast_async(
     Ok(())
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) struct OffchainResolver<'a, 'cons, const TRANSFER: bool> {
     pub(crate) witness_id: RgbTxid,
     pub(crate) consignment: &'cons Consignment<TRANSFER>,
     pub(crate) fallback: &'a AnyResolver,
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER> {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        if witness_id != self.witness_id {
+            return self.fallback.resolve_witness(witness_id);
+        }
+        self.consignment
+            .bundled_witnesses()
+            .find(|bw| bw.witness_id() == witness_id)
+            .and_then(|p| p.pub_witness.tx().cloned())
+            .map_or_else(
+                || self.fallback.resolve_witness(witness_id),
+                |tx| Ok(WitnessStatus::Resolved(tx, WitnessOrd::Tentative)),
+            )
+    }
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        self.fallback.check_chain_net(chain_net)
+    }
+}
+
+/// Pre-fetched witness resolver for wasm32.
+///
+/// Resolves witness transactions from a cache populated from consignment bundles.
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) struct WasmResolver {
+    witness_cache: HashMap<RgbTxid, WitnessStatus>,
+    chain_net: ChainNet,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl WasmResolver {
+    /// Build resolver by pre-fetching all witness IDs from a consignment.
+    pub(crate) fn from_consignment<const TRANSFER: bool>(
+        consignment: &Consignment<TRANSFER>,
+        chain_net: ChainNet,
+    ) -> Self {
+        let mut cache = HashMap::new();
+        for bw in consignment.bundled_witnesses() {
+            let wid = bw.witness_id();
+            if let Some(tx) = bw.pub_witness.tx().cloned() {
+                cache.insert(wid, WitnessStatus::Resolved(tx, WitnessOrd::Tentative));
+            }
+        }
+        Self {
+            witness_cache: cache,
+            chain_net,
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl ResolveWitness for WasmResolver {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        self.witness_cache
+            .get(&witness_id)
+            .cloned()
+            .ok_or(WitnessResolverError::ResolverIssue(
+                Some(witness_id),
+                s!("witness not found in cache"),
+            ))
+    }
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        if self.chain_net == chain_net {
+            Ok(())
+        } else {
+            Err(WitnessResolverError::WrongChainNet)
+        }
+    }
+}
+
+/// Offchain resolver variant for wasm32.
+///
+/// Checks the consignment first for the specific witness ID, then falls back to WasmResolver.
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) struct OffchainResolverWasm<'a, 'cons, const TRANSFER: bool> {
+    pub(crate) witness_id: RgbTxid,
+    pub(crate) consignment: &'cons Consignment<TRANSFER>,
+    pub(crate) fallback: &'a WasmResolver,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl<const TRANSFER: bool> ResolveWitness for OffchainResolverWasm<'_, '_, TRANSFER> {
     fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
         if witness_id != self.witness_id {
             return self.fallback.resolve_witness(witness_id);

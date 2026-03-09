@@ -3,11 +3,12 @@
 
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::panic;
 use wasm_bindgen::prelude::*;
 
 use rgb_lib::Wallet;
-use rgb_lib::wallet::{Online, WalletData};
+use rgb_lib::wallet::{Online, Recipient, RefreshFilter, WalletData};
 
 #[wasm_bindgen(js_namespace = console)]
 extern "C" {
@@ -311,6 +312,119 @@ impl WasmWallet {
         let mut wallet = self.inner.borrow_mut();
         wallet
             .create_utxos_end(online, signed_psbt.to_string(), skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Send RGB assets (begin): prepare a PSBT. Returns the unsigned PSBT string.
+    ///
+    /// `recipient_map_js` is a JS object mapping asset IDs to arrays of Recipient objects.
+    pub async fn send_begin(
+        &self,
+        online_js: JsValue,
+        recipient_map_js: JsValue,
+        donation: bool,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<String, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let recipient_map: HashMap<String, Vec<Recipient>> =
+            serde_wasm_bindgen::from_value(recipient_map_js)
+                .map_err(|e| JsValue::from_str(&format!("Invalid recipient map: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .send_begin(online, recipient_map, donation, fee_rate, min_confirmations)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Send RGB assets (end): broadcast a signed PSBT. Returns an OperationResult JS object.
+    pub async fn send_end(
+        &self,
+        online_js: JsValue,
+        signed_psbt: &str,
+        skip_sync: bool,
+    ) -> Result<JsValue, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        let result = wallet
+            .send_end(online, signed_psbt.to_string(), skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Send BTC (begin): prepare a PSBT. Returns the unsigned PSBT string.
+    pub async fn send_btc_begin(
+        &self,
+        online_js: JsValue,
+        address: &str,
+        amount: u64,
+        fee_rate: u64,
+        skip_sync: bool,
+    ) -> Result<String, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .send_btc_begin(online, address.to_string(), amount, fee_rate, skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Send BTC (end): broadcast a signed PSBT. Returns the txid string.
+    pub async fn send_btc_end(
+        &self,
+        online_js: JsValue,
+        signed_psbt: &str,
+        skip_sync: bool,
+    ) -> Result<String, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .send_btc_end(online, signed_psbt.to_string(), skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Refresh pending transfers. Returns a RefreshResult JS object.
+    ///
+    /// `filter_js` is a JS array of RefreshFilter objects (or empty array for all).
+    pub async fn refresh(
+        &self,
+        online_js: JsValue,
+        asset_id: Option<String>,
+        filter_js: JsValue,
+        skip_sync: bool,
+    ) -> Result<JsValue, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let filter: Vec<RefreshFilter> = serde_wasm_bindgen::from_value(filter_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid filter: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        let result = wallet
+            .refresh(online, asset_id, filter, skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&result).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Fail pending transfers. Returns true if any transfers were failed.
+    pub async fn fail_transfers(
+        &self,
+        online_js: JsValue,
+        batch_transfer_idx: Option<i32>,
+        no_asset_only: bool,
+        skip_sync: bool,
+    ) -> Result<bool, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }

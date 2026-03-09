@@ -504,10 +504,7 @@ impl Wallet {
         Ok(())
     }
 
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        any(feature = "electrum", feature = "esplora")
-    ))]
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn save_new_asset_internal(
         &self,
         runtime: &RgbRuntime,
