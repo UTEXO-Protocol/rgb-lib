@@ -114,6 +114,8 @@ use std::{
 
 #[cfg(target_arch = "wasm32")]
 use crate::database::memory_db::ActiveValue;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::utils::block_on;
 use amplify::{Wrapper, bmap, confinement::Confined, s};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use base64::{Engine as _, engine::general_purpose};
@@ -169,8 +171,6 @@ use chacha20poly1305::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use file_format::FileFormat;
-#[cfg(not(target_arch = "wasm32"))]
-use futures::executor::block_on;
 use psrgbt::{RgbOutExt, RgbPsbtExt};
 use rand::{Rng, distr::Alphanumeric};
 #[cfg(not(target_arch = "wasm32"))]
@@ -257,8 +257,9 @@ use crate::database::{
     DbMedia, DbMediaActMod, DbPendingWitnessScriptActMod, DbToken, DbTokenActMod, DbTokenMedia,
     DbTokenMediaActMod, DbTransfer, DbTransferActMod, DbTransferTransportEndpoint,
     DbTransferTransportEndpointActMod, DbTransportEndpoint, DbTransportEndpointActMod, DbTxo,
-    DbTxoActMod, DbWalletTransactionActMod,
 };
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use crate::database::{DbTxoActMod, DbWalletTransactionActMod};
 #[cfg(feature = "electrum")]
 use crate::utils::INDEXER_BATCH_SIZE;
 #[cfg(feature = "esplora")]
