@@ -648,6 +648,17 @@ pub(crate) fn setup_logger<P: AsRef<Path>>(
     Ok((logger, async_guard))
 }
 
+pub(crate) fn setup_stdout_logger() -> Result<(Logger, AsyncGuard), Error> {
+    let decorator = PlainDecorator::new(std::io::stdout());
+    let drain = FullFormat::new(decorator)
+        .use_custom_timestamp(log_timestamp)
+        .use_file_location();
+    let (drain, async_guard) = slog_async::Async::new(drain.build().fuse()).build_with_guard();
+    let logger = Logger::root(drain.fuse(), o!());
+
+    Ok((logger, async_guard))
+}
+
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
 }

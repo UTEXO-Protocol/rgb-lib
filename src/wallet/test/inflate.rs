@@ -376,6 +376,7 @@ fn fail() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Nia, AssetSchema::Ifa],
+        disable_file_log: false,
     })
     .unwrap();
     let online_nia = wallet_nia
@@ -419,6 +420,7 @@ fn fail() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Nia],
+        disable_file_log: false,
     })
     .unwrap();
     let online_nia = wallet_nia

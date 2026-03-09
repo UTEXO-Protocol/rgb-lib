@@ -1006,7 +1006,7 @@ pub struct BlockTime {
 }
 
 /// The type of a transaction.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, PartialOrd, Ord)]
 pub enum TransactionType {
     /// Transaction used to perform an RGB send
     RgbSend,
@@ -1225,6 +1225,9 @@ pub struct WalletData {
     /// List of schemas the wallet should support (when issuing, sending and receiving). Empty list
     /// means the wallet should support all the schemas rgb-lib supports.
     pub supported_schemas: Vec<AssetSchema>,
+    /// Turn off writing logs to the file.
+    #[serde(default)]
+    pub disable_file_log: bool,
 }
 
 /// An RGB wallet.
@@ -1287,7 +1290,13 @@ impl Wallet {
             fs::create_dir(wallet_dir.join(ASSETS_DIR))?;
             fs::create_dir(wallet_dir.join(MEDIA_DIR))?;
         }
-        let (logger, _logger_guard) = setup_logger(&wallet_dir, None)?;
+
+        let (logger, _logger_guard) = if wallet_data.disable_file_log {
+            setup_logger(&wallet_dir, None)?
+        } else {
+            setup_stdout_logger()?
+        };
+
         info!(logger.clone(), "New wallet in '{:?}'", wallet_dir);
         let panic_logger = logger.clone();
         let prev_hook = panic::take_hook();
@@ -1369,7 +1378,9 @@ impl Wallet {
             .min_connections(0)
             .connect_timeout(Duration::from_secs(8))
             .idle_timeout(Duration::from_secs(8))
-            .max_lifetime(Duration::from_secs(8));
+            .max_lifetime(Duration::from_secs(8))
+            .sqlx_logging(true)
+            .sqlx_logging_level(log::LevelFilter::Debug);
         let db_cnn = block_on(Database::connect(opt));
         let connection = db_cnn.map_err(InternalError::from)?;
         block_on(Migrator::up(&connection, None)).map_err(InternalError::from)?;

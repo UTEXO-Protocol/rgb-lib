@@ -98,6 +98,7 @@ rgb-strict-encoding = { version = "=1.0.0", default-features = false, features =
     "bitcoin",
 ] }
 rgb-strict-types = { version = "=1.0.0", default-features = false }
+log = "0.4.29"
 
 [dev-dependencies]
 copy_dir = { version = "0.1.3", default-features = false }

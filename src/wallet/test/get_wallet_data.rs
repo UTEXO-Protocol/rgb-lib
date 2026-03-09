@@ -19,6 +19,7 @@ fn success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: Some(2),
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
 
@@ -50,6 +51,7 @@ fn success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
     let wallet_2_data = test_get_wallet_data(&wallet_2);
