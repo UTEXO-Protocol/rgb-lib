@@ -17,7 +17,6 @@ use vss_client::util::retry::{
 };
 
 pub(crate) const DEFAULT_VSS_SERVER_URL: &str = "http://localhost:8081/vss";
-pub(crate) const VSS_CHUNK_SIZE_BYTES: usize = 4 * 1024 * 1024;
 
 // Common VSS object keys used by rgb-lib backups.
 pub(crate) const VSS_KEY_DATA: &str = "backup/data";

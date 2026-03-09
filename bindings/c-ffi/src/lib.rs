@@ -194,6 +194,14 @@ pub extern "C" fn rgblib_get_asset_balance(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_get_asset_metadata(
+    wallet: &COpaqueStruct,
+    asset_id: *const c_char,
+) -> CResultString {
+    get_asset_metadata(wallet, asset_id).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_get_btc_balance(
     wallet: &COpaqueStruct,
     online: *const COpaqueStruct,

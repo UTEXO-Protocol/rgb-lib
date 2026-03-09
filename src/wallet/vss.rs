@@ -55,8 +55,10 @@ const BACKUP_KEY_LENGTH: usize = 32;
 const BACKUP_NONCE_LENGTH: usize = 19;
 const VSS_BACKUP_VERSION: u8 = 1;
 
-/// Default chunk size for large backups (4 MB)
-const VSS_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+/// Default chunk size for large backups
+/// Kept under the upstream vss-client-ng 10-second HTTP timeout
+/// so that each chunk PUT completes reliably
+pub(crate) const VSS_CHUNK_SIZE: usize = 1024 * 1024; // 1MB
 
 /// Key prefix for backup data
 const BACKUP_KEY_DATA: &str = "backup/data";
