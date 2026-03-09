@@ -527,6 +527,7 @@ pub(crate) struct OnlineData {
     id: u64,
     pub(crate) indexer_url: String,
     indexer: Indexer,
+    #[cfg(not(target_arch = "wasm32"))]
     resolver: AnyResolver,
 }
 
@@ -587,10 +588,6 @@ impl TryFrom<TransferStatus> for RefreshTransferStatus {
 impl Wallet {
     pub(crate) fn indexer(&self) -> &Indexer {
         &self.online_data.as_ref().unwrap().indexer
-    }
-
-    pub(crate) fn blockchain_resolver(&self) -> &AnyResolver {
-        &self.online_data.as_ref().unwrap().resolver
     }
 
     fn _check_fee_rate(&self, fee_rate: u64) -> Result<FeeRate, Error> {
@@ -799,6 +796,10 @@ impl Wallet {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Wallet {
+    pub(crate) fn blockchain_resolver(&self) -> &AnyResolver {
+        &self.online_data.as_ref().unwrap().resolver
+    }
+
     pub(crate) fn sync_db_txos(&mut self, full_scan: bool) -> Result<(), Error> {
         debug!(self.logger, "Syncing TXOs...");
 
@@ -4162,5 +4163,334 @@ impl Wallet {
             txid,
             batch_transfer_idx,
         })
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Wallet {
+    async fn _go_online_wasm(&self, indexer_url: String) -> Result<(Online, OnlineData), Error> {
+        let online_id = now().unix_timestamp_nanos() as u64;
+        let online = Online {
+            id: online_id,
+            indexer_url: indexer_url.clone(),
+        };
+        let indexer =
+            crate::utils::build_indexer(&indexer_url).ok_or_else(|| Error::InvalidIndexer {
+                details: s!("failed to build esplora async client"),
+            })?;
+        indexer
+            .block_hash(0)
+            .await
+            .map_err(|_| Error::InvalidIndexer {
+                details: s!("not a valid esplora server"),
+            })?;
+        indexer.populate_tx_cache(&self.bdk_wallet);
+        let online_data = OnlineData {
+            id: online.id,
+            indexer_url,
+            indexer,
+        };
+        Ok((online, online_data))
+    }
+
+    /// Return the existing or freshly generated set of wallet [`Online`] data (wasm32 async).
+    pub async fn go_online(
+        &mut self,
+        _skip_consistency_check: bool,
+        indexer_url: String,
+    ) -> Result<Online, Error> {
+        info!(self.logger, "Going online...");
+        let online = if let Some(online_data) = &self.online_data {
+            let online = Online {
+                id: online_data.id,
+                indexer_url,
+            };
+            if online_data.indexer_url != online.indexer_url {
+                let (online, online_data) = self._go_online_wasm(online.indexer_url).await?;
+                self.online_data = Some(online_data);
+                online
+            } else {
+                self.check_online(online.clone())?;
+                online
+            }
+        } else {
+            let (online, online_data) = self._go_online_wasm(indexer_url).await?;
+            self.online_data = Some(online_data);
+            online
+        };
+        info!(self.logger, "Go online completed");
+        Ok(online)
+    }
+
+    pub(crate) async fn sync_db_txos(&mut self, full_scan: bool) -> Result<(), Error> {
+        debug!(self.logger, "Syncing TXOs...");
+
+        let update: Update = if full_scan {
+            let request = self.bdk_wallet.start_full_scan();
+            self.indexer().full_scan(request).await?.into()
+        } else {
+            let request = self.bdk_wallet.start_sync_with_revealed_spks();
+            self.indexer().sync(request).await?.into()
+        };
+        self.bdk_wallet
+            .apply_update(update)
+            .map_err(|e| Error::FailedBdkSync {
+                details: e.to_string(),
+            })?;
+        self.bdk_wallet.persist(&mut self.bdk_database)?;
+
+        let db_txos = self.database.iter_txos()?;
+
+        let db_outpoints: HashSet<String> = db_txos
+            .clone()
+            .into_iter()
+            .filter(|t| !t.spent && t.exists)
+            .map(|u| u.outpoint().to_string())
+            .collect();
+        let bdk_utxos = self.bdk_wallet.list_unspent();
+        let external_bdk_utxos: Vec<LocalOutput> = bdk_utxos
+            .filter(|u| u.keychain == KeychainKind::External)
+            .collect();
+
+        let new_utxos: Vec<LocalOutput> = external_bdk_utxos
+            .clone()
+            .into_iter()
+            .filter(|u| !db_outpoints.contains(&u.outpoint.to_string()))
+            .collect();
+
+        let pending_witness_scripts: Vec<String> = self
+            .database
+            .iter_pending_witness_scripts()?
+            .into_iter()
+            .map(|s| s.script)
+            .collect();
+
+        for new_utxo in new_utxos.iter().cloned() {
+            let mut new_db_utxo: DbTxoActMod = new_utxo.clone().into();
+            if !pending_witness_scripts.is_empty() {
+                let pending_witness_script = new_utxo.txout.script_pubkey.to_hex_string();
+                if pending_witness_scripts.contains(&pending_witness_script) {
+                    new_db_utxo.pending_witness = ActiveValue::Set(true);
+                    self.database
+                        .del_pending_witness_script(pending_witness_script)?;
+                }
+            }
+            self.database.set_txo(new_db_utxo.clone())?;
+        }
+
+        debug!(self.logger, "Synced TXOs");
+
+        Ok(())
+    }
+
+    /// Sync the wallet and save new RGB UTXOs to the DB (wasm32 async).
+    pub async fn sync(&mut self, online: Online) -> Result<(), Error> {
+        info!(self.logger, "Syncing...");
+        self.check_online(online)?;
+        self.sync_db_txos(false).await?;
+        info!(self.logger, "Sync completed");
+        Ok(())
+    }
+
+    async fn _broadcast_tx(&self, tx: BdkTransaction) -> Result<BdkTransaction, Error> {
+        let txid = tx.compute_txid().to_string();
+        let indexer = self.indexer();
+        match indexer.broadcast(&tx).await {
+            Ok(_) => {
+                debug!(self.logger, "Broadcasted TX with ID '{}'", txid);
+                Ok(tx)
+            }
+            Err(e) => {
+                match e {
+                    #[cfg(feature = "esplora")]
+                    IndexerError::EsploraAsync(ref msg) => {
+                        if msg.contains("min relay fee not met") {
+                            return Err(Error::MinFeeNotMet { txid: txid.clone() });
+                        } else if msg.contains("Fee exceeds maximum configured") {
+                            return Err(Error::MaxFeeExceeded { txid: txid.clone() });
+                        }
+                    }
+                    _ => {}
+                }
+                if indexer.get_tx_confirmations(&txid).await?.is_none() {
+                    return Err(Error::FailedBroadcast {
+                        details: e.to_string(),
+                    });
+                }
+                Ok(tx)
+            }
+        }
+    }
+
+    async fn _broadcast_psbt(
+        &mut self,
+        signed_psbt: Psbt,
+        skip_sync: bool,
+    ) -> Result<BdkTransaction, Error> {
+        let tx = self
+            ._broadcast_tx(signed_psbt.extract_tx().map_err(InternalError::from)?)
+            .await?;
+
+        let internal_unspents_outpoints: Vec<(String, u32)> = self
+            .internal_unspents()
+            .map(|u| (u.outpoint.txid.to_string(), u.outpoint.vout))
+            .collect();
+
+        for input in tx.clone().input {
+            let txid = input.previous_output.txid.to_string();
+            let vout = input.previous_output.vout;
+            if internal_unspents_outpoints.contains(&(txid.clone(), vout)) {
+                continue;
+            }
+            let mut db_txo: DbTxoActMod = self
+                .database
+                .get_txo(&Outpoint { txid, vout })?
+                .expect("outpoint should be in the DB")
+                .into();
+            db_txo.spent = ActiveValue::Set(true);
+            self.database.update_txo(db_txo)?;
+        }
+
+        if !skip_sync {
+            self.sync_db_txos(false).await?;
+        }
+
+        Ok(tx)
+    }
+
+    /// Prepare a transaction to create new UTXOs for RGB allocations (wasm32 async).
+    ///
+    /// Signing of the returned PSBT needs to be carried out separately. The signed PSBT then needs
+    /// to be fed to the [`create_utxos_end`](Wallet::create_utxos_end) function.
+    ///
+    /// This doesn't require the wallet to have private keys.
+    ///
+    /// Returns a PSBT ready to be signed.
+    pub async fn create_utxos_begin(
+        &mut self,
+        online: Online,
+        up_to: bool,
+        num: Option<u8>,
+        size: Option<u32>,
+        fee_rate: u64,
+        skip_sync: bool,
+    ) -> Result<String, Error> {
+        info!(self.logger, "Creating UTXOs (begin)...");
+        self.check_online(online)?;
+        let fee_rate_checked = self._check_fee_rate(fee_rate)?;
+
+        if !skip_sync {
+            self.sync_db_txos(false).await?;
+        }
+
+        let unspent_txos = self.database.get_unspent_txos(vec![])?;
+        let unspents = self
+            .database
+            .get_rgb_allocations(unspent_txos, None, None, None, None)?;
+
+        let mut utxos_to_create = num.unwrap_or(UTXO_NUM);
+        if up_to {
+            let allocatable = self.get_available_allocations(unspents, &[], None)?.len() as u8;
+            if allocatable >= utxos_to_create {
+                return Err(Error::AllocationsAlreadyAvailable);
+            }
+            utxos_to_create -= allocatable
+        }
+        debug!(self.logger, "Will try to create {} UTXOs", utxos_to_create);
+
+        let inputs: Vec<BdkOutPoint> = self.internal_unspents().map(|u| u.outpoint).collect();
+        let inputs: &[BdkOutPoint] = &inputs;
+        let usable_btc_amount = self.get_uncolorable_btc_sum()?;
+        let utxo_size = size.unwrap_or(UTXO_SIZE);
+        if utxo_size == 0 {
+            return Err(Error::InvalidAmountZero);
+        }
+        let possible_utxos = usable_btc_amount / utxo_size as u64;
+        let max_possible_utxos: u8 = if possible_utxos > u8::MAX as u64 {
+            u8::MAX
+        } else {
+            possible_utxos as u8
+        };
+        let mut btc_needed: u64 = (utxo_size as u64 * utxos_to_create as u64) + 1000;
+        let mut btc_available: u64 = 0;
+        let num_try_creating = min(utxos_to_create, max_possible_utxos);
+        let mut addresses = vec![];
+        for _i in 0..num_try_creating {
+            addresses.push(self.get_new_address()?.script_pubkey());
+        }
+        while !addresses.is_empty() {
+            match self._create_split_tx(inputs, &addresses, utxo_size, fee_rate_checked) {
+                Ok(psbt) => {
+                    info!(self.logger, "Create UTXOs (begin) completed");
+                    return Ok(psbt.to_string());
+                }
+                Err(e) => {
+                    (btc_needed, btc_available) = match e {
+                        bdk_wallet::error::CreateTxError::CoinSelection(InsufficientFunds {
+                            needed,
+                            available,
+                        }) => (needed.to_sat(), available.to_sat()),
+                        bdk_wallet::error::CreateTxError::OutputBelowDustLimit(_) => {
+                            return Err(Error::OutputBelowDustLimit);
+                        }
+                        _ => {
+                            return Err(Error::Internal {
+                                details: e.to_string(),
+                            });
+                        }
+                    };
+                    addresses.pop()
+                }
+            };
+        }
+        Err(Error::InsufficientBitcoins {
+            needed: btc_needed,
+            available: btc_available,
+        })
+    }
+
+    /// Broadcast the provided PSBT to create new UTXOs (wasm32 async).
+    ///
+    /// The provided PSBT, prepared with the [`create_utxos_begin`](Wallet::create_utxos_begin)
+    /// function, needs to have already been signed.
+    ///
+    /// This doesn't require the wallet to have private keys.
+    ///
+    /// Returns the number of created UTXOs, if `skip_sync` is set to true this will be 0.
+    pub async fn create_utxos_end(
+        &mut self,
+        online: Online,
+        signed_psbt: String,
+        skip_sync: bool,
+    ) -> Result<u8, Error> {
+        info!(self.logger, "Creating UTXOs (end)...");
+        self.check_online(online)?;
+
+        let signed_psbt = Psbt::from_str(&signed_psbt)?;
+        let tx = self._broadcast_psbt(signed_psbt, skip_sync).await?;
+
+        self.database
+            .set_wallet_transaction(DbWalletTransactionActMod {
+                txid: ActiveValue::Set(tx.compute_txid().to_string()),
+                r#type: ActiveValue::Set(WalletTransactionType::CreateUtxos),
+                ..Default::default()
+            })?;
+
+        let mut num_utxos_created = 0;
+        if !skip_sync {
+            let bdk_utxos: Vec<LocalOutput> = self.bdk_wallet.list_unspent().collect();
+            let txid = tx.compute_txid();
+            for utxo in bdk_utxos.into_iter() {
+                if utxo.outpoint.txid == txid && utxo.keychain == KeychainKind::External {
+                    num_utxos_created += 1
+                }
+            }
+        }
+
+        self.update_backup_info(false)?;
+        self.trigger_auto_backup();
+
+        info!(self.logger, "Create UTXOs (end) completed");
+        Ok(num_utxos_created)
     }
 }

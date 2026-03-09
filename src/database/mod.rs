@@ -222,7 +222,6 @@ impl From<DbTxo> for BdkOutPoint {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl From<LocalOutput> for DbTxoActMod {
     fn from(x: LocalOutput) -> DbTxoActMod {
         DbTxoActMod {

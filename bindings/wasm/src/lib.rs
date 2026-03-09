@@ -1,10 +1,13 @@
+// RefCell borrows held across .await are safe on wasm32 (single-threaded runtime).
+#![allow(clippy::await_holding_refcell_ref)]
+
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::panic;
 use wasm_bindgen::prelude::*;
 
 use rgb_lib::Wallet;
-use rgb_lib::wallet::WalletData;
+use rgb_lib::wallet::{Online, WalletData};
 
 #[wasm_bindgen(js_namespace = console)]
 extern "C" {
@@ -247,6 +250,68 @@ impl WasmWallet {
         self.inner
             .borrow()
             .delete_transfers(batch_transfer_idx, no_asset_only)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Go online: connect to an indexer. Returns Online data as a JS object.
+    pub async fn go_online(
+        &self,
+        skip_consistency_check: bool,
+        indexer_url: &str,
+    ) -> Result<JsValue, JsValue> {
+        let mut wallet = self.inner.borrow_mut();
+        let online = wallet
+            .go_online(skip_consistency_check, indexer_url.to_string())
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&online).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Sync the wallet with the indexer.
+    pub async fn sync(&self, online_js: JsValue) -> Result<(), JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .sync(online)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Create UTXOs (begin): prepare a PSBT to create new UTXOs for RGB allocations.
+    /// Returns the unsigned PSBT string.
+    pub async fn create_utxos_begin(
+        &self,
+        online_js: JsValue,
+        up_to: bool,
+        num: Option<u8>,
+        size: Option<u32>,
+        fee_rate: u64,
+        skip_sync: bool,
+    ) -> Result<String, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .create_utxos_begin(online, up_to, num, size, fee_rate, skip_sync)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Create UTXOs (end): broadcast a signed PSBT to create new UTXOs.
+    /// Returns the number of created UTXOs.
+    pub async fn create_utxos_end(
+        &self,
+        online_js: JsValue,
+        signed_psbt: &str,
+        skip_sync: bool,
+    ) -> Result<u8, JsValue> {
+        let online: Online = serde_wasm_bindgen::from_value(online_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid Online object: {e}")))?;
+        let mut wallet = self.inner.borrow_mut();
+        wallet
+            .create_utxos_end(online, signed_psbt.to_string(), skip_sync)
+            .await
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }

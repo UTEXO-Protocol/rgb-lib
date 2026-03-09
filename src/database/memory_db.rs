@@ -300,6 +300,20 @@ pub struct DbTxoActMod {
     pub pending_witness: ActiveValue<bool>,
 }
 
+impl From<DbTxo> for DbTxoActMod {
+    fn from(x: DbTxo) -> DbTxoActMod {
+        DbTxoActMod {
+            idx: ActiveValue::Unchanged(x.idx),
+            txid: ActiveValue::Unchanged(x.txid),
+            vout: ActiveValue::Unchanged(x.vout),
+            btc_amount: ActiveValue::Unchanged(x.btc_amount),
+            spent: ActiveValue::Unchanged(x.spent),
+            exists: ActiveValue::Unchanged(x.exists),
+            pending_witness: ActiveValue::Unchanged(x.pending_witness),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DbWalletTransaction {
     pub idx: i32,
