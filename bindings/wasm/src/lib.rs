@@ -96,6 +96,41 @@ impl WasmWallet {
         serde_wasm_bindgen::to_value(&asset).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
+    /// Issue a new IFA (Inflatable Fungible Asset).
+    ///
+    /// `amounts_js` is a JS array of u64 values.
+    /// `inflation_amounts_js` is a JS array of u64 values for inflation allowances.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_asset_ifa(
+        &self,
+        ticker: &str,
+        name: &str,
+        precision: u8,
+        amounts_js: JsValue,
+        inflation_amounts_js: JsValue,
+        replace_rights_num: u8,
+        reject_list_url: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let amounts: Vec<u64> = serde_wasm_bindgen::from_value(amounts_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid amounts array: {e}")))?;
+        let inflation_amounts: Vec<u64> = serde_wasm_bindgen::from_value(inflation_amounts_js)
+            .map_err(|e| JsValue::from_str(&format!("Invalid inflation_amounts array: {e}")))?;
+        let asset = self
+            .inner
+            .borrow()
+            .issue_asset_ifa(
+                ticker.to_string(),
+                name.to_string(),
+                precision,
+                amounts,
+                inflation_amounts,
+                replace_rights_num,
+                reject_list_url,
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        serde_wasm_bindgen::to_value(&asset).map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
     /// Return the BTC balance. Always skips sync on wasm32.
     pub fn get_btc_balance(&self) -> Result<JsValue, JsValue> {
         let balance = self

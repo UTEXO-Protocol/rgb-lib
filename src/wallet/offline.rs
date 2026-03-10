@@ -2082,6 +2082,241 @@ impl Wallet {
         Ok(asset)
     }
 
+    /// Issue a new RGB IFA asset with the provided `ticker`, `name`, `precision`, `amounts`,
+    /// `inflation_amounts` and `replace_rights_num`, then return it.
+    ///
+    /// At least 1 amount needs to be provided and the sum of all amounts cannot exceed the maximum
+    /// `u64` value.
+    ///
+    /// If `amounts` contains more than 1 element, each one will be issued as a separate allocation
+    /// for the same asset (on a separate UTXO that needs to be already available).
+    ///
+    /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
+    /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// The `replace_rights_num` can be set to 0. If provided it represents the number of replace
+    /// rights to create.
+    pub fn issue_asset_ifa(
+        &self,
+        ticker: String,
+        name: String,
+        precision: u8,
+        amounts: Vec<u64>,
+        inflation_amounts: Vec<u64>,
+        replace_rights_num: u8,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetIFA, Error> {
+        info!(
+            self.logger,
+            "Issuing IFA asset with ticker '{}' name '{}' precision '{}' amounts '{:?}' inflation amounts {:?} replace rights num {}...",
+            ticker,
+            name,
+            precision,
+            amounts,
+            inflation_amounts,
+            replace_rights_num,
+        );
+
+        let asset_schema = &AssetSchema::Ifa;
+
+        self.check_schema_support(asset_schema)?;
+
+        let settled = self._get_total_issue_amount(&amounts, true)?;
+        let inflation_amt = self.get_total_inflation_amount(&inflation_amounts, settled)?;
+        if settled == 0 && inflation_amt == 0 {
+            return Err(Error::NoIssuanceAmounts);
+        }
+        let max_supply = settled + inflation_amt;
+
+        let db_data = self.database.get_db_data(false)?;
+
+        let mut unspents: Vec<LocalUnspent> = self.database.get_rgb_allocations(
+            self.database.get_unspent_txos(db_data.txos.clone())?,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        unspents.retain(|u| {
+            !(u.rgb_allocations
+                .iter()
+                .any(|a| !a.incoming && a.status.waiting_counterparty()))
+        });
+
+        let created_at = now().unix_timestamp();
+        let text = RicardianContract::default();
+        #[cfg(test)]
+        let terms = mock_asset_terms(self, text, None);
+        #[cfg(not(test))]
+        let terms = self.new_asset_terms(text, None);
+        #[cfg(test)]
+        let details = mock_contract_details(self);
+        #[cfg(not(test))]
+        let details = None;
+        let spec = AssetSpec {
+            ticker: self._check_ticker(ticker.clone())?,
+            name: self._check_name(name.clone())?,
+            details,
+            precision: self._check_precision(precision)?,
+        };
+
+        let mut runtime = self.rgb_runtime()?;
+        let mut builder = ContractBuilder::with(
+            Identity::default(),
+            InflatableFungibleAsset::schema(),
+            InflatableFungibleAsset::types(),
+            InflatableFungibleAsset::scripts(),
+            self.chain_net(),
+        )
+        .add_global_state("spec", spec.clone())
+        .expect("invalid spec")
+        .add_global_state("terms", terms)
+        .expect("invalid terms")
+        .add_global_state(RGB_GLOBAL_ISSUED_SUPPLY, Amount::from(settled))
+        .expect("invalid issuedSupply")
+        .add_global_state("maxSupply", Amount::from(max_supply))
+        .expect("invalid maxSupply");
+        if let Some(reject_list_url) = &reject_list_url {
+            builder = builder
+                .add_global_state(
+                    RGB_GLOBAL_REJECT_LIST_URL,
+                    self._check_reject_list_url(reject_list_url.clone())?,
+                )
+                .expect("invalid rejectListUrl");
+        }
+
+        let mut issue_utxos: HashMap<DbTxo, u64> = HashMap::new();
+        let mut exclude_outpoints: Vec<Outpoint> = vec![];
+        for amount in &amounts {
+            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, None)?;
+            exclude_outpoints.push(utxo.outpoint());
+            issue_utxos.insert(utxo.clone(), *amount);
+
+            builder = builder
+                .add_fungible_state(RGB_STATE_ASSET_OWNER, self.get_builder_seal(utxo), *amount)
+                .expect("invalid global state data");
+        }
+        debug!(self.logger, "Issuing on UTXOs: {issue_utxos:?}");
+
+        let mut inflation_utxos: HashMap<DbTxo, u64> = HashMap::new();
+        for amount in &inflation_amounts {
+            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, Some(0))?;
+            exclude_outpoints.push(utxo.outpoint());
+            inflation_utxos.insert(utxo.clone(), *amount);
+
+            builder = builder
+                .add_fungible_state(
+                    RGB_STATE_INFLATION_ALLOWANCE,
+                    self.get_builder_seal(utxo),
+                    *amount,
+                )
+                .expect("invalid global state data");
+        }
+        debug!(
+            self.logger,
+            "Assigning inflation rights: {inflation_utxos:?}"
+        );
+
+        let mut replace_utxos: HashSet<DbTxo> = HashSet::new();
+        for _ in 0..replace_rights_num {
+            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, Some(0))?;
+            exclude_outpoints.push(utxo.outpoint());
+            replace_utxos.insert(utxo.clone());
+
+            builder = builder
+                .add_rights(RGB_STATE_REPLACE_RIGHT, self.get_builder_seal(utxo))
+                .expect("invalid global state data");
+        }
+        debug!(self.logger, "Assigning replace rights: {replace_utxos:?}");
+
+        let validated_contract = builder.issue_contract().expect("failure issuing contract");
+        let asset_id = validated_contract.contract_id().to_string();
+        runtime
+            .import_contract(validated_contract.clone(), &DumbResolver)
+            .expect("failure importing issued contract");
+        // Persist consignment to disk on native; skipped on wasm32 (in-memory only).
+        #[cfg(not(target_arch = "wasm32"))]
+        validated_contract.save_file(self._get_issue_consignment_path(&asset_id))?;
+
+        let asset_data = LocalAssetData {
+            name,
+            precision,
+            ticker: Some(ticker),
+            details: spec.details().map(|d| d.to_string()),
+            media_idx: None,
+            initial_supply: settled,
+            max_supply: Some(max_supply),
+            known_circulating_supply: Some(settled),
+            reject_list_url,
+        };
+        let asset = self.add_asset_to_db(
+            asset_id.clone(),
+            asset_schema,
+            Some(created_at),
+            created_at,
+            asset_data,
+        )?;
+        let batch_transfer = DbBatchTransferActMod {
+            status: ActiveValue::Set(TransferStatus::Settled),
+            expiration: ActiveValue::Set(None),
+            created_at: ActiveValue::Set(created_at),
+            min_confirmations: ActiveValue::Set(0),
+            ..Default::default()
+        };
+        let batch_transfer_idx = self.database.set_batch_transfer(batch_transfer)?;
+        let asset_transfer = DbAssetTransferActMod {
+            user_driven: ActiveValue::Set(true),
+            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
+            asset_id: ActiveValue::Set(Some(asset_id)),
+            ..Default::default()
+        };
+        let asset_transfer_idx = self.database.set_asset_transfer(asset_transfer)?;
+        let transfer = DbTransferActMod {
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            incoming: ActiveValue::Set(true),
+            ..Default::default()
+        };
+        self.database.set_transfer(transfer)?;
+        for (utxo, amount) in issue_utxos {
+            let db_coloring = DbColoringActMod {
+                txo_idx: ActiveValue::Set(utxo.idx),
+                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+                r#type: ActiveValue::Set(ColoringType::Issue),
+                assignment: ActiveValue::Set(Assignment::Fungible(amount)),
+                ..Default::default()
+            };
+            self.database.set_coloring(db_coloring)?;
+        }
+        for (utxo, amount) in inflation_utxos {
+            let db_coloring = DbColoringActMod {
+                txo_idx: ActiveValue::Set(utxo.idx),
+                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+                r#type: ActiveValue::Set(ColoringType::Issue),
+                assignment: ActiveValue::Set(Assignment::InflationRight(amount)),
+                ..Default::default()
+            };
+            self.database.set_coloring(db_coloring)?;
+        }
+        for utxo in replace_utxos {
+            let db_coloring = DbColoringActMod {
+                txo_idx: ActiveValue::Set(utxo.idx),
+                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+                r#type: ActiveValue::Set(ColoringType::Issue),
+                assignment: ActiveValue::Set(Assignment::ReplaceRight),
+                ..Default::default()
+            };
+            self.database.set_coloring(db_coloring)?;
+        }
+
+        let asset = AssetIFA::get_asset_details(self, &asset, None, None, None, None, None, None)?;
+
+        self.update_backup_info(false)?;
+        self.trigger_auto_backup();
+
+        info!(self.logger, "Issue asset IFA completed");
+        Ok(asset)
+    }
+
     /// Finalize a PSBT, optionally providing BDK sign options to tweak the behavior of the
     /// finalizer.
     pub fn finalize_psbt(
@@ -3518,239 +3753,6 @@ impl Wallet {
         self.trigger_auto_backup();
 
         info!(self.logger, "Issue asset CFA completed");
-        Ok(asset)
-    }
-
-    /// Issue a new RGB IFA asset with the provided `ticker`, `name`, `precision`, `amounts`,
-    /// `inflation_amounts` and `replace_rights_num`, then return it.
-    ///
-    /// At least 1 amount needs to be provided and the sum of all amounts cannot exceed the maximum
-    /// `u64` value.
-    ///
-    /// If `amounts` contains more than 1 element, each one will be issued as a separate allocation
-    /// for the same asset (on a separate UTXO that needs to be already available).
-    ///
-    /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
-    /// `amounts` cannot exceed the maximum `u64` value.
-    ///
-    /// The `replace_rights_num` can be set to 0. If provided it represents the number of replace
-    /// rights to create.
-    pub fn issue_asset_ifa(
-        &self,
-        ticker: String,
-        name: String,
-        precision: u8,
-        amounts: Vec<u64>,
-        inflation_amounts: Vec<u64>,
-        replace_rights_num: u8,
-        reject_list_url: Option<String>,
-    ) -> Result<AssetIFA, Error> {
-        info!(
-            self.logger,
-            "Issuing IFA asset with ticker '{}' name '{}' precision '{}' amounts '{:?}' inflation amounts {:?} replace rights num {}...",
-            ticker,
-            name,
-            precision,
-            amounts,
-            inflation_amounts,
-            replace_rights_num,
-        );
-
-        let asset_schema = &AssetSchema::Ifa;
-
-        self.check_schema_support(asset_schema)?;
-
-        let settled = self._get_total_issue_amount(&amounts, true)?;
-        let inflation_amt = self.get_total_inflation_amount(&inflation_amounts, settled)?;
-        if settled == 0 && inflation_amt == 0 {
-            return Err(Error::NoIssuanceAmounts);
-        }
-        let max_supply = settled + inflation_amt;
-
-        let db_data = self.database.get_db_data(false)?;
-
-        let mut unspents: Vec<LocalUnspent> = self.database.get_rgb_allocations(
-            self.database.get_unspent_txos(db_data.txos.clone())?,
-            None,
-            None,
-            None,
-            None,
-        )?;
-        unspents.retain(|u| {
-            !(u.rgb_allocations
-                .iter()
-                .any(|a| !a.incoming && a.status.waiting_counterparty()))
-        });
-
-        let created_at = now().unix_timestamp();
-        let text = RicardianContract::default();
-        #[cfg(test)]
-        let terms = mock_asset_terms(self, text, None);
-        #[cfg(not(test))]
-        let terms = self.new_asset_terms(text, None);
-        #[cfg(test)]
-        let details = mock_contract_details(self);
-        #[cfg(not(test))]
-        let details = None;
-        let spec = AssetSpec {
-            ticker: self._check_ticker(ticker.clone())?,
-            name: self._check_name(name.clone())?,
-            details,
-            precision: self._check_precision(precision)?,
-        };
-
-        let mut runtime = self.rgb_runtime()?;
-        let mut builder = ContractBuilder::with(
-            Identity::default(),
-            InflatableFungibleAsset::schema(),
-            InflatableFungibleAsset::types(),
-            InflatableFungibleAsset::scripts(),
-            self.chain_net(),
-        )
-        .add_global_state("spec", spec.clone())
-        .expect("invalid spec")
-        .add_global_state("terms", terms)
-        .expect("invalid terms")
-        .add_global_state(RGB_GLOBAL_ISSUED_SUPPLY, Amount::from(settled))
-        .expect("invalid issuedSupply")
-        .add_global_state("maxSupply", Amount::from(max_supply))
-        .expect("invalid maxSupply");
-        if let Some(reject_list_url) = &reject_list_url {
-            builder = builder
-                .add_global_state(
-                    RGB_GLOBAL_REJECT_LIST_URL,
-                    self._check_reject_list_url(reject_list_url.clone())?,
-                )
-                .expect("invalid rejectListUrl");
-        }
-
-        let mut issue_utxos: HashMap<DbTxo, u64> = HashMap::new();
-        let mut exclude_outpoints: Vec<Outpoint> = vec![];
-        for amount in &amounts {
-            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, None)?;
-            exclude_outpoints.push(utxo.outpoint());
-            issue_utxos.insert(utxo.clone(), *amount);
-
-            builder = builder
-                .add_fungible_state(RGB_STATE_ASSET_OWNER, self.get_builder_seal(utxo), *amount)
-                .expect("invalid global state data");
-        }
-        debug!(self.logger, "Issuing on UTXOs: {issue_utxos:?}");
-
-        let mut inflation_utxos: HashMap<DbTxo, u64> = HashMap::new();
-        for amount in &inflation_amounts {
-            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, Some(0))?;
-            exclude_outpoints.push(utxo.outpoint());
-            inflation_utxos.insert(utxo.clone(), *amount);
-
-            builder = builder
-                .add_fungible_state(
-                    RGB_STATE_INFLATION_ALLOWANCE,
-                    self.get_builder_seal(utxo),
-                    *amount,
-                )
-                .expect("invalid global state data");
-        }
-        debug!(
-            self.logger,
-            "Assigning inflation rights: {inflation_utxos:?}"
-        );
-
-        let mut replace_utxos: HashSet<DbTxo> = HashSet::new();
-        for _ in 0..replace_rights_num {
-            let utxo = self.get_utxo(&exclude_outpoints, Some(&unspents), false, Some(0))?;
-            exclude_outpoints.push(utxo.outpoint());
-            replace_utxos.insert(utxo.clone());
-
-            builder = builder
-                .add_rights(RGB_STATE_REPLACE_RIGHT, self.get_builder_seal(utxo))
-                .expect("invalid global state data");
-        }
-        debug!(self.logger, "Assigning replace rights: {replace_utxos:?}");
-
-        let validated_contract = builder.issue_contract().expect("failure issuing contract");
-        let asset_id = validated_contract.contract_id().to_string();
-        runtime
-            .import_contract(validated_contract.clone(), &DumbResolver)
-            .expect("failure importing issued contract");
-        validated_contract.save_file(self._get_issue_consignment_path(&asset_id))?;
-
-        let asset_data = LocalAssetData {
-            name,
-            precision,
-            ticker: Some(ticker),
-            details: spec.details().map(|d| d.to_string()),
-            media_idx: None,
-            initial_supply: settled,
-            max_supply: Some(max_supply),
-            known_circulating_supply: Some(settled),
-            reject_list_url,
-        };
-        let asset = self.add_asset_to_db(
-            asset_id.clone(),
-            asset_schema,
-            Some(created_at),
-            created_at,
-            asset_data,
-        )?;
-        let batch_transfer = DbBatchTransferActMod {
-            status: ActiveValue::Set(TransferStatus::Settled),
-            expiration: ActiveValue::Set(None),
-            created_at: ActiveValue::Set(created_at),
-            min_confirmations: ActiveValue::Set(0),
-            ..Default::default()
-        };
-        let batch_transfer_idx = self.database.set_batch_transfer(batch_transfer)?;
-        let asset_transfer = DbAssetTransferActMod {
-            user_driven: ActiveValue::Set(true),
-            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
-            asset_id: ActiveValue::Set(Some(asset_id)),
-            ..Default::default()
-        };
-        let asset_transfer_idx = self.database.set_asset_transfer(asset_transfer)?;
-        let transfer = DbTransferActMod {
-            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-            incoming: ActiveValue::Set(true),
-            ..Default::default()
-        };
-        self.database.set_transfer(transfer)?;
-        for (utxo, amount) in issue_utxos {
-            let db_coloring = DbColoringActMod {
-                txo_idx: ActiveValue::Set(utxo.idx),
-                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-                r#type: ActiveValue::Set(ColoringType::Issue),
-                assignment: ActiveValue::Set(Assignment::Fungible(amount)),
-                ..Default::default()
-            };
-            self.database.set_coloring(db_coloring)?;
-        }
-        for (utxo, amount) in inflation_utxos {
-            let db_coloring = DbColoringActMod {
-                txo_idx: ActiveValue::Set(utxo.idx),
-                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-                r#type: ActiveValue::Set(ColoringType::Issue),
-                assignment: ActiveValue::Set(Assignment::InflationRight(amount)),
-                ..Default::default()
-            };
-            self.database.set_coloring(db_coloring)?;
-        }
-        for utxo in replace_utxos {
-            let db_coloring = DbColoringActMod {
-                txo_idx: ActiveValue::Set(utxo.idx),
-                asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-                r#type: ActiveValue::Set(ColoringType::Issue),
-                assignment: ActiveValue::Set(Assignment::ReplaceRight),
-                ..Default::default()
-            };
-            self.database.set_coloring(db_coloring)?;
-        }
-
-        let asset = AssetIFA::get_asset_details(self, &asset, None, None, None, None, None, None)?;
-
-        self.update_backup_info(false)?;
-        self.trigger_auto_backup();
-
-        info!(self.logger, "Issue asset IFA completed");
         Ok(asset)
     }
 

@@ -248,6 +248,51 @@
     </div>
   </div>
 
+  <!-- Issue IFA Asset -->
+  <div class="section">
+    <h2>Issue IFA Asset</h2>
+    <p class="hint">
+      Issues an Inflatable Fungible Asset on the wallet. Requires a wallet to be created first and UTXOs to be available.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="ifa-ticker">Ticker</label>
+        <input id="ifa-ticker" type="text" value="TIFA" />
+      </div>
+      <div>
+        <label for="ifa-name">Name</label>
+        <input id="ifa-name" type="text" value="Test IFA" />
+      </div>
+      <div>
+        <label for="ifa-precision">Precision</label>
+        <input id="ifa-precision" type="number" value="0" min="0" max="18" />
+      </div>
+    </div>
+    <div>
+      <label for="ifa-amounts">Amounts (comma-separated)</label>
+      <input id="ifa-amounts" type="text" value="1000" />
+    </div>
+    <div>
+      <label for="ifa-inflation-amounts">Inflation Amounts (comma-separated)</label>
+      <input id="ifa-inflation-amounts" type="text" value="500" />
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="ifa-replace-rights-num">Replace Rights Num</label>
+        <input id="ifa-replace-rights-num" type="number" value="1" min="0" max="255" />
+      </div>
+      <div>
+        <label for="ifa-reject-list-url">Reject List URL (optional)</label>
+        <input id="ifa-reject-list-url" type="text" value="" placeholder="https://..." />
+      </div>
+    </div>
+    <button id="btn-issue-ifa" disabled>Issue IFA</button>
+    <div class="output" id="ifa-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('ifa-result')">Copy</button></div>
+      <pre id="ifa-result"></pre>
+    </div>
+  </div>
+
   <!-- Wallet State (read-only operations) -->
   <div class="section">
     <h2>Wallet State</h2>
@@ -763,6 +808,27 @@
         showJson('nia-output', 'nia-result', asset);
       } catch (e) {
         showError('nia-output', 'nia-result', 'Error issuing NIA: ', e);
+      }
+    });
+
+    // --- Issue IFA Asset ---
+
+    document.getElementById('btn-issue-ifa').addEventListener('click', () => {
+      if (!requireWallet('ifa-output', 'ifa-result')) return;
+      const ticker = document.getElementById('ifa-ticker').value.trim();
+      const name = document.getElementById('ifa-name').value.trim();
+      const precision = parseInt(document.getElementById('ifa-precision').value, 10);
+      const amountsStr = document.getElementById('ifa-amounts').value.trim();
+      const amounts = amountsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const inflationStr = document.getElementById('ifa-inflation-amounts').value.trim();
+      const inflationAmounts = inflationStr ? inflationStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)) : [];
+      const replaceRightsNum = parseInt(document.getElementById('ifa-replace-rights-num').value, 10);
+      const rejectListUrl = document.getElementById('ifa-reject-list-url').value.trim() || undefined;
+      try {
+        const asset = currentWallet.issue_asset_ifa(ticker, name, precision, amounts, inflationAmounts, replaceRightsNum, rejectListUrl);
+        showJson('ifa-output', 'ifa-result', asset);
+      } catch (e) {
+        showError('ifa-output', 'ifa-result', 'Error issuing IFA: ', e);
       }
     });
 
