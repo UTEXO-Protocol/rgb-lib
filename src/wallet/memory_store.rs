@@ -4,9 +4,11 @@
 use super::*;
 use bdk_core::Merge;
 use bdk_wallet::WalletPersister;
+use serde::{Deserialize, Serialize};
 
 /// In-memory store for BDK ChangeSet. Implements WalletPersister without file I/O.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(bound = "C: Serialize + for<'a> Deserialize<'a>")]
 pub(crate) struct MemoryStore<C> {
     data: Option<C>,
 }
@@ -17,6 +19,16 @@ where
 {
     pub(crate) fn new() -> Self {
         Self { data: None }
+    }
+}
+
+impl<C> MemoryStore<C> {
+    pub(crate) fn get_data(&self) -> &Option<C> {
+        &self.data
+    }
+
+    pub(crate) fn set_data(&mut self, data: Option<C>) {
+        self.data = data;
     }
 }
 

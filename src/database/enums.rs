@@ -130,7 +130,7 @@ impl From<AssetSchema> for SchemaId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     derive(EnumIter, DeriveActiveEnum),
@@ -288,7 +288,7 @@ impl TransferStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(
     not(target_arch = "wasm32"),
     derive(EnumIter, DeriveActiveEnum),

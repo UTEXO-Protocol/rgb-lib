@@ -70,6 +70,33 @@ impl WasmWallet {
         })
     }
 
+    /// Create a new RGB wallet with IndexedDB state restoration.
+    ///
+    /// Like `new()`, but asynchronously checks IndexedDB for a previously saved
+    /// snapshot and restores it, so wallet state survives page refreshes.
+    pub async fn create(wallet_data_json: &str) -> Result<WasmWallet, JsValue> {
+        let wd: WalletData = serde_json::from_str(wallet_data_json)
+            .map_err(|e| JsValue::from_str(&format!("Invalid WalletData JSON: {e}")))?;
+        let mut wallet = Wallet::new(wd).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let idb_key = wallet.idb_key();
+        match rgb_lib::wallet::idb_store::load_snapshot(&idb_key).await {
+            Ok(Some(snapshot)) => {
+                wallet
+                    .restore_from_snapshot(snapshot)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                web_sys::console::warn_1(
+                    &format!("IDB load warning (continuing fresh): {e}").into(),
+                );
+            }
+        }
+        Ok(WasmWallet {
+            inner: RefCell::new(wallet),
+        })
+    }
+
     /// Return the WalletData as a JS object.
     pub fn get_wallet_data(&self) -> Result<JsValue, JsValue> {
         let wd = self.inner.borrow().get_wallet_data();

@@ -1283,6 +1283,8 @@ pub struct Wallet {
     pub(crate) vss_client: Option<Arc<super::vss::VssBackupClient>>,
     #[cfg(feature = "vss")]
     pub(crate) auto_backup_in_progress: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) idb_save_in_progress: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Wallet {
@@ -1462,6 +1464,8 @@ impl Wallet {
             vss_client: None,
             #[cfg(feature = "vss")]
             auto_backup_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            #[cfg(target_arch = "wasm32")]
+            idb_save_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -3824,7 +3828,7 @@ impl Wallet {
     }
 }
 
-/// No-ops on wasm32: backup.rs module is gated out and in-memory data is volatile.
+/// IndexedDB persistence on wasm32: save wallet state after mutations.
 #[cfg(target_arch = "wasm32")]
 impl Wallet {
     pub(crate) fn update_backup_info(
@@ -3834,5 +3838,110 @@ impl Wallet {
         Ok(None)
     }
 
-    pub(crate) fn trigger_auto_backup(&self) {}
+    /// Returns the IndexedDB key for this wallet (derived from wallet_dir).
+    pub fn idb_key(&self) -> String {
+        self.wallet_dir.to_string_lossy().to_string()
+    }
+
+    /// Trigger an async save of wallet state to IndexedDB.
+    pub(crate) fn trigger_auto_backup(&self) {
+        self.save_to_idb();
+    }
+
+    /// Save current wallet state to IndexedDB asynchronously via spawn_local.
+    fn save_to_idb(&self) {
+        use std::sync::atomic::Ordering;
+
+        // Debounce: skip if a save is already in progress
+        if self
+            .idb_save_in_progress
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+
+        // Clone data for the async closure
+        let db_clone = self.database.as_ref().clone();
+        let bdk_changeset = self.bdk_database.get_data().clone();
+        let key = self.idb_key();
+        let flag = self.idb_save_in_progress.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let snapshot = super::idb_store::WalletSnapshot {
+                db: db_clone,
+                bdk_changeset,
+            };
+            if let Err(e) = super::idb_store::save_snapshot(&key, &snapshot).await {
+                web_sys::console::error_1(&format!("IDB save error: {e}").into());
+            }
+            flag.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Restore wallet state from an IndexedDB snapshot.
+    #[allow(clippy::arc_with_non_send_sync)] // wasm32 is single-threaded; Arc matches native API
+    pub fn restore_from_snapshot(
+        &mut self,
+        snapshot: super::idb_store::WalletSnapshot,
+    ) -> Result<(), Error> {
+        // Restore the in-memory database
+        self.database = Arc::new(snapshot.db);
+
+        // Restore BDK changeset and re-load the BDK wallet
+        if let Some(changeset) = snapshot.bdk_changeset {
+            self.bdk_database.set_data(Some(changeset));
+
+            // Reconstruct descriptors (same logic as Wallet::new)
+            let wdata = &self.wallet_data;
+            let bdk_network = BdkNetwork::from(wdata.bitcoin_network);
+            let xpub_rgb = str_to_xpub(&wdata.account_xpub_colored, bdk_network)?;
+            let xpub_btc = str_to_xpub(&wdata.account_xpub_vanilla, bdk_network)?;
+
+            let (desc_colored, desc_vanilla, watch_only) = if let Some(mnemonic) = &wdata.mnemonic {
+                let (dc, dv) = get_descriptors(
+                    wdata.bitcoin_network,
+                    mnemonic,
+                    wdata.vanilla_keychain,
+                    xpub_btc,
+                    xpub_rgb,
+                )?;
+                (dc, dv, false)
+            } else {
+                let (dc, dv) = get_descriptors_from_xpubs(
+                    wdata.bitcoin_network,
+                    &wdata.master_fingerprint,
+                    xpub_rgb,
+                    xpub_btc,
+                    wdata.vanilla_keychain,
+                )?;
+                (dc, dv, true)
+            };
+
+            let chain_net: ChainNet = wdata.bitcoin_network.into();
+            let mut wallet_params = BdkWallet::load()
+                .descriptor(KeychainKind::External, Some(desc_colored.clone()))
+                .descriptor(KeychainKind::Internal, Some(desc_vanilla.clone()))
+                .check_genesis_hash(BlockHash::from_byte_array(
+                    chain_net.chain_hash().to_bytes(),
+                ));
+            if !watch_only {
+                wallet_params = wallet_params.extract_keys();
+            }
+
+            match wallet_params.load_wallet(&mut self.bdk_database)? {
+                Some(wallet) => {
+                    self.bdk_wallet = wallet;
+                }
+                None => {
+                    // Changeset didn't produce a loadable wallet; create fresh
+                    self.bdk_wallet = BdkWallet::create(desc_colored, desc_vanilla)
+                        .network(bdk_network)
+                        .create_wallet(&mut self.bdk_database)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }

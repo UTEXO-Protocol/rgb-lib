@@ -137,7 +137,10 @@
       <label for="wallet-data">WalletData JSON</label>
       <textarea id="wallet-data" rows="8" placeholder='{"data_dir": ":memory:", "bitcoin_network": "regtest", ...}'></textarea>
     </div>
-    <button id="btn-create-wallet" disabled>Create Wallet</button>
+    <div class="btn-group">
+      <button id="btn-create-wallet" disabled>Create Wallet</button>
+      <button id="btn-clear-storage" style="background:#da3633;">Clear Storage</button>
+    </div>
     <div class="output" id="wallet-output" style="display:none;">
       <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('wallet-result')">Copy</button></div>
       <pre id="wallet-result"></pre>
@@ -684,20 +687,26 @@
 
     // --- Create Wallet ---
 
-    document.getElementById('btn-create-wallet').addEventListener('click', () => {
+    document.getElementById('btn-create-wallet').addEventListener('click', async () => {
       let walletDataJson = document.getElementById('wallet-data').value.trim();
       if (!walletDataJson) {
         showResult('wallet-output', 'wallet-result', 'Error: Please enter WalletData JSON or generate keys first');
         return;
       }
       try {
-        currentWallet = new WasmWallet(walletDataJson);
+        currentWallet = await WasmWallet.create(walletDataJson);
         const wd = currentWallet.get_wallet_data();
-        showResult('wallet-output', 'wallet-result', 'Wallet created successfully!\n\n' + JSON.stringify(wd, null, 2));
+        showResult('wallet-output', 'wallet-result', 'Wallet created successfully (with IndexedDB restore)!\n\n' + JSON.stringify(wd, null, 2));
       } catch (e) {
         showError('wallet-output', 'wallet-result', 'Error creating wallet: ', e);
         currentWallet = null;
       }
+    });
+
+    document.getElementById('btn-clear-storage').addEventListener('click', () => {
+      const req = indexedDB.deleteDatabase('rgb_lib_wallet');
+      req.onsuccess = () => showResult('wallet-output', 'wallet-result', 'IndexedDB storage cleared.');
+      req.onerror = () => showError('wallet-output', 'wallet-result', 'Failed to clear storage: ', req.error);
     });
 
     function fillWalletData(keys, network) {

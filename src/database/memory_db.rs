@@ -4,6 +4,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::Error;
 use crate::database::enums::{
     AssetSchema, Assignment, ColoringType, RecipientTypeFull, TransferStatus, TransportType,
@@ -52,7 +54,7 @@ fn av_or<T>(v: ActiveValue<T>, default: T) -> T {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbAsset {
     pub idx: i32,
     pub media_idx: Option<i32>,
@@ -88,7 +90,7 @@ pub struct DbAssetActMod {
     pub reject_list_url: ActiveValue<Option<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbAssetTransfer {
     pub idx: i32,
     pub user_driven: bool,
@@ -104,7 +106,7 @@ pub struct DbAssetTransferActMod {
     pub asset_id: ActiveValue<Option<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbBackupInfo {
     pub idx: i32,
     pub last_backup_timestamp: String,
@@ -118,7 +120,7 @@ pub struct DbBackupInfoActMod {
     pub last_operation_timestamp: ActiveValue<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbBatchTransfer {
     pub idx: i32,
     pub txid: Option<String>,
@@ -140,7 +142,7 @@ pub struct DbBatchTransferActMod {
     pub min_confirmations: ActiveValue<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbColoring {
     pub idx: i32,
     pub txo_idx: i32,
@@ -158,7 +160,7 @@ pub struct DbColoringActMod {
     pub assignment: ActiveValue<Assignment>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbMedia {
     pub idx: i32,
     pub digest: String,
@@ -172,7 +174,7 @@ pub struct DbMediaActMod {
     pub mime: ActiveValue<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbPendingWitnessScript {
     pub idx: i32,
     pub script: String,
@@ -184,7 +186,7 @@ pub struct DbPendingWitnessScriptActMod {
     pub script: ActiveValue<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbToken {
     pub idx: i32,
     pub asset_idx: i32,
@@ -208,7 +210,7 @@ pub struct DbTokenActMod {
     pub reserves: ActiveValue<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbTokenMedia {
     pub idx: i32,
     pub token_idx: i32,
@@ -224,7 +226,7 @@ pub struct DbTokenMediaActMod {
     pub attachment_id: ActiveValue<Option<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbTransfer {
     pub idx: i32,
     pub asset_transfer_idx: i32,
@@ -248,7 +250,7 @@ pub struct DbTransferActMod {
     pub invoice_string: ActiveValue<Option<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbTransferTransportEndpoint {
     pub idx: i32,
     pub transfer_idx: i32,
@@ -264,7 +266,7 @@ pub struct DbTransferTransportEndpointActMod {
     pub used: ActiveValue<bool>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbTransportEndpoint {
     pub idx: i32,
     pub transport_type: TransportType,
@@ -278,7 +280,7 @@ pub struct DbTransportEndpointActMod {
     pub endpoint: ActiveValue<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DbTxo {
     pub idx: i32,
     pub txid: String,
@@ -314,7 +316,7 @@ impl From<DbTxo> for DbTxoActMod {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DbWalletTransaction {
     pub idx: i32,
     pub txid: String,
@@ -469,6 +471,7 @@ impl From<DbAsset> for DbAssetActMod {
 
 /// In-memory store: one Vec per entity, next_id per table for insert idx.
 /// RefCell for interior mutability so methods can take &self (Arc<Backend>).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct InMemoryDb {
     txos: RefCell<Vec<DbTxo>>,
     next_txo_idx: RefCell<i32>,

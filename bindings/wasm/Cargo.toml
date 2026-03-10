@@ -19,3 +19,4 @@ serde_json = { version = "1.0", default-features = false, features = ["preserve_
 thiserror = { version = "2.0", default-features = false }
 js-sys = "0.3"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
+web-sys = { version = "0.3", features = ["console"] }
