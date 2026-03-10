@@ -78,6 +78,7 @@ fn success() {
         master_fingerprint: keys.master_fingerprint,
         vanilla_keychain,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
     check_wallet(&wallet, bitcoin_network, vanilla_keychain);
@@ -167,6 +168,7 @@ fn mainnet_esplora_success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+        disable_file_log: false,
     })
     .unwrap();
 
@@ -198,6 +200,7 @@ fn mainnet_electrum_success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+        disable_file_log: false,
     })
     .unwrap();
 
@@ -366,6 +369,7 @@ fn watch_only_success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
     let online_watch = wallet_watch
@@ -384,6 +388,7 @@ fn watch_only_success() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
 
@@ -438,6 +443,7 @@ fn watch_only_fail() {
         master_fingerprint: s!("invalid"),
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     });
     assert!(matches!(result, Err(Error::InvalidFingerprint)));
 }
@@ -481,6 +487,7 @@ fn supported_schemas() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Nia],
+        disable_file_log: false,
     })
     .unwrap();
     let online_nia = wallet_nia
@@ -514,6 +521,7 @@ fn supported_schemas() {
         master_fingerprint: keys_rcv.master_fingerprint,
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Uda],
+        disable_file_log: false,
     })
     .unwrap();
     let rcv_online_uda = rcv_wallet_uda
@@ -560,6 +568,7 @@ fn supported_schemas() {
         master_fingerprint: keys.master_fingerprint.clone(),
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Cfa],
+        disable_file_log: false,
     })
     .unwrap();
     let online_cfa = wallet_cfa
@@ -592,6 +601,7 @@ fn supported_schemas() {
         master_fingerprint: keys.master_fingerprint,
         vanilla_keychain: None,
         supported_schemas: vec![],
+        disable_file_log: false,
     });
     assert!(result.is_err());
     if let Err(e) = result {
@@ -612,6 +622,7 @@ fn supported_schemas() {
         master_fingerprint: keys_mainnet.master_fingerprint,
         vanilla_keychain: None,
         supported_schemas: vec![AssetSchema::Nia, AssetSchema::Ifa],
+        disable_file_log: false,
     });
     // IFA on mainnet not allowed
     assert!(result.is_err());

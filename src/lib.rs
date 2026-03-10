@@ -287,7 +287,7 @@ use crate::{
         DumbResolver, LOG_FILE, RgbRuntime, adjust_canonicalization, beneficiary_from_script_buf,
         from_str_or_number_mandatory, from_str_or_number_optional, get_account_xpubs,
         get_descriptors, get_descriptors_from_xpubs, load_rgb_runtime, now, parse_address_str,
-        setup_logger, str_to_xpub,
+        setup_logger, setup_stdout_logger, str_to_xpub,
     },
     wallet::{
         Balance, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_CFA, SCHEMA_ID_IFA, SCHEMA_ID_NIA,
