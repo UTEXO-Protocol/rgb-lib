@@ -174,7 +174,8 @@ pub(crate) fn validate_consignment(
     bitcoin_network: *const c_char,
 ) -> Result<String, Error> {
     use rgb_lib::{
-        AnyResolver, ChainNet, FileContent, RgbTransfer, ValidationConfig, ValidationError,
+        ChainNet, FileContent, RgbTransfer, ValidationConfig, ValidationError,
+        wallet::rust_only::get_resolver,
     };
 
     let file_path = ptr_to_string(file_path);
@@ -182,25 +183,17 @@ pub(crate) fn validate_consignment(
     let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
     let chain_net: ChainNet = bitcoin_network.into();
 
-    // Load the consignment from file
     let consignment = RgbTransfer::load_file(&file_path).map_err(|e| {
         Error::RgbLib(RgbLibError::Internal {
             details: format!("Failed to load consignment: {e}"),
         })
     })?;
 
-    // Derive the type system from the consignment's schema
     let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
     let trusted_typesystem = asset_schema.types();
 
-    // Create a blockchain resolver from the indexer URL
-    let resolver = AnyResolver::electrum_blocking(&indexer_url, None).map_err(|e| {
-        Error::RgbLib(RgbLibError::InvalidIndexer {
-            details: format!("Failed to create resolver: {e}"),
-        })
-    })?;
+    let resolver = get_resolver(&indexer_url, bitcoin_network)?;
 
-    // Validate
     let validation_config = ValidationConfig {
         chain_net,
         trusted_typesystem,

@@ -64,6 +64,20 @@ pub fn check_indexer_url(
     Ok(indexer_protocol)
 }
 
+/// Return an [`AnyResolver`] for the provided indexer URL, auto-detecting the protocol
+/// (Electrum or Esplora).
+///
+/// <div class="warning">This method is meant for special usage and is normally not needed, use
+/// it only if you know what you're doing</div>
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn get_resolver(
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<AnyResolver, Error> {
+    let (_, resolver) = get_indexer_and_resolver(indexer_url, bitcoin_network)?;
+    Ok(resolver)
+}
+
 /// Check whether the provided URL points to a valid proxy.
 /// An error is raised if the provided proxy URL is invalid or if the service is running an
 /// unsupported protocol version.
