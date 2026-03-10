@@ -1,5 +1,5 @@
 [bindings.kotlin]
-package_name = "org.rgbtools"
+package_name = "com.utexo"
 cdylib_name = "rgblibuniffi"
 
 [bindings.python]
