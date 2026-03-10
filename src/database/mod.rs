@@ -1,11 +1,89 @@
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod entities;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod memory_db;
 
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::database::entities::{
     asset, coloring, media, pending_witness_script, prelude::*, transfer_transport_endpoint,
     transport_endpoint, txo,
 };
+
+// On wasm32, import Model and ActiveModel types from memory_db.
+// On not(wasm32), import them from entities.
+#[cfg(target_arch = "wasm32")]
+pub(crate) use crate::database::memory_db::{
+    ActiveValue, DbAsset, DbAssetActMod, DbAssetTransfer, DbAssetTransferActMod, DbBackupInfo,
+    DbBackupInfoActMod, DbBatchTransfer, DbBatchTransferActMod, DbColoring, DbColoringActMod,
+    DbMedia, DbMediaActMod, DbPendingWitnessScript, DbPendingWitnessScriptActMod, DbToken,
+    DbTokenActMod, DbTokenMedia, DbTokenMediaActMod, DbTransfer, DbTransferActMod,
+    DbTransferTransportEndpoint, DbTransferTransportEndpointActMod, DbTransportEndpoint,
+    DbTransportEndpointActMod, DbTxo, DbTxoActMod, DbWalletTransaction, DbWalletTransactionActMod,
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbAsset = crate::database::entities::asset::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbAssetActMod = crate::database::entities::asset::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbAssetTransfer = crate::database::entities::asset_transfer::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbAssetTransferActMod = crate::database::entities::asset_transfer::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbBackupInfo = crate::database::entities::backup_info::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbBackupInfoActMod = crate::database::entities::backup_info::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbBatchTransfer = crate::database::entities::batch_transfer::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbBatchTransferActMod = crate::database::entities::batch_transfer::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbColoring = crate::database::entities::coloring::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbColoringActMod = crate::database::entities::coloring::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbMedia = crate::database::entities::media::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbMediaActMod = crate::database::entities::media::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbPendingWitnessScript = crate::database::entities::pending_witness_script::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbPendingWitnessScriptActMod =
+    crate::database::entities::pending_witness_script::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbToken = crate::database::entities::token::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTokenActMod = crate::database::entities::token::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTokenMedia = crate::database::entities::token_media::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTokenMediaActMod = crate::database::entities::token_media::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransfer = crate::database::entities::transfer::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransferActMod = crate::database::entities::transfer::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransferTransportEndpoint =
+    crate::database::entities::transfer_transport_endpoint::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransferTransportEndpointActMod =
+    crate::database::entities::transfer_transport_endpoint::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransportEndpoint = crate::database::entities::transport_endpoint::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTransportEndpointActMod =
+    crate::database::entities::transport_endpoint::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTxo = crate::database::entities::txo::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbTxoActMod = crate::database::entities::txo::ActiveModel;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbWalletTransaction = crate::database::entities::wallet_transaction::Model;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type DbWalletTransactionActMod =
+    crate::database::entities::wallet_transaction::ActiveModel;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DbAssetTransferData {
@@ -249,10 +327,12 @@ pub(crate) struct TransferData {
     pub(crate) consignment_path: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub struct RgbLibDatabase {
     connection: DatabaseConnection,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RgbLibDatabase {
     pub(crate) fn new(connection: DatabaseConnection) -> Self {
         Self { connection }

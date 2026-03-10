@@ -98,3 +98,14 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Build with esplora feature
         run: cargo build --release --no-default-features --features esplora
+
+  build_wasm:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+      - name: Build wasm bindings
+        run: cargo build -p rgb-lib-wasm --target wasm32-unknown-unknown

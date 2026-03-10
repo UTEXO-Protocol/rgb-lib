@@ -14,48 +14,32 @@ description = "RGB wallet library"
 exclude = ["migration"]
 
 [workspace]
-members = [".", "migration"]
+members = [".", "migration", "bindings/wasm"]
 
 [dependencies]
 base64 = { version = "0.22.1", default-features = false, features = [
     "std",
 ] }
 bdk_wallet = { version = "=2.0.0", default-features = false, features = [
-    "file_store",
     "keys-bip39",
     "std",
 ] }
 bdk_electrum = { version = "0.23.0", optional = true, default-features = false, features = [
     "use-rustls",
 ] }
-bdk_esplora = { version = "0.22.0", optional = true, default-features = false, features = [
-    "blocking-https-rustls",
-] }
+bdk_esplora = { version = "0.22.0", optional = true, default-features = false }
 chacha20poly1305 = { version = "0.10.1", default-features = false, features = [
     "alloc",
     "stream",
 ] }
 tokio = { version = "1", default-features = false, features = ["rt"] }
 generic-array = "=0.14.7"  # temporary pin while waiting for chacha20poly1305 update
-hex = { version = "0.4.3", default-features = false }
+hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
 rand = { version = "0.9.1", default-features = false }
-reqwest = { version = "0.12", optional = true, default-features = false, features = [
-    "blocking",
-    "json",
-    "multipart",
-    "rustls-tls",
-] }
-rgb-lib-migration = { path = "migration", version = "0.3.0-beta.2" }
-rustls = { version = "0.23", default-features = false }
+reqwest = { version = "0.12", optional = true, default-features = false }
 scrypt = { version = "0.11.0", default-features = false, features = [
     "simple",
     "std",
-] }
-sea-orm = { version = "1.1.19", default-features = false, features = [
-    "macros",
-    "runtime-tokio-rustls",
-    "sqlx-sqlite",
-    "with-json",
 ] }
 sea-query = "0.32.6"
 serde = { version = "^1.0", default-features = false, features = [
@@ -65,19 +49,9 @@ serde_json = { version = "^1.0", default-features = false, features = [
     "preserve_order",
 ] }
 slog = { version = "2.7.0", default-features = false }
-slog-async = { version = "2.8.0", default-features = false }
-slog-term = { version = "2.9.1", default-features = false }
-tempfile = { version = "3.20.0", default-features = false }
 thiserror = { version = "2.0", default-features = false }
-time = { version = "0.3.41", default-features = false }
-file-format = { version = "0.27.0", default-features = false, features = [
-    "reader",
-] }
+time = { version = "0.3.41", default-features = false, features = ["macros", "formatting"] }
 typenum = { version = "1.18.0", default-features = false }
-walkdir = { version = "2.5.0", default-features = false }
-zip = { version = "4.0.0", default-features = false, features = [
-    "zstd",
-] }
 
 # VSS backup (optional)
 vss-client = { package = "vss-client-ng", git = "https://github.com/lightningdevkit/vss-client", rev = "ad63805047561dcf3117cd992ad6d8bc3881adef", default-features = false, optional = true, features = [
@@ -98,6 +72,65 @@ rgb-strict-encoding = { version = "=1.0.0", default-features = false, features =
     "bitcoin",
 ] }
 rgb-strict-types = { version = "=1.0.0", default-features = false }
+
+# Native-only dependencies
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bdk_wallet = { version = "=2.0.0", default-features = false, features = [
+    "file_store",
+] }
+bdk_esplora = { version = "0.22.0", optional = true, default-features = false, features = [
+    "blocking-https-rustls",
+] }
+futures = { version = "0.3", default-features = false, features = [
+    "executor",
+] }
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+    "blocking",
+    "json",
+    "multipart",
+    "rustls-tls",
+] }
+rgb-lib-migration = { path = "migration", version = "0.3.0-beta.2" }
+rustls = { version = "0.23", default-features = false }
+sea-orm = { version = "1.1.19", default-features = false, features = [
+    "macros",
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+    "with-json",
+] }
+slog-async = { version = "2.8.0", default-features = false }
+slog-term = { version = "2.9.1", default-features = false }
+tempfile = { version = "3.20.0", default-features = false }
+file-format = { version = "0.27.0", default-features = false, features = [
+    "reader",
+] }
+walkdir = { version = "2.5.0", default-features = false }
+zip = { version = "4.0.0", default-features = false, features = [
+    "zstd",
+] }
+
+# WASM-only dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bdk_core = { version = "0.6" }
+bdk_esplora = { version = "0.22.0", optional = true, default-features = false, features = [
+    "async-https",
+] }
+esplora-client = { version = "0.12", default-features = false, features = [
+    "async-https",
+] }
+getrandom = { version = "0.2", features = ["js"] }
+gloo-net = { version = "0.6", default-features = false, features = ["http", "json"] }
+instant = { version = "0.1", features = ["wasm-bindgen"] }
+js-sys = "0.3"
+ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+    "json",
+] }
+rexie = "0.6"
+time = { version = "0.3.41", default-features = false, features = ["wasm-bindgen"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["FormData", "Blob", "BlobPropertyBag", "console"] }
 
 [dev-dependencies]
 copy_dir = { version = "0.1.3", default-features = false }
@@ -122,7 +155,7 @@ esplora = [
     "rgb-ops/esplora_blocking",
 ]
 vss = ["vss-client", "hkdf", "sha2"]
-camel_case = ["default"]
+camel_case = []
 
 [[example]]
 name = "vss_example"

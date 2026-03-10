@@ -31,16 +31,34 @@ pub(crate) const INDEXER_BATCH_SIZE: usize = 5;
 #[cfg(feature = "esplora")]
 pub(crate) const INDEXER_PARALLEL_REQUESTS: usize = 5;
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+#[derive(Clone)]
+pub(crate) struct WasmSleeper;
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl esplora_client::Sleeper for WasmSleeper {
+    type Sleep = core::future::Ready<()>;
+
+    fn sleep(_duration: std::time::Duration) -> Self::Sleep {
+        core::future::ready(())
+    }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) const REST_CLIENT_TIMEOUT: u8 = 90;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const PROXY_PROTOCOL_VERSION: &str = "0.2";
 
 // sea-orm with runtime-tokio-rustls needs a tokio runtime for connection pool management
+#[cfg(not(target_arch = "wasm32"))]
 static TOKIO_RUNTIME: LazyLock<tokio::runtime::Runtime> =
     LazyLock::new(|| tokio::runtime::Runtime::new().expect("failed to create the runtime"));
 
 /// Block on a future, spawning a new thread if already inside a Tokio runtime.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn block_on<F>(future: F) -> F::Output
 where
     F: std::future::Future + Send,
@@ -496,7 +514,10 @@ pub(crate) fn calculate_descriptor_from_xpub(
     Ok(format!("tr({key})"))
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn get_rest_client() -> Result<RestClient, Error> {
     RestClient::builder()
         .timeout(Duration::from_secs(REST_CLIENT_TIMEOUT as u64))
@@ -506,7 +527,10 @@ pub(crate) fn get_rest_client() -> Result<RestClient, Error> {
         })
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn check_proxy(proxy_url: &str, rest_client: Option<&RestClient>) -> Result<(), Error> {
     let rest_client = if let Some(rest_client) = rest_client {
         rest_client.clone()
@@ -533,7 +557,34 @@ pub(crate) fn check_proxy(proxy_url: &str, rest_client: Option<&RestClient>) -> 
     })
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) async fn check_proxy_async(proxy_url: &str) -> Result<(), Error> {
+    use crate::api::proxy::WasmProxyClient;
+    let client = WasmProxyClient::new()?;
+    let mut err_details = s!("unable to connect to proxy");
+    if let Ok(server_info) = client.get_info(proxy_url).await {
+        if let Some(info) = server_info.result {
+            if info.protocol_version == *PROXY_PROTOCOL_VERSION {
+                return Ok(());
+            } else {
+                return Err(Error::InvalidProxyProtocol {
+                    version: info.protocol_version,
+                });
+            }
+        }
+        if let Some(err) = server_info.error {
+            err_details = err.message;
+        }
+    }
+    Err(Error::Proxy {
+        details: err_details,
+    })
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn get_indexer_and_resolver(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
@@ -584,7 +635,10 @@ pub(crate) fn get_indexer_and_resolver(
     Ok((indexer, resolver))
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
     #[cfg(feature = "electrum")]
     {
@@ -613,6 +667,14 @@ pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
     None
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
+    use crate::wallet::online::Indexer;
+    let opts = esplora_client::Builder::new(indexer_url);
+    let client = opts.build_async_with_sleeper::<WasmSleeper>().ok()?;
+    Some(Indexer::EsploraAsync(Box::new(client)))
+}
+
 fn convert_time_fmt_error(cause: time::error::Format) -> io::Error {
     io::Error::other(cause)
 }
@@ -627,6 +689,7 @@ fn log_timestamp(io: &mut dyn io::Write) -> io::Result<()> {
     )
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn setup_logger<P: AsRef<Path>>(
     log_path: P,
     log_name: Option<&str>,
@@ -648,8 +711,26 @@ pub(crate) fn setup_logger<P: AsRef<Path>>(
     Ok((logger, async_guard))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn setup_logger<P: AsRef<Path>>(
+    _log_path: P,
+    _log_name: Option<&str>,
+) -> Result<(Logger, ()), Error> {
+    let drain = slog::Discard;
+    let logger = Logger::root(drain, o!());
+    Ok((logger, ()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn now() -> OffsetDateTime {
+    let ms = js_sys::Date::now();
+    let secs = (ms / 1000.0).floor() as i64;
+    OffsetDateTime::from_unix_timestamp(secs).unwrap_or(OffsetDateTime::UNIX_EPOCH)
 }
 
 pub(crate) struct DumbResolver;
@@ -875,11 +956,13 @@ impl RgbRuntime {
 impl Drop for RgbRuntime {
     fn drop(&mut self) {
         self.stock.store().expect("unable to save stock");
+        #[cfg(not(target_arch = "wasm32"))]
         fs::remove_file(self.wallet_dir.join(RGB_RUNTIME_LOCK_FILE))
             .expect("should be able to drop lockfile")
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn _write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
     let lock_file_path = wallet_dir.join(RGB_RUNTIME_LOCK_FILE);
     let t_0 = OffsetDateTime::now_utc();
@@ -908,6 +991,7 @@ fn _write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_rgb_runtime(wallet_dir: PathBuf) -> Result<RgbRuntime, Error> {
     _write_rgb_runtime_lockfile(&wallet_dir)?;
 
@@ -933,15 +1017,138 @@ pub(crate) fn load_rgb_runtime(wallet_dir: PathBuf) -> Result<RgbRuntime, Error>
     Ok(RgbRuntime { stock, wallet_dir })
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn load_rgb_runtime(_wallet_dir: PathBuf) -> Result<RgbRuntime, Error> {
+    let stock = Stock::in_memory();
+    Ok(RgbRuntime {
+        stock,
+        wallet_dir: PathBuf::new(),
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) async fn fetch_esplora_broadcast_async(
+    indexer_url: &str,
+    tx_hex: &str,
+) -> Result<(), Error> {
+    use gloo_net::http::Request;
+    let base = indexer_url.trim_end_matches('/');
+    let url = format!("{}/tx", base);
+    let resp = Request::post(&url)
+        .body(tx_hex)
+        .map_err(|e| Error::FailedBroadcast {
+            details: e.to_string(),
+        })?
+        .send()
+        .await
+        .map_err(|e| Error::FailedBroadcast {
+            details: e.to_string(),
+        })?;
+    if !resp.ok() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(Error::FailedBroadcast {
+            details: format!("Esplora POST /tx returned {}: {}", status, text),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub(crate) struct OffchainResolver<'a, 'cons, const TRANSFER: bool> {
     pub(crate) witness_id: RgbTxid,
     pub(crate) consignment: &'cons Consignment<TRANSFER>,
     pub(crate) fallback: &'a AnyResolver,
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER> {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        if witness_id != self.witness_id {
+            return self.fallback.resolve_witness(witness_id);
+        }
+        self.consignment
+            .bundled_witnesses()
+            .find(|bw| bw.witness_id() == witness_id)
+            .and_then(|p| p.pub_witness.tx().cloned())
+            .map_or_else(
+                || self.fallback.resolve_witness(witness_id),
+                |tx| Ok(WitnessStatus::Resolved(tx, WitnessOrd::Tentative)),
+            )
+    }
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        self.fallback.check_chain_net(chain_net)
+    }
+}
+
+/// Pre-fetched witness resolver for wasm32.
+///
+/// Resolves witness transactions from a cache populated from consignment bundles.
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) struct WasmResolver {
+    witness_cache: HashMap<RgbTxid, WitnessStatus>,
+    chain_net: ChainNet,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl WasmResolver {
+    /// Build resolver by pre-fetching all witness IDs from a consignment.
+    pub(crate) fn from_consignment<const TRANSFER: bool>(
+        consignment: &Consignment<TRANSFER>,
+        chain_net: ChainNet,
+    ) -> Self {
+        let mut cache = HashMap::new();
+        for bw in consignment.bundled_witnesses() {
+            let wid = bw.witness_id();
+            if let Some(tx) = bw.pub_witness.tx().cloned() {
+                cache.insert(wid, WitnessStatus::Resolved(tx, WitnessOrd::Tentative));
+            }
+        }
+        Self {
+            witness_cache: cache,
+            chain_net,
+        }
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl ResolveWitness for WasmResolver {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        self.witness_cache
+            .get(&witness_id)
+            .cloned()
+            .ok_or(WitnessResolverError::ResolverIssue(
+                Some(witness_id),
+                s!("witness not found in cache"),
+            ))
+    }
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        if self.chain_net == chain_net {
+            Ok(())
+        } else {
+            Err(WitnessResolverError::WrongChainNet)
+        }
+    }
+}
+
+/// Offchain resolver variant for wasm32.
+///
+/// Checks the consignment first for the specific witness ID, then falls back to WasmResolver.
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+pub(crate) struct OffchainResolverWasm<'a, 'cons, const TRANSFER: bool> {
+    pub(crate) witness_id: RgbTxid,
+    pub(crate) consignment: &'cons Consignment<TRANSFER>,
+    pub(crate) fallback: &'a WasmResolver,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+impl<const TRANSFER: bool> ResolveWitness for OffchainResolverWasm<'_, '_, TRANSFER> {
     fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
         if witness_id != self.witness_id {
             return self.fallback.resolve_witness(witness_id);

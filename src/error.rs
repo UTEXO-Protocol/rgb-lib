@@ -527,6 +527,11 @@ pub(crate) enum IndexerError {
     #[cfg(feature = "esplora")]
     #[error("Esplora error: {0}")]
     Esplora(#[from] EsploraError),
+
+    /// Async Esplora sync on wasm32 returns Box<dyn Error>; we capture it as string.
+    #[cfg(all(target_arch = "wasm32", feature = "esplora"))]
+    #[error("Esplora async error: {0}")]
+    EsploraAsync(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -556,6 +561,7 @@ pub(crate) enum InternalError {
     #[error("Confinement error: {0}")]
     Confinement(#[from] amplify::confinement::Error),
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("Database error: {0}")]
     Database(#[from] sea_orm::DbErr),
 
@@ -604,6 +610,7 @@ pub(crate) enum InternalError {
     #[error("Unexpected error")]
     Unexpected,
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("Zip error: {0}")]
     ZipError(#[from] zip::result::ZipError),
 }
@@ -728,6 +735,7 @@ impl From<rgbinvoice::TransportParseError> for Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<bdk_wallet::file_store::StoreErrorWithDump<ChangeSet>> for Error {
     fn from(e: bdk_wallet::file_store::StoreErrorWithDump<ChangeSet>) -> Self {
         Error::IO {
@@ -736,6 +744,7 @@ impl From<bdk_wallet::file_store::StoreErrorWithDump<ChangeSet>> for Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<bdk_wallet::FileStoreError> for Error {
     fn from(e: bdk_wallet::FileStoreError) -> Self {
         Error::IO {
@@ -744,6 +753,7 @@ impl From<bdk_wallet::FileStoreError> for Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<bdk_wallet::CreateWithPersistError<bdk_wallet::FileStoreError>> for Error {
     fn from(e: bdk_wallet::CreateWithPersistError<bdk_wallet::FileStoreError>) -> Self {
         Error::IO {
@@ -752,6 +762,7 @@ impl From<bdk_wallet::CreateWithPersistError<bdk_wallet::FileStoreError>> for Er
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<bdk_wallet::LoadWithPersistError<bdk_wallet::FileStoreError>> for Error {
     fn from(e: bdk_wallet::LoadWithPersistError<bdk_wallet::FileStoreError>) -> Self {
         match e {
@@ -762,6 +773,36 @@ impl From<bdk_wallet::LoadWithPersistError<bdk_wallet::FileStoreError>> for Erro
                 details: e.to_string(),
             },
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<bdk_wallet::CreateWithPersistError<std::convert::Infallible>> for Error {
+    fn from(e: bdk_wallet::CreateWithPersistError<std::convert::Infallible>) -> Self {
+        Error::IO {
+            details: e.to_string(),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<bdk_wallet::LoadWithPersistError<std::convert::Infallible>> for Error {
+    fn from(e: bdk_wallet::LoadWithPersistError<std::convert::Infallible>) -> Self {
+        match e {
+            bdk_wallet::LoadWithPersistError::InvalidChangeSet(
+                bdk_wallet::LoadError::Mismatch(bdk_wallet::LoadMismatch::Genesis { .. }),
+            ) => Error::BitcoinNetworkMismatch,
+            _ => Error::IO {
+                details: e.to_string(),
+            },
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl From<std::convert::Infallible> for Error {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
     }
 }
 

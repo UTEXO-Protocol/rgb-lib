@@ -48,7 +48,10 @@ impl fmt::Display for IndexerProtocol {
 ///
 /// <div class="warning">This method is meant for special usage and is normally not needed, use
 /// it only if you know what you're doing</div>
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub fn check_indexer_url(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
@@ -69,7 +72,10 @@ pub fn check_indexer_url(
 ///
 /// <div class="warning">This method is meant for special usage and is normally not needed, use
 /// it only if you know what you're doing</div>
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub fn get_resolver(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
@@ -84,7 +90,10 @@ pub fn get_resolver(
 ///
 /// <div class="warning">This method is meant for special usage and is normally not needed, use
 /// it only if you know what you're doing</div>
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "electrum", feature = "esplora")
+))]
 pub fn check_proxy_url(proxy_url: &str) -> Result<(), Error> {
     check_proxy(proxy_url, None)
 }
@@ -303,7 +312,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn accept_transfer(
         &mut self,
         txid: String,
@@ -402,7 +414,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn get_tx_height(&self, txid: String) -> Result<Option<u32>, Error> {
         info!(self.logger, "Getting TX height...");
         let txid = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
@@ -425,7 +440,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn update_witnesses(
         &self,
         after_height: u32,
@@ -460,7 +478,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn post_consignment<P: AsRef<Path>>(
         &self,
         proxy_url: &str,
@@ -683,7 +704,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn save_new_asset(
         &self,
         consignment: RgbTransfer,
@@ -733,7 +757,10 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage, for most cases the method
     /// <code>list_unspents</code> is sufficient</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "electrum", feature = "esplora")
+    ))]
     pub fn list_unspents_vanilla(
         &mut self,
         online: Online,

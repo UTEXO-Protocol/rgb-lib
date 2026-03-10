@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>rgb-lib WASM Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 2rem; }
+    h1 { color: #58a6ff; margin-bottom: 0.5rem; }
+    .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }
+    .status { padding: 0.5rem 1rem; border-radius: 6px; margin-bottom: 2rem; font-size: 0.85rem; }
+    .status.loading { background: #1c1f26; color: #d29922; }
+    .status.ready { background: #0d2818; color: #3fb950; }
+    .status.error { background: #2d1117; color: #f85149; }
+    .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .section h2 { color: #58a6ff; font-size: 1.1rem; margin-bottom: 1rem; }
+    .hint { color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem; }
+    label { display: block; color: #8b949e; font-size: 0.85rem; margin-bottom: 0.3rem; }
+    select, input, textarea {
+      width: 100%; padding: 0.5rem 0.75rem; background: #0d1117; border: 1px solid #30363d;
+      border-radius: 6px; color: #c9d1d9; font-family: monospace; font-size: 0.9rem; margin-bottom: 1rem;
+    }
+    input[type="checkbox"] { width: auto; margin-bottom: 0; }
+    .checkbox-label {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem; cursor: pointer;
+    }
+    textarea { resize: vertical; min-height: 60px; }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: #58a6ff; }
+    button {
+      padding: 0.5rem 1.25rem; background: #238636; color: #fff; border: none;
+      border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600;
+    }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    .output { margin-top: 1rem; }
+    .output-label { color: #8b949e; font-size: 0.8rem; margin-bottom: 0.3rem; }
+    pre {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 1rem; overflow-x: auto; font-size: 0.85rem; line-height: 1.5;
+      max-height: 400px; overflow-y: auto;
+    }
+    .field-row { display: flex; gap: 1rem; align-items: flex-end; }
+    .field-row > * { flex: 1; }
+    .field-row > button { flex: 0 0 auto; margin-bottom: 1rem; }
+    .btn-group { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .copy-btn {
+      background: #30363d; font-size: 0.75rem; padding: 0.3rem 0.6rem; margin-left: 0.5rem;
+    }
+    .copy-btn:hover { background: #484f58; }
+    .round-trip-result { margin-top: 0.5rem; font-size: 0.85rem; padding: 0.4rem 0.75rem; border-radius: 4px; }
+    .round-trip-result.pass { background: #0d2818; color: #3fb950; }
+    .round-trip-result.fail { background: #2d1117; color: #f85149; }
+    .step-label { color: #58a6ff; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>rgb-lib WASM Smoke Test</h1>
+  <p class="subtitle">Interactive test page for rgb-lib WebAssembly bindings</p>
+  <div id="status" class="status loading">Initializing WASM module...</div>
+
+  <!-- Generate Keys -->
+  <div class="section">
+    <h2>Generate Keys</h2>
+    <div class="field-row">
+      <div>
+        <label for="gen-network">Network</label>
+        <select id="gen-network">
+          <option value="regtest" selected>Regtest</option>
+          <option value="testnet">Testnet</option>
+          <option value="signet">Signet</option>
+          <option value="mainnet">Mainnet</option>
+        </select>
+      </div>
+      <button id="btn-generate" disabled>Generate Keys</button>
+    </div>
+    <div class="output" id="gen-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('gen-result')">Copy</button></div>
+      <pre id="gen-result"></pre>
+    </div>
+  </div>
+
+  <!-- Restore Keys -->
+  <div class="section">
+    <h2>Restore Keys</h2>
+    <div>
+      <label for="restore-network">Network</label>
+      <select id="restore-network">
+        <option value="regtest" selected>Regtest</option>
+        <option value="testnet">Testnet</option>
+        <option value="signet">Signet</option>
+        <option value="mainnet">Mainnet</option>
+      </select>
+    </div>
+    <div>
+      <label for="restore-mnemonic">Mnemonic (BIP39)</label>
+      <textarea id="restore-mnemonic" placeholder="Enter 12-word mnemonic or click 'Generate Keys' first and use the mnemonic from there"></textarea>
+    </div>
+    <button id="btn-restore" disabled>Restore Keys</button>
+    <div class="output" id="restore-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('restore-result')">Copy</button></div>
+      <pre id="restore-result"></pre>
+    </div>
+  </div>
+
+  <!-- Round-Trip Verification -->
+  <div class="section">
+    <h2>Round-Trip Verification</h2>
+    <p class="hint">
+      Generates keys, then restores from the mnemonic and verifies all fields match.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="rt-network">Network</label>
+        <select id="rt-network">
+          <option value="regtest" selected>Regtest</option>
+          <option value="testnet">Testnet</option>
+          <option value="signet">Signet</option>
+          <option value="mainnet">Mainnet</option>
+        </select>
+      </div>
+      <button id="btn-roundtrip" disabled>Run Round-Trip Test</button>
+    </div>
+    <div class="output" id="rt-output" style="display:none;">
+      <div id="rt-status"></div>
+      <div class="output-label" style="margin-top: 0.5rem;">Details <button class="copy-btn" onclick="copyOutput('rt-result')">Copy</button></div>
+      <pre id="rt-result"></pre>
+    </div>
+  </div>
+
+  <!-- Create Wallet -->
+  <div class="section">
+    <h2>Create Wallet</h2>
+    <p class="hint">
+      Creates a Wallet from WalletData JSON. Generate keys first, then click "Create Wallet" to auto-fill from generated keys.
+    </p>
+    <div>
+      <label for="wallet-data">WalletData JSON</label>
+      <textarea id="wallet-data" rows="8" placeholder='{"data_dir": ":memory:", "bitcoin_network": "regtest", ...}'></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-create-wallet" disabled>Create Wallet</button>
+      <button id="btn-clear-storage" style="background:#da3633;">Clear Storage</button>
+    </div>
+    <div class="output" id="wallet-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('wallet-result')">Copy</button></div>
+      <pre id="wallet-result"></pre>
+    </div>
+  </div>
+
+  <!-- Go Online + Sync -->
+  <div class="section">
+    <h2>Go Online + Sync</h2>
+    <p class="hint">
+      Connect the wallet to an indexer. The Online object is stored for use by all subsequent operations.
+    </p>
+    <div>
+      <label for="indexer-url">Indexer URL</label>
+      <input id="indexer-url" type="text" value="http://localhost:3000" />
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="skip-consistency" checked> Skip consistency check
+    </label>
+    <div class="btn-group">
+      <button id="btn-go-online" disabled>Go Online</button>
+      <button id="btn-sync" disabled>Sync</button>
+    </div>
+    <div class="output" id="online-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('online-result')">Copy</button></div>
+      <pre id="online-result"></pre>
+    </div>
+  </div>
+
+  <!-- Create UTXOs -->
+  <div class="section">
+    <h2>Create UTXOs</h2>
+    <p class="hint">
+      Three-step PSBT workflow: Begin (create unsigned PSBT) &rarr; Sign &rarr; End (broadcast).
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="utxo-num">Number of UTXOs</label>
+        <input id="utxo-num" type="number" value="5" min="1" />
+      </div>
+      <div>
+        <label for="utxo-size">UTXO size (sats)</label>
+        <input id="utxo-size" type="number" value="1000" min="546" />
+      </div>
+      <div>
+        <label for="utxo-fee-rate">Fee rate (sat/vB)</label>
+        <input id="utxo-fee-rate" type="number" value="1" min="1" />
+      </div>
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="utxo-up-to" checked> Up to (create only if needed)
+    </label>
+    <br />
+    <label class="checkbox-label">
+      <input type="checkbox" id="utxo-skip-sync"> Skip sync
+    </label>
+    <div class="btn-group">
+      <button id="btn-create-utxos-begin" disabled>1. Create UTXOs Begin</button>
+    </div>
+    <div>
+      <label for="utxo-unsigned-psbt">Unsigned PSBT</label>
+      <textarea id="utxo-unsigned-psbt" rows="3" placeholder="Filled automatically by Begin step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-utxo-sign" disabled>2. Sign PSBT</button>
+    </div>
+    <div>
+      <label for="utxo-signed-psbt">Signed PSBT</label>
+      <textarea id="utxo-signed-psbt" rows="3" placeholder="Filled automatically by Sign step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-create-utxos-end" disabled>3. Create UTXOs End</button>
+    </div>
+    <div class="output" id="utxo-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('utxo-result')">Copy</button></div>
+      <pre id="utxo-result"></pre>
+    </div>
+  </div>
+
+  <!-- Issue NIA Asset -->
+  <div class="section">
+    <h2>Issue NIA Asset</h2>
+    <p class="hint">
+      Issues a Non-Inflatable Asset on the wallet. Requires a wallet to be created first and UTXOs to be available.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="nia-ticker">Ticker</label>
+        <input id="nia-ticker" type="text" value="TEST" />
+      </div>
+      <div>
+        <label for="nia-name">Name</label>
+        <input id="nia-name" type="text" value="Test Token" />
+      </div>
+      <div>
+        <label for="nia-precision">Precision</label>
+        <input id="nia-precision" type="number" value="0" min="0" max="18" />
+      </div>
+    </div>
+    <div>
+      <label for="nia-amounts">Amounts (comma-separated)</label>
+      <input id="nia-amounts" type="text" value="1000" />
+    </div>
+    <button id="btn-issue-nia" disabled>Issue NIA</button>
+    <div class="output" id="nia-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('nia-result')">Copy</button></div>
+      <pre id="nia-result"></pre>
+    </div>
+  </div>
+
+  <!-- Issue IFA Asset -->
+  <div class="section">
+    <h2>Issue IFA Asset</h2>
+    <p class="hint">
+      Issues an Inflatable Fungible Asset on the wallet. Requires a wallet to be created first and UTXOs to be available.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="ifa-ticker">Ticker</label>
+        <input id="ifa-ticker" type="text" value="TIFA" />
+      </div>
+      <div>
+        <label for="ifa-name">Name</label>
+        <input id="ifa-name" type="text" value="Test IFA" />
+      </div>
+      <div>
+        <label for="ifa-precision">Precision</label>
+        <input id="ifa-precision" type="number" value="0" min="0" max="18" />
+      </div>
+    </div>
+    <div>
+      <label for="ifa-amounts">Amounts (comma-separated)</label>
+      <input id="ifa-amounts" type="text" value="1000" />
+    </div>
+    <div>
+      <label for="ifa-inflation-amounts">Inflation Amounts (comma-separated)</label>
+      <input id="ifa-inflation-amounts" type="text" value="500" />
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="ifa-replace-rights-num">Replace Rights Num</label>
+        <input id="ifa-replace-rights-num" type="number" value="1" min="0" max="255" />
+      </div>
+      <div>
+        <label for="ifa-reject-list-url">Reject List URL (optional)</label>
+        <input id="ifa-reject-list-url" type="text" value="" placeholder="https://..." />
+      </div>
+    </div>
+    <button id="btn-issue-ifa" disabled>Issue IFA</button>
+    <div class="output" id="ifa-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('ifa-result')">Copy</button></div>
+      <pre id="ifa-result"></pre>
+    </div>
+  </div>
+
+  <!-- Wallet State (read-only operations) -->
+  <div class="section">
+    <h2>Wallet State</h2>
+    <p class="hint">
+      Read-only wallet queries. Each button displays its result below.
+    </p>
+    <div class="btn-group">
+      <button id="btn-btc-balance" disabled>Get BTC Balance</button>
+      <button id="btn-get-address" disabled>Get Address</button>
+      <button id="btn-list-assets" disabled>List Assets</button>
+      <button id="btn-list-unspents" disabled>List Unspents</button>
+      <button id="btn-list-transactions" disabled>List Transactions</button>
+      <button id="btn-list-transfers" disabled>List Transfers</button>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="state-asset-id">Asset ID (for balance lookup)</label>
+        <input id="state-asset-id" type="text" placeholder="Enter asset ID" />
+      </div>
+      <button id="btn-get-asset-balance" disabled>Get Asset Balance</button>
+    </div>
+    <div class="output" id="state-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('state-result')">Copy</button></div>
+      <pre id="state-result"></pre>
+    </div>
+  </div>
+
+  <!-- Receive (blind_receive + witness_receive) -->
+  <div class="section">
+    <h2>Receive</h2>
+    <p class="hint">
+      Create a blind or witness receive invoice. Returns ReceiveData with the invoice string.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="recv-asset-id">Asset ID (optional)</label>
+        <input id="recv-asset-id" type="text" placeholder="Leave empty for any asset" />
+      </div>
+      <div>
+        <label for="recv-assignment">Assignment</label>
+        <select id="recv-assignment">
+          <option value="Any" selected>Any</option>
+          <option value="NonFungible">NonFungible</option>
+          <option value="Fungible">Fungible</option>
+        </select>
+      </div>
+    </div>
+    <div id="recv-fungible-row" style="display:none;">
+      <label for="recv-fungible-amount">Fungible amount</label>
+      <input id="recv-fungible-amount" type="number" value="100" min="1" />
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="recv-duration">Duration (seconds, optional)</label>
+        <input id="recv-duration" type="number" placeholder="Leave empty for default" />
+      </div>
+      <div>
+        <label for="recv-min-conf">Min confirmations</label>
+        <input id="recv-min-conf" type="number" value="1" min="0" />
+      </div>
+    </div>
+    <div>
+      <label for="recv-endpoints">Transport endpoints (comma-separated)</label>
+      <input id="recv-endpoints" type="text" value="rpc://localhost:3000/json-rpc" />
+    </div>
+    <div class="btn-group">
+      <button id="btn-blind-receive" disabled>Blind Receive</button>
+      <button id="btn-witness-receive" disabled>Witness Receive</button>
+    </div>
+    <div class="output" id="recv-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('recv-result')">Copy</button></div>
+      <pre id="recv-result"></pre>
+    </div>
+  </div>
+
+  <!-- Send BTC -->
+  <div class="section">
+    <h2>Send BTC</h2>
+    <p class="hint">
+      Three-step PSBT workflow: Begin &rarr; Sign &rarr; End. Returns txid on success.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="send-btc-address">Destination address</label>
+        <input id="send-btc-address" type="text" placeholder="bc1q... / tb1q..." />
+      </div>
+      <div>
+        <label for="send-btc-amount">Amount (sats)</label>
+        <input id="send-btc-amount" type="number" value="1000" min="1" />
+      </div>
+      <div>
+        <label for="send-btc-fee-rate">Fee rate (sat/vB)</label>
+        <input id="send-btc-fee-rate" type="number" value="1" min="1" />
+      </div>
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="send-btc-skip-sync"> Skip sync
+    </label>
+    <div class="btn-group">
+      <button id="btn-send-btc-begin" disabled>1. Send BTC Begin</button>
+    </div>
+    <div>
+      <label for="send-btc-unsigned-psbt">Unsigned PSBT</label>
+      <textarea id="send-btc-unsigned-psbt" rows="3" placeholder="Filled automatically by Begin step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-send-btc-sign" disabled>2. Sign PSBT</button>
+    </div>
+    <div>
+      <label for="send-btc-signed-psbt">Signed PSBT</label>
+      <textarea id="send-btc-signed-psbt" rows="3" placeholder="Filled automatically by Sign step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-send-btc-end" disabled>3. Send BTC End</button>
+    </div>
+    <div class="output" id="send-btc-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('send-btc-result')">Copy</button></div>
+      <pre id="send-btc-result"></pre>
+    </div>
+  </div>
+
+  <!-- Send RGB -->
+  <div class="section">
+    <h2>Send RGB</h2>
+    <p class="hint">
+      Three-step PSBT workflow for RGB asset transfers. Recipient map is a JSON object mapping asset IDs to arrays of recipients.
+    </p>
+    <div>
+      <label for="send-rgb-recipient-map">Recipient Map (JSON)</label>
+      <textarea id="send-rgb-recipient-map" rows="6" placeholder='{"asset_id": [{"recipient_id": "...", "witness_data": {...}, "amount": 100, "transport_endpoints": ["rpc://localhost:3000/json-rpc"]}]}'></textarea>
+    </div>
+    <div class="field-row">
+      <div>
+        <label for="send-rgb-fee-rate">Fee rate (sat/vB)</label>
+        <input id="send-rgb-fee-rate" type="number" value="1" min="1" />
+      </div>
+      <div>
+        <label for="send-rgb-min-conf">Min confirmations</label>
+        <input id="send-rgb-min-conf" type="number" value="1" min="0" />
+      </div>
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="send-rgb-donation"> Donation
+    </label>
+    <br />
+    <label class="checkbox-label">
+      <input type="checkbox" id="send-rgb-skip-sync"> Skip sync
+    </label>
+    <div class="btn-group">
+      <button id="btn-send-rgb-begin" disabled>1. Send Begin</button>
+    </div>
+    <div>
+      <label for="send-rgb-unsigned-psbt">Unsigned PSBT</label>
+      <textarea id="send-rgb-unsigned-psbt" rows="3" placeholder="Filled automatically by Begin step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-send-rgb-sign" disabled>2. Sign PSBT</button>
+    </div>
+    <div>
+      <label for="send-rgb-signed-psbt">Signed PSBT</label>
+      <textarea id="send-rgb-signed-psbt" rows="3" placeholder="Filled automatically by Sign step"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-send-rgb-end" disabled>3. Send End</button>
+    </div>
+    <div class="output" id="send-rgb-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('send-rgb-result')">Copy</button></div>
+      <pre id="send-rgb-result"></pre>
+    </div>
+  </div>
+
+  <!-- Refresh + Fail Transfers -->
+  <div class="section">
+    <h2>Refresh + Fail / Delete Transfers</h2>
+    <p class="hint">
+      Refresh pending transfers or fail/delete them.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="refresh-asset-id">Asset ID (optional)</label>
+        <input id="refresh-asset-id" type="text" placeholder="Leave empty for all assets" />
+      </div>
+      <div>
+        <label for="refresh-filter">Filter (JSON array)</label>
+        <input id="refresh-filter" type="text" value="[]" />
+      </div>
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="refresh-skip-sync"> Skip sync
+    </label>
+    <div class="btn-group">
+      <button id="btn-refresh" disabled>Refresh</button>
+    </div>
+    <hr style="border-color: #30363d; margin: 1rem 0;" />
+    <div class="field-row">
+      <div>
+        <label for="fail-batch-idx">Batch transfer index (optional)</label>
+        <input id="fail-batch-idx" type="number" placeholder="Leave empty for all" />
+      </div>
+    </div>
+    <label class="checkbox-label">
+      <input type="checkbox" id="fail-no-asset-only"> No asset only
+    </label>
+    <br />
+    <label class="checkbox-label">
+      <input type="checkbox" id="fail-skip-sync"> Skip sync
+    </label>
+    <div class="btn-group">
+      <button id="btn-fail-transfers" disabled>Fail Transfers</button>
+      <button id="btn-delete-transfers" disabled>Delete Transfers</button>
+    </div>
+    <div class="output" id="transfer-ops-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('transfer-ops-result')">Copy</button></div>
+      <pre id="transfer-ops-result"></pre>
+    </div>
+  </div>
+
+  <!-- PSBT Utilities -->
+  <div class="section">
+    <h2>PSBT Utilities</h2>
+    <p class="hint">
+      Standalone sign and finalize operations for manual PSBT handling.
+    </p>
+    <div>
+      <label for="psbt-input">PSBT (base64)</label>
+      <textarea id="psbt-input" rows="4" placeholder="Paste a base64-encoded PSBT here"></textarea>
+    </div>
+    <div class="btn-group">
+      <button id="btn-psbt-sign" disabled>Sign PSBT</button>
+      <button id="btn-psbt-finalize" disabled>Finalize PSBT</button>
+    </div>
+    <div class="output" id="psbt-output" style="display:none;">
+      <div class="output-label">Result <button class="copy-btn" onclick="copyOutput('psbt-result')">Copy</button></div>
+      <pre id="psbt-result"></pre>
+    </div>
+  </div>
+
+  <!-- Error Handling Test -->
+  <div class="section">
+    <h2>Error Handling</h2>
+    <p class="hint">
+      Tests that invalid inputs return proper error messages instead of panicking.
+    </p>
+    <button id="btn-errors" disabled>Run Error Tests</button>
+    <div class="output" id="err-output" style="display:none;">
+      <pre id="err-result"></pre>
+    </div>
+  </div>
+
+  <script type="module">
+    import init, { generate_keys, restore_keys, WasmWallet } from '/pkg/rgb_lib_wasm.js';
+
+    let currentWallet = null;
+    let currentOnline = null;
+
+    const statusEl = document.getElementById('status');
+    const buttons = document.querySelectorAll('button[id^="btn-"]');
+
+    try {
+      await init();
+      statusEl.textContent = 'WASM module loaded successfully';
+      statusEl.className = 'status ready';
+      buttons.forEach(b => b.disabled = false);
+    } catch (e) {
+      statusEl.textContent = 'Failed to load WASM module: ' + e;
+      statusEl.className = 'status error';
+    }
+
+    // --- Helpers ---
+
+    function showResult(outputId, resultId, text) {
+      const outputDiv = document.getElementById(outputId);
+      const resultPre = document.getElementById(resultId);
+      resultPre.textContent = text;
+      outputDiv.style.display = 'block';
+    }
+
+    function showJson(outputId, resultId, obj) {
+      showResult(outputId, resultId, JSON.stringify(obj, null, 2));
+    }
+
+    function showError(outputId, resultId, prefix, e) {
+      showResult(outputId, resultId, prefix + e);
+    }
+
+    function requireWallet(outputId, resultId) {
+      if (!currentWallet) {
+        showResult(outputId, resultId, 'Error: Create a wallet first');
+        return false;
+      }
+      return true;
+    }
+
+    function requireOnline(outputId, resultId) {
+      if (!requireWallet(outputId, resultId)) return false;
+      if (!currentOnline) {
+        showResult(outputId, resultId, 'Error: Go online first');
+        return false;
+      }
+      return true;
+    }
+
+    function optionalInt(id) {
+      const v = document.getElementById(id).value.trim();
+      return v === '' ? undefined : parseInt(v, 10);
+    }
+
+    function optionalString(id) {
+      const v = document.getElementById(id).value.trim();
+      return v === '' ? null : v;
+    }
+
+    // --- Generate Keys ---
+
+    document.getElementById('btn-generate').addEventListener('click', () => {
+      const network = document.getElementById('gen-network').value;
+      try {
+        const keys = generate_keys(network);
+        showJson('gen-output', 'gen-result', keys);
+        if (keys.mnemonic) {
+          document.getElementById('restore-mnemonic').value = keys.mnemonic;
+          document.getElementById('restore-network').value = network;
+          fillWalletData(keys, network);
+        }
+      } catch (e) {
+        showError('gen-output', 'gen-result', 'Error: ', e);
+      }
+    });
+
+    // --- Restore Keys ---
+
+    document.getElementById('btn-restore').addEventListener('click', () => {
+      const network = document.getElementById('restore-network').value;
+      const mnemonic = document.getElementById('restore-mnemonic').value.trim();
+      if (!mnemonic) {
+        showResult('restore-output', 'restore-result', 'Error: Please enter a mnemonic');
+        return;
+      }
+      try {
+        const keys = restore_keys(network, mnemonic);
+        showJson('restore-output', 'restore-result', keys);
+      } catch (e) {
+        showError('restore-output', 'restore-result', 'Error: ', e);
+      }
+    });
+
+    // --- Round-Trip Test ---
+
+    document.getElementById('btn-roundtrip').addEventListener('click', () => {
+      const network = document.getElementById('rt-network').value;
+      const outputDiv = document.getElementById('rt-output');
+      const statusDiv = document.getElementById('rt-status');
+      const resultPre = document.getElementById('rt-result');
+      try {
+        const generated = generate_keys(network);
+        const restored = restore_keys(network, generated.mnemonic);
+
+        const fields = Object.keys(generated);
+        const results = {};
+        let allMatch = true;
+        for (const field of fields) {
+          const genVal = JSON.stringify(generated[field]);
+          const resVal = JSON.stringify(restored[field]);
+          const match = genVal === resVal;
+          if (!match) allMatch = false;
+          results[field] = { generated: generated[field], restored: restored[field], match };
+        }
+
+        statusDiv.innerHTML = allMatch
+          ? '<div class="round-trip-result pass">All fields match \u2014 round-trip OK</div>'
+          : '<div class="round-trip-result fail">Mismatch detected \u2014 see details below</div>';
+
+        const summary = fields.map(f => {
+          const icon = results[f].match ? '\u2705' : '\u274c';
+          const val = typeof results[f].generated === 'string'
+            ? results[f].generated.substring(0, 60) + (results[f].generated.length > 60 ? '...' : '')
+            : JSON.stringify(results[f].generated);
+          return `${icon} ${f}: ${val}`;
+        }).join('\n');
+
+        resultPre.textContent = summary;
+        outputDiv.style.display = 'block';
+      } catch (e) {
+        statusDiv.innerHTML = '<div class="round-trip-result fail">Error: ' + e + '</div>';
+        resultPre.textContent = '';
+        outputDiv.style.display = 'block';
+      }
+    });
+
+    // --- Create Wallet ---
+
+    document.getElementById('btn-create-wallet').addEventListener('click', async () => {
+      let walletDataJson = document.getElementById('wallet-data').value.trim();
+      if (!walletDataJson) {
+        showResult('wallet-output', 'wallet-result', 'Error: Please enter WalletData JSON or generate keys first');
+        return;
+      }
+      try {
+        currentWallet = await WasmWallet.create(walletDataJson);
+        const wd = currentWallet.get_wallet_data();
+        showResult('wallet-output', 'wallet-result', 'Wallet created successfully (with IndexedDB restore)!\n\n' + JSON.stringify(wd, null, 2));
+      } catch (e) {
+        showError('wallet-output', 'wallet-result', 'Error creating wallet: ', e);
+        currentWallet = null;
+      }
+    });
+
+    document.getElementById('btn-clear-storage').addEventListener('click', () => {
+      const req = indexedDB.deleteDatabase('rgb_lib_wallet');
+      req.onsuccess = () => showResult('wallet-output', 'wallet-result', 'IndexedDB storage cleared.');
+      req.onerror = () => showError('wallet-output', 'wallet-result', 'Failed to clear storage: ', req.error);
+    });
+
+    function fillWalletData(keys, network) {
+      const netCapitalized = network.charAt(0).toUpperCase() + network.slice(1);
+      const wd = {
+        data_dir: ':memory:',
+        bitcoin_network: netCapitalized,
+        database_type: 'Sqlite',
+        max_allocations_per_utxo: 5,
+        account_xpub_vanilla: keys.account_xpub_vanilla,
+        account_xpub_colored: keys.account_xpub_colored,
+        mnemonic: keys.mnemonic,
+        master_fingerprint: keys.master_fingerprint,
+        vanilla_keychain: null,
+        supported_schemas: ['Nia', 'Uda', 'Cfa', 'Ifa'],
+      };
+      document.getElementById('wallet-data').value = JSON.stringify(wd, null, 2);
+    }
+
+    // --- Go Online + Sync ---
+
+    document.getElementById('btn-go-online').addEventListener('click', async () => {
+      if (!requireWallet('online-output', 'online-result')) return;
+      const skip = document.getElementById('skip-consistency').checked;
+      const url = document.getElementById('indexer-url').value.trim();
+      try {
+        currentOnline = await currentWallet.go_online(skip, url);
+        showResult('online-output', 'online-result',
+          'Online! Stored for subsequent operations.\n\n' + JSON.stringify(currentOnline, null, 2));
+      } catch (e) {
+        showError('online-output', 'online-result', 'Error going online: ', e);
+      }
+    });
+
+    document.getElementById('btn-sync').addEventListener('click', async () => {
+      if (!requireOnline('online-output', 'online-result')) return;
+      try {
+        await currentWallet.sync(currentOnline);
+        showResult('online-output', 'online-result', 'Sync completed successfully.');
+      } catch (e) {
+        showError('online-output', 'online-result', 'Error syncing: ', e);
+      }
+    });
+
+    // --- Create UTXOs ---
+
+    document.getElementById('btn-create-utxos-begin').addEventListener('click', async () => {
+      if (!requireOnline('utxo-output', 'utxo-result')) return;
+      const upTo = document.getElementById('utxo-up-to').checked;
+      const num = optionalInt('utxo-num');
+      const size = optionalInt('utxo-size');
+      const feeRate = parseInt(document.getElementById('utxo-fee-rate').value, 10) || 1;
+      const skipSync = document.getElementById('utxo-skip-sync').checked;
+      try {
+        const unsignedPsbt = await currentWallet.create_utxos_begin(
+          currentOnline, upTo, num, size, BigInt(feeRate), skipSync
+        );
+        document.getElementById('utxo-unsigned-psbt').value = unsignedPsbt;
+        showResult('utxo-output', 'utxo-result', 'Unsigned PSBT created. Proceed to Sign.');
+      } catch (e) {
+        showError('utxo-output', 'utxo-result', 'Error in create_utxos_begin: ', e);
+      }
+    });
+
+    document.getElementById('btn-utxo-sign').addEventListener('click', () => {
+      if (!requireWallet('utxo-output', 'utxo-result')) return;
+      const unsigned = document.getElementById('utxo-unsigned-psbt').value.trim();
+      if (!unsigned) {
+        showResult('utxo-output', 'utxo-result', 'Error: No unsigned PSBT. Run Begin first.');
+        return;
+      }
+      try {
+        const signed = currentWallet.sign_psbt(unsigned);
+        document.getElementById('utxo-signed-psbt').value = signed;
+        showResult('utxo-output', 'utxo-result', 'PSBT signed. Proceed to End.');
+      } catch (e) {
+        showError('utxo-output', 'utxo-result', 'Error signing PSBT: ', e);
+      }
+    });
+
+    document.getElementById('btn-create-utxos-end').addEventListener('click', async () => {
+      if (!requireOnline('utxo-output', 'utxo-result')) return;
+      const signed = document.getElementById('utxo-signed-psbt').value.trim();
+      if (!signed) {
+        showResult('utxo-output', 'utxo-result', 'Error: No signed PSBT. Run Sign first.');
+        return;
+      }
+      const skipSync = document.getElementById('utxo-skip-sync').checked;
+      try {
+        const count = await currentWallet.create_utxos_end(currentOnline, signed, skipSync);
+        showResult('utxo-output', 'utxo-result', 'UTXOs created: ' + count);
+      } catch (e) {
+        showError('utxo-output', 'utxo-result', 'Error in create_utxos_end: ', e);
+      }
+    });
+
+    // --- Issue NIA Asset ---
+
+    document.getElementById('btn-issue-nia').addEventListener('click', () => {
+      if (!requireWallet('nia-output', 'nia-result')) return;
+      const ticker = document.getElementById('nia-ticker').value.trim();
+      const name = document.getElementById('nia-name').value.trim();
+      const precision = parseInt(document.getElementById('nia-precision').value, 10);
+      const amountsStr = document.getElementById('nia-amounts').value.trim();
+      const amounts = amountsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      try {
+        const asset = currentWallet.issue_asset_nia(ticker, name, precision, amounts);
+        showJson('nia-output', 'nia-result', asset);
+      } catch (e) {
+        showError('nia-output', 'nia-result', 'Error issuing NIA: ', e);
+      }
+    });
+
+    // --- Issue IFA Asset ---
+
+    document.getElementById('btn-issue-ifa').addEventListener('click', () => {
+      if (!requireWallet('ifa-output', 'ifa-result')) return;
+      const ticker = document.getElementById('ifa-ticker').value.trim();
+      const name = document.getElementById('ifa-name').value.trim();
+      const precision = parseInt(document.getElementById('ifa-precision').value, 10);
+      const amountsStr = document.getElementById('ifa-amounts').value.trim();
+      const amounts = amountsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const inflationStr = document.getElementById('ifa-inflation-amounts').value.trim();
+      const inflationAmounts = inflationStr ? inflationStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n)) : [];
+      const replaceRightsNum = parseInt(document.getElementById('ifa-replace-rights-num').value, 10);
+      const rejectListUrl = document.getElementById('ifa-reject-list-url').value.trim() || undefined;
+      try {
+        const asset = currentWallet.issue_asset_ifa(ticker, name, precision, amounts, inflationAmounts, replaceRightsNum, rejectListUrl);
+        showJson('ifa-output', 'ifa-result', asset);
+      } catch (e) {
+        showError('ifa-output', 'ifa-result', 'Error issuing IFA: ', e);
+      }
+    });
+
+    // --- Wallet State (read-only operations) ---
+
+    document.getElementById('btn-btc-balance').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const balance = currentWallet.get_btc_balance();
+        showJson('state-output', 'state-result', balance);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-get-address').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const address = currentWallet.get_address();
+        showResult('state-output', 'state-result', 'Address: ' + address);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-list-assets').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const assets = currentWallet.list_assets([]);
+        showJson('state-output', 'state-result', assets);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-list-unspents').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const unspents = currentWallet.list_unspents(false);
+        showJson('state-output', 'state-result', unspents);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-list-transactions').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const txs = currentWallet.list_transactions();
+        showJson('state-output', 'state-result', txs);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-list-transfers').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      try {
+        const transfers = currentWallet.list_transfers(null);
+        showJson('state-output', 'state-result', transfers);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    document.getElementById('btn-get-asset-balance').addEventListener('click', () => {
+      if (!requireWallet('state-output', 'state-result')) return;
+      const assetId = document.getElementById('state-asset-id').value.trim();
+      if (!assetId) {
+        showResult('state-output', 'state-result', 'Error: Enter an asset ID');
+        return;
+      }
+      try {
+        const balance = currentWallet.get_asset_balance(assetId);
+        showJson('state-output', 'state-result', balance);
+      } catch (e) {
+        showError('state-output', 'state-result', 'Error: ', e);
+      }
+    });
+
+    // --- Receive (blind + witness) ---
+
+    // Show/hide fungible amount based on assignment dropdown
+    document.getElementById('recv-assignment').addEventListener('change', () => {
+      const row = document.getElementById('recv-fungible-row');
+      row.style.display = document.getElementById('recv-assignment').value === 'Fungible' ? 'block' : 'none';
+    });
+
+    function buildAssignment() {
+      const type = document.getElementById('recv-assignment').value;
+      if (type === 'Fungible') {
+        const amount = parseInt(document.getElementById('recv-fungible-amount').value, 10) || 0;
+        return { Fungible: amount };
+      }
+      return type; // "Any" or "NonFungible"
+    }
+
+    function parseEndpoints() {
+      return document.getElementById('recv-endpoints').value
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+    }
+
+    document.getElementById('btn-blind-receive').addEventListener('click', () => {
+      if (!requireWallet('recv-output', 'recv-result')) return;
+      const assetId = optionalString('recv-asset-id');
+      const assignment = buildAssignment();
+      const duration = optionalInt('recv-duration');
+      const endpoints = parseEndpoints();
+      const minConf = parseInt(document.getElementById('recv-min-conf').value, 10) || 1;
+      try {
+        const data = currentWallet.blind_receive(assetId, assignment, duration, endpoints, minConf);
+        showJson('recv-output', 'recv-result', data);
+      } catch (e) {
+        showError('recv-output', 'recv-result', 'Error in blind_receive: ', e);
+      }
+    });
+
+    document.getElementById('btn-witness-receive').addEventListener('click', () => {
+      if (!requireWallet('recv-output', 'recv-result')) return;
+      const assetId = optionalString('recv-asset-id');
+      const assignment = buildAssignment();
+      const duration = optionalInt('recv-duration');
+      const endpoints = parseEndpoints();
+      const minConf = parseInt(document.getElementById('recv-min-conf').value, 10) || 1;
+      try {
+        const data = currentWallet.witness_receive(assetId, assignment, duration, endpoints, minConf);
+        showJson('recv-output', 'recv-result', data);
+      } catch (e) {
+        showError('recv-output', 'recv-result', 'Error in witness_receive: ', e);
+      }
+    });
+
+    // --- Send BTC ---
+
+    document.getElementById('btn-send-btc-begin').addEventListener('click', async () => {
+      if (!requireOnline('send-btc-output', 'send-btc-result')) return;
+      const address = document.getElementById('send-btc-address').value.trim();
+      if (!address) {
+        showResult('send-btc-output', 'send-btc-result', 'Error: Enter a destination address');
+        return;
+      }
+      const amount = parseInt(document.getElementById('send-btc-amount').value, 10) || 0;
+      const feeRate = parseInt(document.getElementById('send-btc-fee-rate').value, 10) || 1;
+      const skipSync = document.getElementById('send-btc-skip-sync').checked;
+      try {
+        const unsignedPsbt = await currentWallet.send_btc_begin(
+          currentOnline, address, BigInt(amount), BigInt(feeRate), skipSync
+        );
+        document.getElementById('send-btc-unsigned-psbt').value = unsignedPsbt;
+        showResult('send-btc-output', 'send-btc-result', 'Unsigned PSBT created. Proceed to Sign.');
+      } catch (e) {
+        showError('send-btc-output', 'send-btc-result', 'Error in send_btc_begin: ', e);
+      }
+    });
+
+    document.getElementById('btn-send-btc-sign').addEventListener('click', () => {
+      if (!requireWallet('send-btc-output', 'send-btc-result')) return;
+      const unsigned = document.getElementById('send-btc-unsigned-psbt').value.trim();
+      if (!unsigned) {
+        showResult('send-btc-output', 'send-btc-result', 'Error: No unsigned PSBT. Run Begin first.');
+        return;
+      }
+      try {
+        const signed = currentWallet.sign_psbt(unsigned);
+        document.getElementById('send-btc-signed-psbt').value = signed;
+        showResult('send-btc-output', 'send-btc-result', 'PSBT signed. Proceed to End.');
+      } catch (e) {
+        showError('send-btc-output', 'send-btc-result', 'Error signing PSBT: ', e);
+      }
+    });
+
+    document.getElementById('btn-send-btc-end').addEventListener('click', async () => {
+      if (!requireOnline('send-btc-output', 'send-btc-result')) return;
+      const signed = document.getElementById('send-btc-signed-psbt').value.trim();
+      if (!signed) {
+        showResult('send-btc-output', 'send-btc-result', 'Error: No signed PSBT. Run Sign first.');
+        return;
+      }
+      const skipSync = document.getElementById('send-btc-skip-sync').checked;
+      try {
+        const txid = await currentWallet.send_btc_end(currentOnline, signed, skipSync);
+        showResult('send-btc-output', 'send-btc-result', 'Transaction broadcast!\nTxid: ' + txid);
+      } catch (e) {
+        showError('send-btc-output', 'send-btc-result', 'Error in send_btc_end: ', e);
+      }
+    });
+
+    // --- Send RGB ---
+
+    document.getElementById('btn-send-rgb-begin').addEventListener('click', async () => {
+      if (!requireOnline('send-rgb-output', 'send-rgb-result')) return;
+      const mapJson = document.getElementById('send-rgb-recipient-map').value.trim();
+      if (!mapJson) {
+        showResult('send-rgb-output', 'send-rgb-result', 'Error: Enter a recipient map JSON');
+        return;
+      }
+      let recipientMap;
+      try {
+        recipientMap = JSON.parse(mapJson);
+      } catch (e) {
+        showResult('send-rgb-output', 'send-rgb-result', 'Error: Invalid JSON in recipient map: ' + e);
+        return;
+      }
+      const donation = document.getElementById('send-rgb-donation').checked;
+      const feeRate = parseInt(document.getElementById('send-rgb-fee-rate').value, 10) || 1;
+      const minConf = parseInt(document.getElementById('send-rgb-min-conf').value, 10) || 1;
+      try {
+        const unsignedPsbt = await currentWallet.send_begin(
+          currentOnline, recipientMap, donation, BigInt(feeRate), minConf
+        );
+        document.getElementById('send-rgb-unsigned-psbt').value = unsignedPsbt;
+        showResult('send-rgb-output', 'send-rgb-result', 'Unsigned PSBT created. Proceed to Sign.');
+      } catch (e) {
+        showError('send-rgb-output', 'send-rgb-result', 'Error in send_begin: ', e);
+      }
+    });
+
+    document.getElementById('btn-send-rgb-sign').addEventListener('click', () => {
+      if (!requireWallet('send-rgb-output', 'send-rgb-result')) return;
+      const unsigned = document.getElementById('send-rgb-unsigned-psbt').value.trim();
+      if (!unsigned) {
+        showResult('send-rgb-output', 'send-rgb-result', 'Error: No unsigned PSBT. Run Begin first.');
+        return;
+      }
+      try {
+        const signed = currentWallet.sign_psbt(unsigned);
+        document.getElementById('send-rgb-signed-psbt').value = signed;
+        showResult('send-rgb-output', 'send-rgb-result', 'PSBT signed. Proceed to End.');
+      } catch (e) {
+        showError('send-rgb-output', 'send-rgb-result', 'Error signing PSBT: ', e);
+      }
+    });
+
+    document.getElementById('btn-send-rgb-end').addEventListener('click', async () => {
+      if (!requireOnline('send-rgb-output', 'send-rgb-result')) return;
+      const signed = document.getElementById('send-rgb-signed-psbt').value.trim();
+      if (!signed) {
+        showResult('send-rgb-output', 'send-rgb-result', 'Error: No signed PSBT. Run Sign first.');
+        return;
+      }
+      const skipSync = document.getElementById('send-rgb-skip-sync').checked;
+      try {
+        const result = await currentWallet.send_end(currentOnline, signed, skipSync);
+        showJson('send-rgb-output', 'send-rgb-result', result);
+      } catch (e) {
+        showError('send-rgb-output', 'send-rgb-result', 'Error in send_end: ', e);
+      }
+    });
+
+    // --- Refresh + Fail / Delete Transfers ---
+
+    document.getElementById('btn-refresh').addEventListener('click', async () => {
+      if (!requireOnline('transfer-ops-output', 'transfer-ops-result')) return;
+      const assetId = optionalString('refresh-asset-id');
+      const filterStr = document.getElementById('refresh-filter').value.trim() || '[]';
+      let filter;
+      try {
+        filter = JSON.parse(filterStr);
+      } catch (e) {
+        showResult('transfer-ops-output', 'transfer-ops-result', 'Error: Invalid filter JSON: ' + e);
+        return;
+      }
+      const skipSync = document.getElementById('refresh-skip-sync').checked;
+      try {
+        const result = await currentWallet.refresh(currentOnline, assetId, filter, skipSync);
+        showJson('transfer-ops-output', 'transfer-ops-result', result);
+      } catch (e) {
+        showError('transfer-ops-output', 'transfer-ops-result', 'Error in refresh: ', e);
+      }
+    });
+
+    document.getElementById('btn-fail-transfers').addEventListener('click', async () => {
+      if (!requireOnline('transfer-ops-output', 'transfer-ops-result')) return;
+      const batchIdx = optionalInt('fail-batch-idx');
+      const noAssetOnly = document.getElementById('fail-no-asset-only').checked;
+      const skipSync = document.getElementById('fail-skip-sync').checked;
+      try {
+        const result = await currentWallet.fail_transfers(
+          currentOnline, batchIdx, noAssetOnly, skipSync
+        );
+        showResult('transfer-ops-output', 'transfer-ops-result', 'Fail transfers result: ' + result);
+      } catch (e) {
+        showError('transfer-ops-output', 'transfer-ops-result', 'Error in fail_transfers: ', e);
+      }
+    });
+
+    document.getElementById('btn-delete-transfers').addEventListener('click', () => {
+      if (!requireWallet('transfer-ops-output', 'transfer-ops-result')) return;
+      const batchIdx = optionalInt('fail-batch-idx');
+      const noAssetOnly = document.getElementById('fail-no-asset-only').checked;
+      try {
+        const result = currentWallet.delete_transfers(batchIdx, noAssetOnly);
+        showResult('transfer-ops-output', 'transfer-ops-result', 'Delete transfers result: ' + result);
+      } catch (e) {
+        showError('transfer-ops-output', 'transfer-ops-result', 'Error in delete_transfers: ', e);
+      }
+    });
+
+    // --- PSBT Utilities ---
+
+    document.getElementById('btn-psbt-sign').addEventListener('click', () => {
+      if (!requireWallet('psbt-output', 'psbt-result')) return;
+      const psbt = document.getElementById('psbt-input').value.trim();
+      if (!psbt) {
+        showResult('psbt-output', 'psbt-result', 'Error: Paste a PSBT first');
+        return;
+      }
+      try {
+        const signed = currentWallet.sign_psbt(psbt);
+        document.getElementById('psbt-input').value = signed;
+        showResult('psbt-output', 'psbt-result', 'PSBT signed successfully.\n\n' + signed);
+      } catch (e) {
+        showError('psbt-output', 'psbt-result', 'Error signing PSBT: ', e);
+      }
+    });
+
+    document.getElementById('btn-psbt-finalize').addEventListener('click', () => {
+      if (!requireWallet('psbt-output', 'psbt-result')) return;
+      const psbt = document.getElementById('psbt-input').value.trim();
+      if (!psbt) {
+        showResult('psbt-output', 'psbt-result', 'Error: Paste a PSBT first');
+        return;
+      }
+      try {
+        const finalized = currentWallet.finalize_psbt(psbt);
+        document.getElementById('psbt-input').value = finalized;
+        showResult('psbt-output', 'psbt-result', 'PSBT finalized successfully.\n\n' + finalized);
+      } catch (e) {
+        showError('psbt-output', 'psbt-result', 'Error finalizing PSBT: ', e);
+      }
+    });
+
+    // --- Error Handling Tests ---
+
+    document.getElementById('btn-errors').addEventListener('click', () => {
+      const tests = [];
+
+      try {
+        generate_keys('invalidnet');
+        tests.push('\u274c generate_keys("invalidnet") \u2014 should have thrown');
+      } catch (e) {
+        tests.push('\u2705 generate_keys("invalidnet") \u2014 caught: ' + e);
+      }
+
+      try {
+        restore_keys('regtest', 'not a valid mnemonic phrase');
+        tests.push('\u274c restore_keys("regtest", "not a valid...") \u2014 should have thrown');
+      } catch (e) {
+        tests.push('\u2705 restore_keys("regtest", "not a valid...") \u2014 caught: ' + e);
+      }
+
+      try {
+        restore_keys('regtest', '');
+        tests.push('\u274c restore_keys("regtest", "") \u2014 should have thrown');
+      } catch (e) {
+        tests.push('\u2705 restore_keys("regtest", "") \u2014 caught: ' + e);
+      }
+
+      const networks = ['regtest', 'testnet', 'signet', 'mainnet'];
+      for (const net of networks) {
+        try {
+          const keys = generate_keys(net);
+          const hasFields = keys.mnemonic && keys.account_xpub_vanilla && keys.account_xpub_colored;
+          tests.push(hasFields
+            ? '\u2705 generate_keys("' + net + '") \u2014 OK, all fields present'
+            : '\u274c generate_keys("' + net + '") \u2014 missing expected fields');
+        } catch (e) {
+          tests.push('\u274c generate_keys("' + net + '") \u2014 threw: ' + e);
+        }
+      }
+
+      showResult('err-output', 'err-result', tests.join('\n'));
+    });
+
+    // --- Copy helper ---
+
+    window.copyOutput = function(id) {
+      const text = document.getElementById(id).textContent;
+      navigator.clipboard.writeText(text);
+    };
+  </script>
+</body>
+</html>
