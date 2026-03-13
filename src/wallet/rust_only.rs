@@ -89,6 +89,92 @@ pub fn check_proxy_url(proxy_url: &str) -> Result<(), Error> {
     check_proxy(proxy_url, None)
 }
 
+/// Validate a consignment using the witness bundled in the consignment (offchain).
+/// This works before the witness transaction is broadcast, unlike [`get_resolver`]-based
+/// validation which requires the TX to be in the indexer.
+///
+/// The `txid` is the witness transaction ID (from consignment.post params).
+/// The `indexer_url` is used as fallback when the witness is not found in the consignment.
+///
+/// <div class="warning">This method is meant for special usage and is normally not needed, use
+/// it only if you know what you're doing</div>
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn validate_consignment_offchain(
+    file_path: &str,
+    txid: &str,
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, Error> {
+    use rgbstd::validation::ValidationError;
+
+    let consignment = RgbTransfer::load_file(file_path).map_err(|e| Error::Internal {
+        details: format!("Failed to load consignment: {e}"),
+    })?;
+
+    let witness_id = RgbTxid::from_str(txid).map_err(|_| Error::InvalidTxid)?;
+    let chain_net: ChainNet = bitcoin_network.into();
+    let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+    let trusted_typesystem = asset_schema.types();
+
+    let fallback_resolver = get_resolver(indexer_url, bitcoin_network)?;
+
+    let resolver = crate::utils::OffchainResolver {
+        witness_id,
+        consignment: &consignment,
+        fallback: &fallback_resolver,
+    };
+
+    let validation_config = ValidationConfig {
+        chain_net,
+        trusted_typesystem,
+        ..Default::default()
+    };
+
+    match consignment.clone().validate(&resolver, &validation_config) {
+        Ok(valid_consignment) => {
+            let status = valid_consignment.validation_status();
+            Ok(ValidateConsignmentResult {
+                valid: true,
+                warnings: Some(
+                    status
+                        .warnings
+                        .iter()
+                        .map(|w| w.to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                error: None,
+                details: None,
+            })
+        }
+        Err(ValidationError::InvalidConsignment(failure)) => Ok(ValidateConsignmentResult {
+            valid: false,
+            warnings: None,
+            error: Some("invalid".to_string()),
+            details: Some(failure.to_string()),
+        }),
+        Err(ValidationError::ResolverError(e)) => Ok(ValidateConsignmentResult {
+            valid: false,
+            warnings: None,
+            error: Some("resolver".to_string()),
+            details: Some(e.to_string()),
+        }),
+    }
+}
+
+/// Result of consignment validation (offchain or indexer-based).
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone)]
+pub struct ValidateConsignmentResult {
+    /// Whether the consignment is valid.
+    pub valid: bool,
+    /// Warnings from validation (when valid).
+    pub warnings: Option<Vec<String>>,
+    /// Error type when invalid ("invalid" or "resolver").
+    pub error: Option<String>,
+    /// Error details when invalid.
+    pub details: Option<String>,
+}
+
 impl Wallet {
     /// Color a PSBT.
     ///

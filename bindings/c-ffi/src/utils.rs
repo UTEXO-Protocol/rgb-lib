@@ -223,6 +223,29 @@ pub(crate) fn validate_consignment(
     }
 }
 
+pub(crate) fn validate_consignment_offchain(
+    file_path: *const c_char,
+    txid: *const c_char,
+    indexer_url: *const c_char,
+    bitcoin_network: *const c_char,
+) -> Result<String, Error> {
+    use rgb_lib::wallet::rust_only::{validate_consignment_offchain as validate_offchain, ValidateConsignmentResult};
+
+    let file_path = ptr_to_string(file_path);
+    let txid = ptr_to_string(txid);
+    let indexer_url = ptr_to_string(indexer_url);
+    let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
+
+    let result: ValidateConsignmentResult = validate_offchain(&file_path, &txid, &indexer_url, bitcoin_network)?;
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "valid": result.valid,
+        "warnings": result.warnings,
+        "error": result.error,
+        "details": result.details,
+    }))?)
+}
+
 pub(crate) fn backup(
     wallet: &COpaqueStruct,
     backup_path: *const c_char,
