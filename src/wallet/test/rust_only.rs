@@ -613,8 +613,7 @@ fn validate_consignment_offchain_success() {
     let asset_id = asset_transfer.asset_id.clone().unwrap();
     let consignment_path = wallet
         .get_send_consignment_path(&asset_id, &txid)
-        .to_string_lossy()
-        .to_string();
+        .to_string_lossy();
 
     let indexer_url = if cfg!(feature = "electrum") {
         ELECTRUM_URL
@@ -623,7 +622,7 @@ fn validate_consignment_offchain_success() {
     };
 
     let result = validate_consignment_offchain(
-        &consignment_path,
+        consignment_path.as_ref(),
         &txid,
         indexer_url,
         BitcoinNetwork::Regtest,
@@ -663,8 +662,7 @@ fn validate_consignment_offchain_invalid_txid() {
     let asset_id = asset_transfer.asset_id.clone().unwrap();
     let consignment_path = wallet
         .get_send_consignment_path(&asset_id, &txid)
-        .to_string_lossy()
-        .to_string();
+        .to_string_lossy();
 
     let indexer_url = if cfg!(feature = "electrum") {
         ELECTRUM_URL
@@ -673,7 +671,7 @@ fn validate_consignment_offchain_invalid_txid() {
     };
 
     let result = validate_consignment_offchain(
-        &consignment_path,
+        consignment_path.as_ref(),
         "not-a-valid-txid",
         indexer_url,
         BitcoinNetwork::Regtest,
