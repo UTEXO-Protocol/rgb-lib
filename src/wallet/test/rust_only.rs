@@ -582,3 +582,124 @@ fn get_tx_height_fail() {
     let result = wallet.get_tx_height(s!("invalidTxid"));
     assert_matches!(result, Err(Error::InvalidTxid));
 }
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[test]
+#[parallel]
+fn validate_consignment_offchain_success() {
+    initialize();
+
+    let amount: u64 = 66;
+    let (mut wallet, online) = get_funded_wallet!();
+    let (rcv_wallet, _rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+
+    let send_result = test_send_result(&mut wallet, &online, &recipient_map).unwrap();
+    let txid = send_result.txid;
+    assert!(!txid.is_empty());
+
+    let (_, asset_transfer, _) = get_test_transfer_sender(&wallet, &txid);
+    let asset_id = asset_transfer.asset_id.clone().unwrap();
+    let consignment_path = wallet
+        .get_send_consignment_path(&asset_id, &txid)
+        .to_string_lossy()
+        .to_string();
+
+    let indexer_url = if cfg!(feature = "electrum") {
+        ELECTRUM_URL
+    } else {
+        ESPLORA_URL
+    };
+
+    let result = validate_consignment_offchain(
+        &consignment_path,
+        &txid,
+        indexer_url,
+        BitcoinNetwork::Regtest,
+    )
+    .unwrap();
+
+    assert!(result.valid, "offchain validation should succeed for consignment with bundled witness");
+    assert!(result.error.is_none());
+    assert!(result.details.is_none());
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[test]
+#[parallel]
+fn validate_consignment_offchain_invalid_txid() {
+    initialize();
+
+    let amount: u64 = 66;
+    let (mut wallet, online) = get_funded_wallet!();
+    let (rcv_wallet, _rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+
+    let send_result = test_send_result(&mut wallet, &online, &recipient_map).unwrap();
+    let txid = send_result.txid;
+    let (_, asset_transfer, _) = get_test_transfer_sender(&wallet, &txid);
+    let asset_id = asset_transfer.asset_id.clone().unwrap();
+    let consignment_path = wallet
+        .get_send_consignment_path(&asset_id, &txid)
+        .to_string_lossy()
+        .to_string();
+
+    let indexer_url = if cfg!(feature = "electrum") {
+        ELECTRUM_URL
+    } else {
+        ESPLORA_URL
+    };
+
+    let result = validate_consignment_offchain(
+        &consignment_path,
+        "not-a-valid-txid",
+        indexer_url,
+        BitcoinNetwork::Regtest,
+    );
+
+    assert_matches!(result, Err(Error::InvalidTxid));
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[test]
+#[parallel]
+fn validate_consignment_offchain_file_not_found() {
+    initialize();
+
+    let indexer_url = if cfg!(feature = "electrum") {
+        ELECTRUM_URL
+    } else {
+        ESPLORA_URL
+    };
+
+    let result = validate_consignment_offchain(
+        "/nonexistent/path/consignment.rgb",
+        "e5a3e577309df31bd606f48049049d2e1e02b048206ba232944fcc053a176ccb",
+        indexer_url,
+        BitcoinNetwork::Regtest,
+    );
+
+    assert_matches!(result, Err(Error::Internal { details: _ }));
+}

@@ -19,7 +19,7 @@ use super::*;
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::wallet::{
-    rust_only::{check_indexer_url, check_proxy_url},
+    rust_only::{check_indexer_url, check_proxy_url, validate_consignment_offchain},
     test::utils::chain::*,
     utils::build_indexer,
 };
