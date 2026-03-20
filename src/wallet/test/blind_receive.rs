@@ -1019,11 +1019,7 @@ fn offline_receiver_insufficient_slots_recovery() {
     fund_wallet(test_get_address(&mut wallet));
     test_create_utxos(&mut wallet, &online, false, Some(2), None, FEE_RATE, Some(2));
 
-    let colorable = test_list_unspents(&mut wallet, Some(&online), false)
-        .into_iter()
-        .filter(|u| u.utxo.colorable)
-        .count();
-    assert_eq!(colorable, 2);
+    assert_colorable_unspent_count(&mut wallet, Some(&online), false, 2);
 
     let receive_data_1 = test_blind_receive(&wallet);
     let receive_data_2 = test_blind_receive(&wallet);
@@ -1047,11 +1043,7 @@ fn offline_receiver_insufficient_slots_recovery() {
 
     test_create_utxos(&mut wallet, &online, false, Some(2), None, FEE_RATE, Some(2));
 
-    let colorable = test_list_unspents(&mut wallet, Some(&online), false)
-        .into_iter()
-        .filter(|u| u.utxo.colorable)
-        .count();
-    assert_eq!(colorable, 4);
+    assert_colorable_unspent_count(&mut wallet, Some(&online), false, 4);
 
     let receive_data_3 = test_blind_receive_result(&wallet)
         .expect("blind_receive must succeed again after create_utxos adds fresh slots");
