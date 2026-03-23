@@ -611,9 +611,8 @@ fn validate_consignment_offchain_success() {
 
     let (_, asset_transfer, _) = get_test_transfer_sender(&wallet, &txid);
     let asset_id = asset_transfer.asset_id.clone().unwrap();
-    let consignment_path = wallet
-        .get_send_consignment_path(&asset_id, &txid)
-        .to_string_lossy();
+    let consignment_pathbuf = wallet.get_send_consignment_path(&asset_id, &txid);
+    let consignment_path = consignment_pathbuf.to_string_lossy();
 
     let indexer_url = if cfg!(feature = "electrum") {
         ELECTRUM_URL
@@ -629,7 +628,10 @@ fn validate_consignment_offchain_success() {
     )
     .unwrap();
 
-    assert!(result.valid, "offchain validation should succeed for consignment with bundled witness");
+    assert!(
+        result.valid,
+        "offchain validation should succeed for consignment with bundled witness"
+    );
     assert!(result.error.is_none());
     assert!(result.details.is_none());
 }
@@ -660,9 +662,8 @@ fn validate_consignment_offchain_invalid_txid() {
     let txid = send_result.txid;
     let (_, asset_transfer, _) = get_test_transfer_sender(&wallet, &txid);
     let asset_id = asset_transfer.asset_id.clone().unwrap();
-    let consignment_path = wallet
-        .get_send_consignment_path(&asset_id, &txid)
-        .to_string_lossy();
+    let consignment_pathbuf = wallet.get_send_consignment_path(&asset_id, &txid);
+    let consignment_path = consignment_pathbuf.to_string_lossy();
 
     let indexer_url = if cfg!(feature = "electrum") {
         ELECTRUM_URL
