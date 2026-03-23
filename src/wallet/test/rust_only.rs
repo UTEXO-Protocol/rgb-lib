@@ -629,7 +629,10 @@ fn validate_consignment_offchain_success() {
     )
     .unwrap();
 
-    assert!(result.valid, "offchain validation should succeed for consignment with bundled witness");
+    assert!(
+        result.valid,
+        "offchain validation should succeed for consignment with bundled witness"
+    );
     assert!(result.error.is_none());
     assert!(result.details.is_none());
 }

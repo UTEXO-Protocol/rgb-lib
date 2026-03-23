@@ -1500,6 +1500,7 @@ impl Wallet {
                 transport_endpoint.endpoint,
                 result.txid,
                 result.vout,
+                result.validated,
             ));
             let mut updated_transfer_transport_endpoint: DbTransferTransportEndpointActMod =
                 transfer_transport_endpoint.into();
@@ -1509,13 +1510,26 @@ impl Wallet {
             break;
         }
 
-        let (consignment, proxy_url, txid, vout) = if let Some(res) = proxy_res {
-            (res.0, res.1, res.2, res.3)
+        let (consignment, proxy_url, txid, vout, validated) = if let Some(res) = proxy_res {
+            (res.0, res.1, res.2, res.3, res.4)
         } else {
             return Ok(None);
         };
 
         let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
+
+        // if the proxy already validated and NACKed, fail immediately
+        if validated == Some(false) {
+            warn!(
+                self.logger,
+                "Proxy already NACKed consignment for {recipient_id}, failing transfer"
+            );
+            updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+            return Ok(Some(
+                self.database
+                    .update_batch_transfer(&mut updated_batch_transfer)?,
+            ));
+        }
 
         // write consignment
         let consignment_path = self.get_receive_consignment_path(&recipient_id);
@@ -1863,7 +1877,15 @@ impl Wallet {
                 debug!(self.logger, "Consignment ACK response: {:?}", r);
             }
             Err(e) if e.to_string().contains("Cannot change ACK") => {
-                warn!(self.logger, "Found an NACK when trying ACK");
+                warn!(
+                    self.logger,
+                    "Pre-existing NACK found when trying to ACK, failing transfer"
+                );
+                updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+                return Ok(Some(
+                    self.database
+                        .update_batch_transfer(&mut updated_batch_transfer)?,
+                ));
             }
             Err(e) => {
                 error!(self.logger, "Failed to post ACK: {e}");

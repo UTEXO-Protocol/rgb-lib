@@ -38,6 +38,7 @@ pub(crate) struct GetConsignmentResponse {
     pub(crate) consignment: String,
     pub(crate) txid: String,
     pub(crate) vout: Option<u32>,
+    pub(crate) validated: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
