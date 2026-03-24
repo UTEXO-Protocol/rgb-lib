@@ -2,9 +2,9 @@ name: Lint code
 
 on:
   push:
-    branches: [ "utexo-master" ]
+    branches: [ "utexo-master", "dev", "stage", "master" ]
   pull_request:
-    branches: [ "utexo-master" ]
+    branches: [ "utexo-master", "dev", "stage", "master" ]
 
 env:
   CARGO_TERM_COLOR: always

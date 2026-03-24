@@ -1874,18 +1874,24 @@ impl Wallet {
             .post_ack(&proxy_url, recipient_id, true)
         {
             Ok(r) => {
+                if let Some(ref err) = r.error {
+                    if err.message.contains("Cannot change ACK") {
+                        warn!(
+                            self.logger,
+                            "Pre-existing NACK found when trying to ACK, failing transfer"
+                        );
+                        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+                        return Ok(Some(
+                            self.database
+                                .update_batch_transfer(&mut updated_batch_transfer)?,
+                        ));
+                    }
+                    error!(self.logger, "Proxy error posting ACK: {}", err.message);
+                    return Err(Error::Proxy {
+                        details: err.message.clone(),
+                    });
+                }
                 debug!(self.logger, "Consignment ACK response: {:?}", r);
-            }
-            Err(e) if e.to_string().contains("Cannot change ACK") => {
-                warn!(
-                    self.logger,
-                    "Pre-existing NACK found when trying to ACK, failing transfer"
-                );
-                updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-                return Ok(Some(
-                    self.database
-                        .update_batch_transfer(&mut updated_batch_transfer)?,
-                ));
             }
             Err(e) => {
                 error!(self.logger, "Failed to post ACK: {e}");
