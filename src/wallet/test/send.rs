@@ -7842,3 +7842,955 @@ fn allocations() {
         );
     }
 }
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_blind_restart_waiting_counterparty() {
+    initialize();
+
+    let amount: u64 = 66;
+    let waiting_balance = Balance {
+        settled: 0,
+        future: amount,
+        spendable: 0,
+    };
+    let settled_balance = Balance {
+        settled: amount,
+        future: amount,
+        spendable: amount,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (rcv_wallet, rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    let rcv_wallet_data = rcv_wallet.wallet_data.clone();
+    drop(rcv_online);
+    drop(rcv_wallet);
+    let (mut rcv_wallet, rcv_online) = restart_test_wallet(rcv_wallet_data);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    mine(false, true);
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Settled
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_witness_restart_waiting_counterparty() {
+    initialize();
+
+    let amount: u64 = 66;
+    let waiting_balance = Balance {
+        settled: 0,
+        future: amount,
+        spendable: 0,
+    };
+    let settled_balance = Balance {
+        settled: amount,
+        future: amount,
+        spendable: amount,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, rcv_online) = get_empty_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let receive_data = test_witness_receive(&mut rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    let pws_before = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert_eq!(pws_before.len(), 1);
+
+    let rcv_wallet_data = rcv_wallet.wallet_data.clone();
+    drop(rcv_online);
+    drop(rcv_wallet);
+    let (mut rcv_wallet, rcv_online) = restart_test_wallet(rcv_wallet_data);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    let pws_after_restart = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert_eq!(pws_after_restart.len(), 1);
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+
+    let pws_after_rcv_refresh = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert_eq!(pws_after_rcv_refresh.len(), 1);
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    rcv_wallet.sync(rcv_online.clone()).unwrap();
+
+    let rcv_txos = rcv_wallet.database.iter_txos().unwrap();
+    let rcv_witness_txos: Vec<database::entities::txo::Model> =
+        rcv_txos.into_iter().filter(|t| t.txid == txid).collect();
+    assert_eq!(rcv_witness_txos.len(), 1);
+    let rcv_txo = rcv_witness_txos.first().unwrap();
+    assert!(rcv_txo.exists);
+    assert!(rcv_txo.pending_witness);
+    let rcv_outpoint = Outpoint {
+        txid: txid.clone(),
+        vout: rcv_txo.vout,
+    };
+
+    let pws_after_broadcast = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert!(pws_after_broadcast.is_empty());
+
+    mine(false, true);
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Settled
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+
+    let rcv_txo = rcv_wallet.database.get_txo(&rcv_outpoint).unwrap().unwrap();
+    assert!(!rcv_txo.pending_witness);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_witness_restart_donation_true() {
+    initialize();
+
+    let amount: u64 = 66;
+    let waiting_balance = Balance {
+        settled: 0,
+        future: amount,
+        spendable: 0,
+    };
+    let settled_balance = Balance {
+        settled: amount,
+        future: amount,
+        spendable: amount,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, rcv_online) = get_empty_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let receive_data = test_witness_receive(&mut rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let OperationResult { txid, .. } = wallet
+        .send(
+            online.clone(),
+            recipient_map,
+            true,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+            false,
+        )
+        .unwrap();
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    let pws_before = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert_eq!(pws_before.len(), 1);
+
+    let rcv_wallet_data = rcv_wallet.wallet_data.clone();
+    drop(rcv_online);
+    drop(rcv_wallet);
+    let (mut rcv_wallet, rcv_online) = restart_test_wallet(rcv_wallet_data);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    rcv_wallet.sync(rcv_online.clone()).unwrap();
+
+    let rcv_txos = rcv_wallet.database.iter_txos().unwrap();
+    let rcv_witness_txos: Vec<database::entities::txo::Model> =
+        rcv_txos.into_iter().filter(|t| t.txid == txid).collect();
+    assert_eq!(rcv_witness_txos.len(), 1);
+    let rcv_txo = rcv_witness_txos.first().unwrap();
+    assert!(rcv_txo.exists);
+    assert!(rcv_txo.pending_witness);
+    let rcv_outpoint = Outpoint {
+        txid: txid.clone(),
+        vout: rcv_txo.vout,
+    };
+
+    let pws_after_sync = rcv_wallet.database.iter_pending_witness_scripts().unwrap();
+    assert!(pws_after_sync.is_empty());
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+
+    test_refresh_all(&mut wallet, &online);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    mine(false, true);
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Settled
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+
+    let rcv_txo = rcv_wallet.database.get_txo(&rcv_outpoint).unwrap().unwrap();
+    assert!(rcv_txo.exists);
+    assert!(!rcv_txo.pending_witness);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_blind_restart_donation_true() {
+    initialize();
+
+    let amount: u64 = 66;
+    let waiting_balance = Balance {
+        settled: 0,
+        future: amount,
+        spendable: 0,
+    };
+    let settled_balance = Balance {
+        settled: amount,
+        future: amount,
+        spendable: amount,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (rcv_wallet, rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let OperationResult { txid, .. } = wallet
+        .send(
+            online.clone(),
+            recipient_map,
+            true,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+            false,
+        )
+        .unwrap();
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    let rcv_wallet_data = rcv_wallet.wallet_data.clone();
+    drop(rcv_online);
+    drop(rcv_wallet);
+    let (mut rcv_wallet, rcv_online) = restart_test_wallet(rcv_wallet_data);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+
+    test_refresh_all(&mut wallet, &online);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    mine(false, true);
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Settled
+    ));
+    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_nack_sender_failed_no_asset_materialized_on_receiver() {
+    initialize();
+
+    let amount: u64 = 66;
+    let zero_balance = Balance {
+        settled: 0,
+        future: 0,
+        spendable: 0,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (rcv_wallet, _rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    // This is intentionally a sender-side NACK invariant test.
+    // The receiver never refreshes after the manual NACK, so the asset must not materialize there.
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    rcv_wallet
+        .rest_client
+        .clone()
+        .post_ack(PROXY_URL, recipient_id.clone(), false)
+        .unwrap();
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::Failed
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_nack_receiver_fails_after_sender_failure() {
+    initialize();
+
+    let amount: u64 = 66;
+    let zero_balance = Balance {
+        settled: 0,
+        future: 0,
+        spendable: 0,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    rcv_wallet
+        .rest_client
+        .clone()
+        .post_ack(PROXY_URL, recipient_id.clone(), false)
+        .unwrap();
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::Failed
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Failed
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+
+    test_refresh_all(&mut wallet, &online);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::Failed
+    ));
+
+    mine(false, true);
+    test_refresh_all(&mut rcv_wallet, &rcv_online);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Failed
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_nack_receiver_fails_before_broadcast() {
+    initialize();
+
+    let amount: u64 = 66;
+    let zero_balance = Balance {
+        settled: 0,
+        future: 0,
+        spendable: 0,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    rcv_wallet
+        .rest_client
+        .clone()
+        .post_ack(PROXY_URL, recipient_id.clone(), false)
+        .unwrap();
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::Failed
+    ));
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Failed
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
+    initialize();
+
+    let amount: u64 = 66;
+    let zero_balance = Balance {
+        settled: 0,
+        future: 0,
+        spendable: 0,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut rcv_wallet, rcv_online) = get_funded_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let receive_data = test_blind_receive(&rcv_wallet);
+    let recipient_id = receive_data.recipient_id.clone();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let OperationResult { txid, .. } = wallet
+        .send(
+            online.clone(),
+            recipient_map,
+            true,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+            false,
+        )
+        .unwrap();
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    rcv_wallet
+        .rest_client
+        .clone()
+        .post_ack(PROXY_URL, recipient_id.clone(), false)
+        .unwrap();
+
+    test_refresh_all(&mut wallet, &online);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Failed
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+
+    mine(false, true);
+    test_refresh_all(&mut rcv_wallet, &rcv_online);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::Settled
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &rcv_wallet,
+        &recipient_id,
+        TransferStatus::Failed
+    ));
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_sequential_receives_slot_integrity_after_restart() {
+    initialize();
+
+    let amount: u64 = 22;
+    let (mut wallet, online) = get_funded_wallet!();
+    let mut rcv_wallet = get_test_wallet(true, Some(5));
+    let mut rcv_online = test_go_online(&mut rcv_wallet, true, None);
+
+    fund_wallet(test_get_address(&mut rcv_wallet));
+    test_create_utxos(
+        &mut rcv_wallet,
+        &rcv_online,
+        false,
+        Some(1),
+        None,
+        FEE_RATE,
+        Some(1),
+    );
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    let mut settled_total = 0;
+
+    for _ in 0..3 {
+        assert_colorable_unspent_count(&mut rcv_wallet, Some(&rcv_online), false, 1);
+
+        let receive_data = test_blind_receive(&rcv_wallet);
+        let recipient_map = HashMap::from([(
+            asset.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_data.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        )]);
+        let txid = test_send(&mut wallet, &online, &recipient_map);
+        assert!(!txid.is_empty());
+
+        wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+        wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+        let waiting_balance = Balance {
+            settled: settled_total,
+            future: settled_total + amount,
+            spendable: 0,
+        };
+        wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+
+        mine(false, false);
+        wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+        wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+        settled_total += amount;
+        let settled_balance = Balance {
+            settled: settled_total,
+            future: settled_total,
+            spendable: settled_total,
+        };
+        assert!(check_test_transfer_status_recipient(
+            &rcv_wallet,
+            &receive_data.recipient_id,
+            TransferStatus::Settled
+        ));
+        wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+
+        assert_colorable_unspent_count(&mut rcv_wallet, Some(&rcv_online), false, 1);
+
+        let rcv_wallet_data = rcv_wallet.wallet_data.clone();
+        drop(rcv_online);
+        drop(rcv_wallet);
+        let (mut reopened_wallet, reopened_online) = restart_test_wallet(rcv_wallet_data);
+
+        wait_for_asset_balance(&reopened_wallet, &asset.asset_id, &settled_balance);
+        assert_colorable_unspent_count(&mut reopened_wallet, Some(&reopened_online), false, 1);
+
+        rcv_wallet = reopened_wallet;
+        rcv_online = reopened_online;
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_mixed_blind_witness_batch_donation_false() {
+    initialize();
+
+    let blind_amount: u64 = 44;
+    let witness_amount: u64 = 22;
+    let blind_waiting_balance = Balance {
+        settled: 0,
+        future: blind_amount,
+        spendable: 0,
+    };
+    let witness_waiting_balance = Balance {
+        settled: 0,
+        future: witness_amount,
+        spendable: 0,
+    };
+    let blind_settled_balance = Balance {
+        settled: blind_amount,
+        future: blind_amount,
+        spendable: blind_amount,
+    };
+    let witness_settled_balance = Balance {
+        settled: witness_amount,
+        future: witness_amount,
+        spendable: witness_amount,
+    };
+
+    let (mut wallet, online) = get_funded_wallet!();
+    let (mut blind_wallet, blind_online) = get_funded_wallet!();
+    let (mut witness_wallet, witness_online) = get_empty_wallet!();
+
+    let asset = test_issue_asset_nia(&mut wallet, &online, None);
+
+    stop_mining();
+
+    let blind_receive_data = test_blind_receive(&blind_wallet);
+    let witness_receive_data = test_witness_receive(&mut witness_wallet);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![
+            Recipient {
+                assignment: Assignment::Fungible(blind_amount),
+                recipient_id: blind_receive_data.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+            Recipient {
+                assignment: Assignment::Fungible(witness_amount),
+                recipient_id: witness_receive_data.recipient_id.clone(),
+                witness_data: Some(WitnessData {
+                    amount_sat: 1000,
+                    blinding: None,
+                }),
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        ],
+    )]);
+    let txid = test_send(&mut wallet, &online, &recipient_map);
+    assert!(!txid.is_empty());
+
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &blind_wallet,
+        &blind_receive_data.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &witness_wallet,
+        &witness_receive_data.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    wait_for_refresh(&mut blind_wallet, &blind_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &blind_wallet,
+        &blind_receive_data.recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&blind_wallet, &asset.asset_id, &blind_waiting_balance);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    wait_for_refresh(&mut witness_wallet, &witness_online, None, None);
+    assert!(check_test_transfer_status_recipient(
+        &witness_wallet,
+        &witness_receive_data.recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+    wait_for_asset_balance(&witness_wallet, &asset.asset_id, &witness_waiting_balance);
+
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet,
+        &txid,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    mine(false, true);
+    wait_for_refresh(&mut blind_wallet, &blind_online, None, None);
+    wait_for_refresh(&mut witness_wallet, &witness_online, None, None);
+    wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
+
+    assert!(check_test_transfer_status_recipient(
+        &blind_wallet,
+        &blind_receive_data.recipient_id,
+        TransferStatus::Settled
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &witness_wallet,
+        &witness_receive_data.recipient_id,
+        TransferStatus::Settled
+    ));
+    wait_for_asset_balance(&blind_wallet, &asset.asset_id, &blind_settled_balance);
+    wait_for_asset_balance(&witness_wallet, &asset.asset_id, &witness_settled_balance);
+}

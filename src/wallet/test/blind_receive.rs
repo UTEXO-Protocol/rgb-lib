@@ -1005,3 +1005,73 @@ fn invoice_new() {
         matches!(result, Err(Error::InvalidInvoice { details: d }) if d == "invalid assignment")
     );
 }
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline_receiver_insufficient_slots_recovery() {
+    initialize();
+
+    let mut wallet = get_test_wallet(true, Some(1));
+    let online = test_go_online(&mut wallet, true, None);
+
+    fund_wallet(test_get_address(&mut wallet));
+    test_create_utxos(
+        &mut wallet,
+        &online,
+        false,
+        Some(2),
+        None,
+        FEE_RATE,
+        Some(2),
+    );
+
+    assert_colorable_unspent_count(&mut wallet, Some(&online), false, 2);
+
+    let receive_data_1 = test_blind_receive(&wallet);
+    let receive_data_2 = test_blind_receive(&wallet);
+    assert!(check_test_transfer_status_recipient(
+        &wallet,
+        &receive_data_1.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+    assert!(check_test_transfer_status_recipient(
+        &wallet,
+        &receive_data_2.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    let err = test_blind_receive_result(&wallet)
+        .expect_err("blind_receive must fail once all allocation slots are occupied");
+    assert!(
+        matches!(err, Error::InsufficientAllocationSlots),
+        "expected InsufficientAllocationSlots after exhausting all slots, got: {err:?}"
+    );
+
+    test_create_utxos(
+        &mut wallet,
+        &online,
+        false,
+        Some(2),
+        None,
+        FEE_RATE,
+        Some(2),
+    );
+
+    assert_colorable_unspent_count(&mut wallet, Some(&online), false, 4);
+
+    let receive_data_3 = test_blind_receive_result(&wallet)
+        .expect("blind_receive must succeed again after create_utxos adds fresh slots");
+    assert!(!receive_data_3.recipient_id.is_empty());
+    assert!(check_test_transfer_status_recipient(
+        &wallet,
+        &receive_data_3.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    let pending_transfers = test_list_transfers(&wallet, None)
+        .into_iter()
+        .filter(|t| t.status == TransferStatus::WaitingCounterparty)
+        .count();
+    assert_eq!(pending_transfers, 3);
+}

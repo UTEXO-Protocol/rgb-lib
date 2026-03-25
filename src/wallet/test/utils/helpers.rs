@@ -424,6 +424,16 @@ pub(crate) fn get_colorable_unspents(
         .collect()
 }
 
+pub(crate) fn assert_colorable_unspent_count(
+    wallet: &mut Wallet,
+    online: Option<&Online>,
+    settled_only: bool,
+    expected_len: usize,
+) {
+    let colorable_len = get_colorable_unspents(wallet, online, settled_only).len();
+    assert_eq!(colorable_len, expected_len);
+}
+
 pub(crate) fn print_unspents(unspents: &[Unspent], msg: &str) {
     println!("\n{msg} ({} unspents)", unspents.len());
     for u in unspents {
@@ -464,6 +474,15 @@ pub(crate) fn wait_for_asset_balance(wallet: &Wallet, asset_id: &str, expected_b
         println!("expected balance: {expected_balance:?}");
         panic!("asset balance is not becoming the expected one");
     }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn restart_test_wallet(wallet_data: WalletData) -> (Wallet, Online) {
+    let mut wallet = Wallet::new(wallet_data).expect("wallet recreate failed");
+    let online = wallet
+        .go_online(true, ELECTRUM_URL.to_string())
+        .expect("go_online after recreate failed");
+    (wallet, online)
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
