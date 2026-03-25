@@ -402,7 +402,6 @@ fn respect_max_allocations() {
     assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
 }
 
-
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
@@ -1017,7 +1016,15 @@ fn offline_receiver_insufficient_slots_recovery() {
     let online = test_go_online(&mut wallet, true, None);
 
     fund_wallet(test_get_address(&mut wallet));
-    test_create_utxos(&mut wallet, &online, false, Some(2), None, FEE_RATE, Some(2));
+    test_create_utxos(
+        &mut wallet,
+        &online,
+        false,
+        Some(2),
+        None,
+        FEE_RATE,
+        Some(2),
+    );
 
     assert_colorable_unspent_count(&mut wallet, Some(&online), false, 2);
 
@@ -1041,7 +1048,15 @@ fn offline_receiver_insufficient_slots_recovery() {
         "expected InsufficientAllocationSlots after exhausting all slots, got: {err:?}"
     );
 
-    test_create_utxos(&mut wallet, &online, false, Some(2), None, FEE_RATE, Some(2));
+    test_create_utxos(
+        &mut wallet,
+        &online,
+        false,
+        Some(2),
+        None,
+        FEE_RATE,
+        Some(2),
+    );
 
     assert_colorable_unspent_count(&mut wallet, Some(&online), false, 4);
 

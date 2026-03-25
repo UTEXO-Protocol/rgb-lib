@@ -6855,7 +6855,6 @@ fn pending_witness_txo() {
     assert!(!rcv_txo.pending_witness);
 }
 
-
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
@@ -8599,7 +8598,15 @@ fn offline_receiver_sequential_receives_slot_integrity_after_restart() {
     let mut rcv_online = test_go_online(&mut rcv_wallet, true, None);
 
     fund_wallet(test_get_address(&mut rcv_wallet));
-    test_create_utxos(&mut rcv_wallet, &rcv_online, false, Some(1), None, FEE_RATE, Some(1));
+    test_create_utxos(
+        &mut rcv_wallet,
+        &rcv_online,
+        false,
+        Some(1),
+        None,
+        FEE_RATE,
+        Some(1),
+    );
 
     let asset = test_issue_asset_nia(&mut wallet, &online, None);
 
