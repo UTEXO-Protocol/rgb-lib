@@ -8338,13 +8338,13 @@ fn offline_receiver_nack_sender_failed_no_asset_materialized_on_receiver() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn offline_receiver_nack_receiver_unaffected_by_sender_failure() {
+fn offline_receiver_nack_receiver_fails_after_sender_failure() {
     initialize();
 
     let amount: u64 = 66;
-    let waiting_balance = Balance {
+    let zero_balance = Balance {
         settled: 0,
-        future: amount,
+        future: 0,
         spendable: 0,
     };
 
@@ -8400,9 +8400,13 @@ fn offline_receiver_nack_receiver_unaffected_by_sender_failure() {
     assert!(check_test_transfer_status_recipient(
         &rcv_wallet,
         &recipient_id,
-        TransferStatus::WaitingConfirmations
+        TransferStatus::Failed
     ));
-    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
 
     test_refresh_all(&mut wallet, &online);
     assert!(check_test_transfer_status_sender(
@@ -8416,9 +8420,13 @@ fn offline_receiver_nack_receiver_unaffected_by_sender_failure() {
     assert!(check_test_transfer_status_recipient(
         &rcv_wallet,
         &recipient_id,
-        TransferStatus::WaitingConfirmations
+        TransferStatus::Failed
     ));
-    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
 }
 
 #[cfg(feature = "electrum")]
@@ -8482,19 +8490,14 @@ fn offline_receiver_nack_receiver_fails_before_broadcast() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn offline_receiver_nack_donation_true_receiver_settles() {
+fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
     initialize();
 
     let amount: u64 = 66;
-    let waiting_balance = Balance {
+    let zero_balance = Balance {
         settled: 0,
-        future: amount,
+        future: 0,
         spendable: 0,
-    };
-    let settled_balance = Balance {
-        settled: amount,
-        future: amount,
-        spendable: amount,
     };
 
     let (mut wallet, online) = get_funded_wallet!();
@@ -8555,12 +8558,16 @@ fn offline_receiver_nack_donation_true_receiver_settles() {
     assert!(check_test_transfer_status_recipient(
         &rcv_wallet,
         &recipient_id,
-        TransferStatus::WaitingConfirmations
+        TransferStatus::Failed
     ));
-    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
 
     mine(false, true);
-    wait_for_refresh(&mut rcv_wallet, &rcv_online, None, None);
+    test_refresh_all(&mut rcv_wallet, &rcv_online);
     wait_for_refresh(&mut wallet, &online, Some(&asset.asset_id), None);
 
     assert!(check_test_transfer_status_sender(
@@ -8571,9 +8578,13 @@ fn offline_receiver_nack_donation_true_receiver_settles() {
     assert!(check_test_transfer_status_recipient(
         &rcv_wallet,
         &recipient_id,
-        TransferStatus::Settled
+        TransferStatus::Failed
     ));
-    wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
+    match test_get_asset_balance_result(&rcv_wallet, &asset.asset_id) {
+        Ok(balance) => assert_eq!(balance, zero_balance),
+        Err(Error::AssetNotFound { .. }) => {}
+        Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
+    }
 }
 
 #[cfg(feature = "electrum")]
