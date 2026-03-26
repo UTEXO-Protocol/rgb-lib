@@ -70,6 +70,7 @@ pub(crate) fn get_test_wallet_data(
         master_fingerprint: fingerprint.to_string(),
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     }
 }
 
@@ -97,6 +98,7 @@ pub(crate) fn get_test_wallet_with_net(
         master_fingerprint: keys.master_fingerprint,
         vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
+        disable_file_log: false,
     })
     .unwrap();
     println!("wallet directory: {:?}", test_get_wallet_dir(&wallet));
