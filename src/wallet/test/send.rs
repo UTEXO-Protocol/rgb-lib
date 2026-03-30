@@ -7981,7 +7981,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         TransferStatus::WaitingConfirmations
     ));
 
-    rcv_wallet.sync(rcv_online.clone()).unwrap();
+    rcv_wallet.sync(rcv_online).unwrap();
 
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
@@ -8095,7 +8095,7 @@ fn offline_receiver_witness_restart_donation_true() {
         TransferStatus::WaitingCounterparty
     ));
 
-    rcv_wallet.sync(rcv_online.clone()).unwrap();
+    rcv_wallet.sync(rcv_online).unwrap();
 
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
@@ -8188,7 +8188,7 @@ fn offline_receiver_blind_restart_donation_true() {
     )]);
     let OperationResult { txid, .. } = wallet
         .send(
-            online.clone(),
+            online,
             recipient_map,
             true,
             FEE_RATE,
@@ -8500,7 +8500,7 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
     )]);
     let OperationResult { txid, .. } = wallet
         .send(
-            online.clone(),
+            online,
             recipient_map,
             true,
             FEE_RATE,

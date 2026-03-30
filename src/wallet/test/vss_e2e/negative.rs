@@ -146,7 +146,7 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
     )]);
     let _ = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -159,8 +159,8 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
         || {
-            let _ = wallet_b.refresh(online_b.clone(), None, vec![], false);
-            let _ = wallet_a.refresh(online_a.clone(), Some(asset_id.clone()), vec![], false);
+            let _ = wallet_b.refresh(online_b, None, vec![], false);
+            let _ = wallet_a.refresh(online_a, Some(asset_id.clone()), vec![], false);
             let bal = wallet_a.get_asset_balance(asset_id.clone()).unwrap();
             bal.settled == expected_settled
         },

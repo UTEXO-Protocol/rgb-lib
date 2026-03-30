@@ -25,14 +25,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
 
     // Ensure non-trivial RGB state.
     let _ = wallet_a
-        .create_utxos(
-            online_a.clone(),
-            true,
-            Some(5),
-            Some(20_000),
-            FEE_RATE,
-            false,
-        )
+        .create_utxos(online_a, true, Some(5), Some(20_000), FEE_RATE, false)
         .expect("create_utxos");
     let issued_supply = 100u64;
     let asset = wallet_a
@@ -64,7 +57,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
     )]);
     let op = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -79,8 +72,8 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
         || {
-            let _ = wallet_b.refresh(online_b.clone(), None, vec![], false);
-            let _ = wallet_a.refresh(online_a.clone(), Some(asset_id.clone()), vec![], false);
+            let _ = wallet_b.refresh(online_b, None, vec![], false);
+            let _ = wallet_a.refresh(online_a, Some(asset_id.clone()), vec![], false);
             let bal = wallet_a.get_asset_balance(asset_id.clone()).unwrap();
             bal.settled == expected_settled
         },
@@ -179,7 +172,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
     let online_r = wallet_r
         .go_online(true, ELECTRUM_URL.to_string())
         .expect("go_online restored");
-    let _ = wallet_r.refresh(online_r.clone(), Some(asset_id.clone()), vec![], false);
+    let _ = wallet_r.refresh(online_r, Some(asset_id.clone()), vec![], false);
 
     let snapshot_post =
         snapshot_wallet_state(&mut wallet_r, &online_r, &asset_id).expect("snapshot post");
@@ -220,14 +213,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
         .iter()
         .filter(|u| u.utxo.colorable)
         .count();
-    match wallet_r.create_utxos(
-        online_r.clone(),
-        true,
-        Some(1),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_r.create_utxos(online_r, true, Some(1), Some(20_000), FEE_RATE, false) {
         Ok(n) => {
             if n > 0 {
                 // `create_utxos` should immediately register new colorable UTXOs. Keep a short wait
@@ -248,7 +234,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
                 if !ok {
                     // Fallback: perform one sync and assert again.
                     let colorable_after = wallet_r
-                        .list_unspents(Some(online_r.clone()), false, false)
+                        .list_unspents(Some(online_r), false, false)
                         .expect("list_unspents post-create_utxos")
                         .iter()
                         .filter(|u| u.utxo.colorable)

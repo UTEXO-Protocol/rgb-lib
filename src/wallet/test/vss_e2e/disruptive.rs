@@ -33,7 +33,7 @@ fn scenario_4_2_vss_unavailable_backup_and_restore_fail_cleanly() {
 
     // Ensure wallet has a non-trivial on-chain state (funded address already exists via helper).
     let _ = wallet_a
-        .get_btc_balance(Some(online_a.clone()), false)
+        .get_btc_balance(Some(online_a), false)
         .expect("get_btc_balance");
 
     let (signing_key, store_id) = generate_signing_key_and_store_id("qa_neg_vss_down");

@@ -52,7 +52,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     )]);
     let _ = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -66,8 +66,8 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     let expected_settled_a = issued_supply - send_amount1;
     let ok = wait_for_function(
         || {
-            let _ = wallet_recv.refresh(online_recv.clone(), None, vec![], false);
-            let _ = wallet_a.refresh(online_a.clone(), Some(asset1_id.clone()), vec![], false);
+            let _ = wallet_recv.refresh(online_recv, None, vec![], false);
+            let _ = wallet_a.refresh(online_a, Some(asset1_id.clone()), vec![], false);
             let bal = wallet_a.get_asset_balance(asset1_id.clone()).unwrap();
             bal.settled == expected_settled_a
         },
@@ -106,7 +106,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     let online_b = wallet_b
         .go_online(true, ELECTRUM_URL.to_string())
         .expect("go_online");
-    let _ = wallet_b.refresh(online_b.clone(), Some(asset1_id.clone()), vec![], false);
+    let _ = wallet_b.refresh(online_b, Some(asset1_id.clone()), vec![], false);
     let bal1_b = wallet_b
         .get_asset_balance(asset1_id.clone())
         .expect("balance");
@@ -117,14 +117,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
 
     // Prove restored wallet is operational: issue a new asset and send it.
     // Be generous with allocations: post-restore state may already have some slots consumed.
-    match wallet_b.create_utxos(
-        online_b.clone(),
-        true,
-        Some(5),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_b.create_utxos(online_b, true, Some(5), Some(20_000), FEE_RATE, false) {
         Ok(_) | Err(Error::AllocationsAlreadyAvailable) => {}
         Err(e) => panic!("create_utxos restored failed: {e:?}"),
     }
@@ -160,7 +153,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     )]);
     let _ = wallet_b
         .send(
-            online_b.clone(),
+            online_b,
             recipient_map2,
             true,
             FEE_RATE,
@@ -174,8 +167,8 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     let expected_asset2_settled = issued2 - send_amount2;
     let ok2 = wait_for_function(
         || {
-            let _ = wallet_b_recv.refresh(online_b_recv.clone(), None, vec![], false);
-            let _ = wallet_b.refresh(online_b.clone(), Some(asset2_id.clone()), vec![], false);
+            let _ = wallet_b_recv.refresh(online_b_recv, None, vec![], false);
+            let _ = wallet_b.refresh(online_b, Some(asset2_id.clone()), vec![], false);
             let bal2 = wallet_b.get_asset_balance(asset2_id.clone()).unwrap();
             bal2.settled == expected_asset2_settled
         },

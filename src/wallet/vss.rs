@@ -1038,10 +1038,10 @@ fn unzip_wallet_from_bytes(data: &[u8], target_dir: &Path, logger: &Logger) -> R
                 outpath,
                 file.size()
             );
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(p)?;
-                }
+            if let Some(p) = outpath.parent()
+                && !p.exists()
+            {
+                fs::create_dir_all(p)?;
             }
             let mut outfile = fs::File::create(&outpath)?;
             std::io::copy(&mut file, &mut outfile)?;

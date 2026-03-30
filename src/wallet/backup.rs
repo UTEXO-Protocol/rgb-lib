@@ -69,6 +69,7 @@ impl BackupPubData {
     }
 }
 
+#[allow(async_fn_in_trait)]
 pub trait WalletBackup: WalletCore {
     /// For now setting the scrypt params is done only for testing purposes,
     /// a few details should be refined before allowing to set this in the public API:

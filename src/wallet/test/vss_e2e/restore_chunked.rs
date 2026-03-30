@@ -22,14 +22,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
     let (mut wallet_b, online_b) = get_empty_wallet!();
 
     // Make non-trivial RGB state (so restore correctness isn't just "file exists on disk").
-    match wallet_a.create_utxos(
-        online_a.clone(),
-        true,
-        Some(3),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_a.create_utxos(online_a, true, Some(3), Some(20_000), FEE_RATE, false) {
         Ok(_) | Err(Error::AllocationsAlreadyAvailable) => {}
         Err(e) => panic!("create_utxos failed: {e:?}"),
     }
@@ -64,7 +57,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
     )]);
     let _ = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -78,8 +71,8 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
         || {
-            let _ = wallet_b.refresh(online_b.clone(), None, vec![], false);
-            let _ = wallet_a.refresh(online_a.clone(), Some(asset_id.clone()), vec![], false);
+            let _ = wallet_b.refresh(online_b, None, vec![], false);
+            let _ = wallet_a.refresh(online_a, Some(asset_id.clone()), vec![], false);
             let bal = wallet_a.get_asset_balance(asset_id.clone()).unwrap();
             bal.settled == expected_settled
         },
@@ -103,7 +96,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
 
     // Touch chain once so BTC state isn't empty in restored wallet.
     let _ = wallet_a
-        .get_btc_balance(Some(online_a.clone()), false)
+        .get_btc_balance(Some(online_a), false)
         .expect("btc balance");
 
     let vss_url = vss_server_url();

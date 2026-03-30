@@ -59,14 +59,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
         .unwrap_or(-1);
 
     // 1) create_utxos (state change)
-    match wallet_a.create_utxos(
-        online_a.clone(),
-        true,
-        Some(3),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_a.create_utxos(online_a, true, Some(3), Some(20_000), FEE_RATE, false) {
         Ok(_) | Err(Error::AllocationsAlreadyAvailable) => {}
         Err(e) => panic!("create_utxos failed: {e:?}"),
     }
@@ -141,7 +134,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
     )]);
     let _ = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -188,14 +181,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
         .expect("configure_vss_backup");
 
     // Trigger one state change while auto-backup is enabled to create the baseline backup.
-    match wallet_a.create_utxos(
-        online_a.clone(),
-        true,
-        Some(3),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_a.create_utxos(online_a, true, Some(3), Some(20_000), FEE_RATE, false) {
         Ok(_) | Err(Error::AllocationsAlreadyAvailable) => {}
         Err(e) => panic!("create_utxos failed: {e:?}"),
     }
@@ -271,7 +257,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
     )]);
     let _ = wallet_a
         .send(
-            online_a.clone(),
+            online_a,
             recipient_map,
             true,
             FEE_RATE,
@@ -288,14 +274,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
         "send()",
     );
 
-    match wallet_a.create_utxos(
-        online_a.clone(),
-        true,
-        Some(1),
-        Some(20_000),
-        FEE_RATE,
-        false,
-    ) {
+    match wallet_a.create_utxos(online_a, true, Some(1), Some(20_000), FEE_RATE, false) {
         Ok(_) | Err(Error::AllocationsAlreadyAvailable) => {}
         Err(e) => panic!("create_utxos failed: {e:?}"),
     }
@@ -376,11 +355,11 @@ fn scenario_3_3_concurrent_auto_backup_triggers_do_not_start_parallel_uploads() 
                 .block_on(check_client.get_backup_version())
                 .ok()
                 .flatten();
-            if let Some(v) = v {
-                if v > baseline {
-                    v1 = Some(v);
-                    return true;
-                }
+            if let Some(v) = v
+                && v > baseline
+            {
+                v1 = Some(v);
+                return true;
             }
             false
         },
@@ -422,7 +401,7 @@ fn manual_smoke_autobackup_async_restore() {
         .expect("issue_asset_nia");
     let asset_id = asset.asset_id.clone();
     mine_blocks(false, 2, false);
-    let _ = wallet_a.refresh(online_a.clone(), Some(asset_id.clone()), vec![], false);
+    let _ = wallet_a.refresh(online_a, Some(asset_id.clone()), vec![], false);
 
     let bal_pre = wallet_a
         .get_asset_balance(asset_id.clone())
@@ -524,7 +503,7 @@ fn manual_smoke_autobackup_blocking_restore() {
         .expect("issue_asset_nia");
     let asset_id = asset.asset_id.clone();
     mine_blocks(false, 2, false);
-    let _ = wallet_a.refresh(online_a.clone(), Some(asset_id.clone()), vec![], false);
+    let _ = wallet_a.refresh(online_a, Some(asset_id.clone()), vec![], false);
 
     let bal_pre = wallet_a
         .get_asset_balance(asset_id.clone())
