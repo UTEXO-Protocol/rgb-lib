@@ -146,6 +146,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             false,
         )
         .expect("send");
@@ -275,6 +276,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             false,
         )
         .expect("send");
@@ -475,7 +477,8 @@ fn manual_smoke_autobackup_async_restore() {
 
     let mut restored_data = wallet_a.get_wallet_data();
     restored_data.data_dir = restore_root.to_string();
-    let mut wallet_r = Wallet::new(restored_data).expect("Wallet::new restored");
+    let restored_keys = wallet_a.get_keys();
+    let mut wallet_r = Wallet::new(restored_data, restored_keys).expect("Wallet::new restored");
     let online_r = wallet_r
         .go_online(true, ELECTRUM_URL.to_string())
         .expect("go_online restored");
@@ -557,7 +560,8 @@ fn manual_smoke_autobackup_blocking_restore() {
 
     let mut restored_data = wallet_a.get_wallet_data();
     restored_data.data_dir = restore_root.to_string();
-    let mut wallet_r = Wallet::new(restored_data).expect("Wallet::new restored");
+    let restored_keys = wallet_a.get_keys();
+    let mut wallet_r = Wallet::new(restored_data, restored_keys).expect("Wallet::new restored");
     let online_r = wallet_r
         .go_online(true, ELECTRUM_URL.to_string())
         .expect("go_online restored");

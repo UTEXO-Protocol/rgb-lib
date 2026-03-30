@@ -151,6 +151,7 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             false,
         )
         .expect("send");
@@ -262,21 +263,20 @@ fn scenario_4_3_wrong_url_vss_backup_fails_and_keeps_backup_info() {
     let rt = tokio_runtime();
 
     let keys = generate_keys(BitcoinNetwork::Regtest);
+    let wallet_keys = SinglesigKeys::from_keys(&keys, None);
     // Keep tempdir alive for the entire test; Wallet::new requires the directory to exist.
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_dir = tmp.path().to_str().unwrap().to_string();
-    let mut wallet = Wallet::new(WalletData {
-        data_dir,
-        bitcoin_network: BitcoinNetwork::Regtest,
-        database_type: DatabaseType::Sqlite,
-        max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-        account_xpub_vanilla: keys.account_xpub_vanilla,
-        account_xpub_colored: keys.account_xpub_colored,
-        mnemonic: Some(keys.mnemonic),
-        master_fingerprint: keys.master_fingerprint,
-        vanilla_keychain: None,
-        supported_schemas: vec![AssetSchema::Nia],
-    })
+    let mut wallet = Wallet::new(
+        WalletData {
+            data_dir,
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: vec![AssetSchema::Nia],
+        },
+        wallet_keys,
+    )
     .expect("wallet new");
 
     let _ = wallet.get_address().expect("get_address");

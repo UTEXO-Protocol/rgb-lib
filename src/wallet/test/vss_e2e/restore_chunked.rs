@@ -69,6 +69,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             false,
         )
         .expect("send");
@@ -169,7 +170,8 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
     // Open restored wallet and compare RGB state.
     let mut restored_data = wallet_a.get_wallet_data();
     restored_data.data_dir = restore_root.to_string();
-    let mut wallet_r = Wallet::new(restored_data).expect("Wallet::new restored");
+    let restored_keys = wallet_a.get_keys();
+    let mut wallet_r = Wallet::new(restored_data, restored_keys).expect("Wallet::new restored");
     assert!(
         !wallet_r.backup_info().expect("backup_info"),
         "backup_info should be false immediately after restore"
