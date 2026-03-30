@@ -1742,6 +1742,28 @@ impl MultisigWallet {
             .inspect_rgb_transfer(psbt, fascia_path, entropy)?
             .into())
     }
+
+    fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {
+        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
+        self._get_wallet().configure_vss_backup(rgb_lib_config)
+    }
+
+    fn disable_vss_auto_backup(&self) {
+        self._get_wallet().disable_vss_auto_backup()
+    }
+
+    fn vss_backup(&self, client: std::sync::Arc<VssBackupClient>) -> Result<i64, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup(&vss_client))
+    }
+
+    fn vss_backup_info(
+        &self,
+        client: std::sync::Arc<VssBackupClient>,
+    ) -> Result<VssBackupInfo, RgbLibError> {
+        let vss_client = client._get_client();
+        vss_runtime().block_on(self._get_wallet().vss_backup_info(&vss_client))
+    }
 }
 
 uniffi::deps::static_assertions::assert_impl_all!(MultisigWallet: Sync, Send);

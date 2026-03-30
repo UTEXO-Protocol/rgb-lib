@@ -1067,4 +1067,15 @@ interface MultisigWallet {
   [Throws=RgbLibError]
   OperationInfo respond_to_operation(
     Online online, i32 operation_idx, RespondToOperation respond_to_operation);
+
+  [Throws=RgbLibError]
+  void configure_vss_backup(VssBackupConfig config);
+
+  void disable_vss_auto_backup();
+
+  [Throws=RgbLibError]
+  i64 vss_backup(VssBackupClient client);
+
+  [Throws=RgbLibError]
+  VssBackupInfo vss_backup_info(VssBackupClient client);
 };

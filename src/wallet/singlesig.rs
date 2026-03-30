@@ -245,6 +245,7 @@ impl Wallet {
         let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger(), "Get address completed");
         Ok(address.to_string())
@@ -258,6 +259,7 @@ impl Wallet {
         let asset = self.import_and_save_contract(issue_data, &mut runtime)?;
         let result = T::from_issuance(self, &asset, issue_data)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         Ok(result)
     }
 
@@ -320,6 +322,7 @@ impl Wallet {
                     None,
                 )?;
                 self.update_backup_info(false)?;
+                self.trigger_auto_backup();
                 Ok(asset_uda)
             },
         )
@@ -429,6 +432,7 @@ impl Wallet {
             self.store_receive_transfer(&receive_data_internal, min_confirmations)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger(), "Blind receive completed");
         Ok(ReceiveData {
@@ -488,6 +492,7 @@ impl Wallet {
             self.store_receive_transfer(&receive_data_internal, min_confirmations)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         info!(self.logger(), "Witness receive completed");
         Ok(ReceiveData {
@@ -536,6 +541,7 @@ impl Wallet {
         self.sign_psbt_impl(&mut psbt, None)?;
         let res = self.create_utxos_end_impl(&psbt, skip_sync)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Create UTXOs completed");
         Ok(res)
     }
@@ -644,6 +650,7 @@ impl Wallet {
         self.sign_psbt_impl(&mut psbt, None)?;
         let tx = self.drain_to_end_impl(&psbt)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Drain completed");
         Ok(tx.compute_txid().to_string())
     }
@@ -693,6 +700,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let tx = self.drain_to_end_impl(&psbt)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Drain (end) completed");
         Ok(tx.compute_txid().to_string())
     }
@@ -727,6 +735,7 @@ impl Wallet {
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.send_end_impl(&begin_op_data.psbt, skip_sync)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Send completed");
         Ok(res)
     }
@@ -786,6 +795,7 @@ impl Wallet {
             dry_run,
         )?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Send (begin) completed");
         Ok(SendBeginResult {
             psbt: begin_op_data.psbt.to_string(),
@@ -823,6 +833,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let res = self.send_end_impl(&psbt, skip_sync)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Send (end) completed");
         Ok(res)
     }
@@ -927,6 +938,7 @@ impl Wallet {
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.inflate_end_impl(&begin_op_data.psbt)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Inflate completed");
         Ok(res)
     }
@@ -976,6 +988,7 @@ impl Wallet {
             dry_run,
         )?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Inflate (begin) completed");
         Ok(InflateBeginResult {
             psbt: begin_operation_data.psbt.to_string(),
@@ -1013,6 +1026,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let res = self.inflate_end_impl(&psbt)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Inflate (end) completed");
         Ok(res)
     }

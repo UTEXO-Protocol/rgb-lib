@@ -1056,6 +1056,7 @@ impl MultisigWallet {
         self.check_is_cosigner()?;
         let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Get address completed");
         Ok(address.to_string())
     }
@@ -1140,6 +1141,7 @@ impl MultisigWallet {
             }
         }
         self.update_backup_info_with_op_idx(false, Some(operation_idx))?;
+        self.trigger_auto_backup();
         Ok(())
     }
 
@@ -1342,6 +1344,7 @@ impl MultisigWallet {
             self.store_receive_transfer(&receive_data_internal, min_confirmations)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         self.mark_operation_as_processed(response.operation_idx)?;
 
@@ -1560,6 +1563,7 @@ impl MultisigWallet {
         self.import_and_save_contract(&issue_data, &mut runtime)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
 
         Ok(asset_id)
     }
@@ -1688,6 +1692,7 @@ impl MultisigWallet {
         }
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Sync with hub completed");
         Ok(Some(OperationInfo {
             operation_idx: op.operation_idx,
@@ -1894,6 +1899,7 @@ impl MultisigWallet {
         let operation = self.process_operation(&operation_response)?;
 
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Responding to operation...");
         Ok(OperationInfo {
             operation_idx: operation_response.operation_idx,
@@ -1967,6 +1973,7 @@ impl MultisigWallet {
         let psbt = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync)?;
         let res = self.post_operation(OperationType::CreateUtxos, PostData::Psbt(psbt))?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Initiate creating UTXOs completed");
         Ok(res)
     }
@@ -1990,6 +1997,7 @@ impl MultisigWallet {
         let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync)?;
         let res = self.post_operation(OperationType::SendBtc, PostData::Psbt(psbt))?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Initiate sending BTC completed");
         Ok(res)
     }
@@ -2042,6 +2050,7 @@ impl MultisigWallet {
             PostData::BeginOperationData(Box::new(data)),
         )?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Initiate sending completed");
         Ok(res)
     }
@@ -2082,8 +2091,38 @@ impl MultisigWallet {
             PostData::BeginOperationData(Box::new(data)),
         )?;
         self.update_backup_info(false)?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Initiate inflating completed");
         Ok(res)
+    }
+}
+
+#[cfg(feature = "vss")]
+impl MultisigWallet {
+    /// Configure VSS backup for this wallet.
+    pub fn configure_vss_backup(
+        &mut self,
+        config: super::vss::VssBackupConfig,
+    ) -> Result<(), Error> {
+        WalletBackup::configure_vss_backup(self, config)
+    }
+
+    /// Disable VSS auto-backup.
+    pub fn disable_vss_auto_backup(&mut self) {
+        WalletBackup::disable_vss_auto_backup(self)
+    }
+
+    /// Perform a VSS backup.
+    pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
+        WalletBackup::vss_backup(self, client).await
+    }
+
+    /// Get VSS backup info.
+    pub async fn vss_backup_info(
+        &self,
+        client: &super::vss::VssBackupClient,
+    ) -> Result<super::vss::VssBackupInfo, Error> {
+        WalletBackup::vss_backup_info(self, client).await
     }
 }
 
