@@ -436,6 +436,7 @@ pub(crate) fn get_colorable_unspents(
         .collect()
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn assert_colorable_unspent_count(
     wallet: &mut Wallet,
     online: Option<Online>,
