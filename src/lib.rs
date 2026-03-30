@@ -87,6 +87,8 @@ pub use crate::{
     utils::{BitcoinNetwork, block_on},
     wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
 };
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub use rgbstd::validation::{ValidationConfig, ValidationError};
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
@@ -206,7 +208,7 @@ use rgbstd::{
     daggy::Walker,
     indexers::AnyResolver,
     info::ContractInfo,
-    validation::{OpoutsDagData, ValidationConfig, ValidationError, Validity, Warning},
+    validation::{OpoutsDagData, Validity, Warning},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};

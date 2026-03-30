@@ -1017,3 +1017,32 @@ impl Wallet {
         Ok(res)
     }
 }
+
+#[cfg(feature = "vss")]
+impl Wallet {
+    /// Configure VSS backup for this wallet.
+    pub fn configure_vss_backup(
+        &mut self,
+        config: super::vss::VssBackupConfig,
+    ) -> Result<(), Error> {
+        WalletBackup::configure_vss_backup(self, config)
+    }
+
+    /// Disable VSS auto-backup.
+    pub fn disable_vss_auto_backup(&mut self) {
+        WalletBackup::disable_vss_auto_backup(self)
+    }
+
+    /// Perform a VSS backup.
+    pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
+        WalletBackup::vss_backup(self, client).await
+    }
+
+    /// Get VSS backup info.
+    pub async fn vss_backup_info(
+        &self,
+        client: &super::vss::VssBackupClient,
+    ) -> Result<super::vss::VssBackupInfo, Error> {
+        WalletBackup::vss_backup_info(self, client).await
+    }
+}
