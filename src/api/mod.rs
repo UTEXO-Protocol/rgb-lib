@@ -1,10 +1,8 @@
-pub(crate) mod multisig_hub;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) mod proxy;
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) mod reject_list;
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 use super::*;
-
-const JSON: &str = "application/json";
-const OCTET_STREAM: &str = "application/octet-stream";
-const CONNECT_TIMEOUT: u64 = 10;
-const READ_WRITE_TIMEOUT: u64 = 120;

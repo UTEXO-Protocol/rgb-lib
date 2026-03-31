@@ -78,7 +78,7 @@ pub(crate) fn snapshot_wallet_state(
     let rgb_metadata = wallet.get_asset_metadata(asset_id.to_string())?;
     let transfers = summarize_transfers(wallet, asset_id)?;
     let transactions = summarize_transactions(wallet, online)?;
-    let btc_balance = wallet.get_btc_balance(Some(*online), false)?;
+    let btc_balance = wallet.get_btc_balance(Some(online.clone()), false)?;
 
     // Unspents summary (DB-level): avoid extra network sync; `refresh()` should have been called by
     // the test already.
@@ -152,7 +152,7 @@ pub(crate) fn summarize_transactions(
     wallet: &mut Wallet,
     online: &Online,
 ) -> Result<Vec<(u8, String, u64, u64, u64)>, Error> {
-    let mut txs = wallet.list_transactions(Some(*online), false)?;
+    let mut txs = wallet.list_transactions(Some(online.clone()), false)?;
     txs.sort_by_key(|t| t.txid.clone());
     Ok(txs
         .into_iter()
@@ -287,10 +287,10 @@ pub(crate) fn dir_has_any_subdir(root: &Path) -> bool {
         Err(_) => return false,
     };
     for e in entries.flatten() {
-        if let Ok(ft) = e.file_type()
-            && ft.is_dir()
-        {
-            return true;
+        if let Ok(ft) = e.file_type() {
+            if ft.is_dir() {
+                return true;
+            }
         }
     }
     false

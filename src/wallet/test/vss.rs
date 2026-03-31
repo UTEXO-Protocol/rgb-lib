@@ -476,7 +476,7 @@ async fn auto_backup() {
     let secp = Secp256k1::new();
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
-    let (wallet_data, wallet_keys) = {
+    let wallet_data = {
         let keys = generate_keys(BitcoinNetwork::Regtest);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
@@ -484,27 +484,28 @@ async fn auto_backup() {
         // Keep the tempdir alive without cleanup (wallet needs it)
         let _keep = temp_dir.keep();
 
-        let wallet_keys = SinglesigKeys::from_keys(&keys, None);
-        (
-            WalletData {
-                data_dir,
-                bitcoin_network: BitcoinNetwork::Regtest,
-                database_type: DatabaseType::Sqlite,
-                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                supported_schemas: vec![
-                    AssetSchema::Nia,
-                    AssetSchema::Uda,
-                    AssetSchema::Cfa,
-                    AssetSchema::Ifa,
-                ],
-            },
-            wallet_keys,
-        )
+        WalletData {
+            data_dir,
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            account_xpub_vanilla: keys.account_xpub_vanilla,
+            account_xpub_colored: keys.account_xpub_colored,
+            mnemonic: Some(keys.mnemonic),
+            master_fingerprint: keys.master_fingerprint,
+            vanilla_keychain: None,
+            supported_schemas: vec![
+                AssetSchema::Nia,
+                AssetSchema::Uda,
+                AssetSchema::Cfa,
+                AssetSchema::Ifa,
+            ],
+        }
     };
 
     // Create wallet on a blocking task (Wallet::new uses block_on internally
     // for database migration, which conflicts with the tokio async context)
-    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data, wallet_keys))
+    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data))
         .await
         .expect("spawn_blocking panicked")
         .expect("failed to create wallet");
@@ -563,7 +564,7 @@ async fn unencrypted_auto_backup() {
     let secp = Secp256k1::new();
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
-    let (wallet_data, wallet_keys) = {
+    let wallet_data = {
         let keys = generate_keys(BitcoinNetwork::Regtest);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
@@ -571,27 +572,28 @@ async fn unencrypted_auto_backup() {
         // Keep the tempdir alive without cleanup (wallet needs it)
         let _keep = temp_dir.keep();
 
-        let wallet_keys = SinglesigKeys::from_keys(&keys, None);
-        (
-            WalletData {
-                data_dir,
-                bitcoin_network: BitcoinNetwork::Regtest,
-                database_type: DatabaseType::Sqlite,
-                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                supported_schemas: vec![
-                    AssetSchema::Nia,
-                    AssetSchema::Uda,
-                    AssetSchema::Cfa,
-                    AssetSchema::Ifa,
-                ],
-            },
-            wallet_keys,
-        )
+        WalletData {
+            data_dir,
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            account_xpub_vanilla: keys.account_xpub_vanilla,
+            account_xpub_colored: keys.account_xpub_colored,
+            mnemonic: Some(keys.mnemonic),
+            master_fingerprint: keys.master_fingerprint,
+            vanilla_keychain: None,
+            supported_schemas: vec![
+                AssetSchema::Nia,
+                AssetSchema::Uda,
+                AssetSchema::Cfa,
+                AssetSchema::Ifa,
+            ],
+        }
     };
 
     // Create wallet on a blocking task (Wallet::new uses block_on internally
     // for database migration, which conflicts with the tokio async context)
-    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data, wallet_keys))
+    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data))
         .await
         .expect("spawn_blocking panicked")
         .expect("failed to create wallet");
@@ -665,7 +667,7 @@ async fn blocking_auto_backup() {
     let secp = Secp256k1::new();
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
-    let (wallet_data, wallet_keys) = {
+    let wallet_data = {
         let keys = generate_keys(BitcoinNetwork::Regtest);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
@@ -673,27 +675,28 @@ async fn blocking_auto_backup() {
         // Keep the tempdir alive without cleanup (wallet needs it)
         let _keep = temp_dir.keep();
 
-        let wallet_keys = SinglesigKeys::from_keys(&keys, None);
-        (
-            WalletData {
-                data_dir,
-                bitcoin_network: BitcoinNetwork::Regtest,
-                database_type: DatabaseType::Sqlite,
-                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                supported_schemas: vec![
-                    AssetSchema::Nia,
-                    AssetSchema::Uda,
-                    AssetSchema::Cfa,
-                    AssetSchema::Ifa,
-                ],
-            },
-            wallet_keys,
-        )
+        WalletData {
+            data_dir,
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            account_xpub_vanilla: keys.account_xpub_vanilla,
+            account_xpub_colored: keys.account_xpub_colored,
+            mnemonic: Some(keys.mnemonic),
+            master_fingerprint: keys.master_fingerprint,
+            vanilla_keychain: None,
+            supported_schemas: vec![
+                AssetSchema::Nia,
+                AssetSchema::Uda,
+                AssetSchema::Cfa,
+                AssetSchema::Ifa,
+            ],
+        }
     };
 
     // Create wallet on a blocking task (Wallet::new uses block_on internally
     // for database migration, which conflicts with the tokio async context)
-    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data, wallet_keys))
+    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data))
         .await
         .expect("spawn_blocking panicked")
         .expect("failed to create wallet");
@@ -744,32 +747,33 @@ async fn auto_backup_disabled_by_default() {
     let secp = Secp256k1::new();
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
-    let (wallet_data, wallet_keys) = {
+    let wallet_data = {
         let keys = generate_keys(BitcoinNetwork::Regtest);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
 
         let _keep = temp_dir.keep();
 
-        let wallet_keys = SinglesigKeys::from_keys(&keys, None);
-        (
-            WalletData {
-                data_dir,
-                bitcoin_network: BitcoinNetwork::Regtest,
-                database_type: DatabaseType::Sqlite,
-                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                supported_schemas: vec![
-                    AssetSchema::Nia,
-                    AssetSchema::Uda,
-                    AssetSchema::Cfa,
-                    AssetSchema::Ifa,
-                ],
-            },
-            wallet_keys,
-        )
+        WalletData {
+            data_dir,
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            account_xpub_vanilla: keys.account_xpub_vanilla,
+            account_xpub_colored: keys.account_xpub_colored,
+            mnemonic: Some(keys.mnemonic),
+            master_fingerprint: keys.master_fingerprint,
+            vanilla_keychain: None,
+            supported_schemas: vec![
+                AssetSchema::Nia,
+                AssetSchema::Uda,
+                AssetSchema::Cfa,
+                AssetSchema::Ifa,
+            ],
+        }
     };
 
-    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data, wallet_keys))
+    let mut wallet = tokio::task::spawn_blocking(move || Wallet::new(wallet_data))
         .await
         .expect("spawn_blocking panicked")
         .expect("failed to create wallet");

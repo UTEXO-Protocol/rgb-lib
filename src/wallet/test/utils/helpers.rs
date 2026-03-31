@@ -52,19 +52,25 @@ pub(crate) fn create_test_data_dir() -> PathBuf {
     test_data_dir
 }
 
-pub(crate) fn get_test_wallet_data(data_dir: &str) -> WalletData {
+pub(crate) fn get_test_wallet_data(
+    data_dir: &str,
+    account_xpub_rgb: &str,
+    account_xpub_btc: &str,
+    mnemonic: &str,
+    fingerprint: &str,
+) -> WalletData {
     WalletData {
         data_dir: data_dir.to_string(),
         bitcoin_network: BitcoinNetwork::Regtest,
         database_type: DatabaseType::Sqlite,
         max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+        account_xpub_colored: account_xpub_rgb.to_string(),
+        account_xpub_vanilla: account_xpub_btc.to_string(),
+        mnemonic: Some(mnemonic.to_string()),
+        master_fingerprint: fingerprint.to_string(),
+        vanilla_keychain: None,
         supported_schemas: AssetSchema::VALUES.to_vec(),
     }
-}
-
-pub(crate) fn get_test_wallet_with_keys(keys: &Keys) -> Wallet {
-    let wallet_keys = SinglesigKeys::from_keys(keys, None);
-    get_test_wallet_raw(&wallet_keys, None, BitcoinNetwork::Regtest)
 }
 
 // return a wallet for testing
@@ -73,33 +79,25 @@ pub(crate) fn get_test_wallet_with_net(
     max_allocations_per_utxo: Option<u32>,
     bitcoin_network: BitcoinNetwork,
 ) -> Wallet {
-    let keys = generate_keys(bitcoin_network);
-    let wallet_keys = if private_keys {
-        SinglesigKeys::from_keys(&keys, None)
-    } else {
-        SinglesigKeys::from_keys_no_mnemonic(&keys, None)
-    };
-    get_test_wallet_raw(&wallet_keys, max_allocations_per_utxo, bitcoin_network)
-}
-
-// return a wallet for testing
-pub(crate) fn get_test_wallet_raw(
-    wallet_keys: &SinglesigKeys,
-    max_allocations_per_utxo: Option<u32>,
-    bitcoin_network: BitcoinNetwork,
-) -> Wallet {
     create_test_data_dir();
 
-    let wallet = Wallet::new(
-        WalletData {
-            data_dir: get_test_data_dir_string(),
-            bitcoin_network,
-            database_type: DatabaseType::Sqlite,
-            max_allocations_per_utxo: max_allocations_per_utxo.unwrap_or(MAX_ALLOCATIONS_PER_UTXO),
-            supported_schemas: AssetSchema::VALUES.to_vec(),
-        },
-        wallet_keys.clone(),
-    )
+    let keys = generate_keys(bitcoin_network);
+    let mut mnemonic = None;
+    if private_keys {
+        mnemonic = Some(keys.mnemonic)
+    }
+    let wallet = Wallet::new(WalletData {
+        data_dir: get_test_data_dir_string(),
+        bitcoin_network,
+        database_type: DatabaseType::Sqlite,
+        max_allocations_per_utxo: max_allocations_per_utxo.unwrap_or(MAX_ALLOCATIONS_PER_UTXO),
+        account_xpub_colored: keys.account_xpub_colored,
+        account_xpub_vanilla: keys.account_xpub_vanilla,
+        mnemonic,
+        master_fingerprint: keys.master_fingerprint,
+        vanilla_keychain: None,
+        supported_schemas: AssetSchema::VALUES.to_vec(),
+    })
     .unwrap();
     println!("wallet directory: {:?}", test_get_wallet_dir(&wallet));
     wallet
@@ -142,25 +140,18 @@ pub(crate) fn get_funded_wallet(
     indexer_url: Option<String>,
 ) -> (Wallet, Online) {
     let (mut wallet, online) = get_funded_noutxo_wallet(private_keys, indexer_url);
-    test_create_utxos_default(&mut wallet, online);
+    test_create_utxos_default(&mut wallet, &online);
     (wallet, online)
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn drain_wallet(wallet: &mut Wallet, online: Online) {
+pub(crate) fn drain_wallet(wallet: &mut Wallet, online: &Online) {
     let mut rcv_wallet = get_test_wallet(false, None);
     test_drain_to_destroy(wallet, online, &rcv_wallet.get_address().unwrap());
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn send_to_address(address: String) {
-    send_sats_to_address(address, None);
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn send_sats_to_address(address: String, sats: Option<u64>) {
-    let amt = BdkAmount::from_sat(sats.unwrap_or(100_000_000));
-    let btc_str = amt.to_string_in(Denomination::Bitcoin);
     let t_0 = OffsetDateTime::now_utc();
     let bitcoin_cli = bitcoin_cli();
     loop {
@@ -174,7 +165,7 @@ pub(crate) fn send_sats_to_address(address: String, sats: Option<u64>) {
             .arg("-rpcwallet=miner")
             .arg("sendtoaddress")
             .arg(&address)
-            .arg(&btc_str)
+            .arg("1")
             .output()
             .expect("failed to fund wallet");
         if !output.status.success()
@@ -202,7 +193,7 @@ pub(crate) fn check_test_transfer_status_recipient(
     recipient_id: &str,
     expected_status: TransferStatus,
 ) -> bool {
-    let transfers = wallet.database().iter_transfers().unwrap();
+    let transfers = wallet.database.iter_transfers().unwrap();
     let mut recipient_transfers = transfers
         .iter()
         .filter(|t| t.recipient_id.as_deref() == Some(recipient_id));
@@ -231,7 +222,6 @@ pub(crate) fn check_test_transfer_status_sender(
     batch_transfer.status == expected_status
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn check_test_wallet_data(
     wallet: &mut Wallet,
     asset: &AssetNIA,
@@ -289,7 +279,7 @@ pub(crate) fn compare_test_directories(src: &Path, dst: &Path, skip: &[&str]) {
 
 pub(crate) fn get_test_batch_transfers(wallet: &Wallet, txid: &str) -> Vec<DbBatchTransfer> {
     wallet
-        .database()
+        .database
         .iter_batch_transfers()
         .unwrap()
         .into_iter()
@@ -302,7 +292,7 @@ pub(crate) fn get_test_asset_transfers(
     batch_transfer_idx: i32,
 ) -> Vec<DbAssetTransfer> {
     wallet
-        .database()
+        .database
         .iter_asset_transfers()
         .unwrap()
         .into_iter()
@@ -315,7 +305,7 @@ pub(crate) fn get_test_transfers(
     asset_transfer_idx: i32,
 ) -> impl Iterator<Item = DbTransfer> {
     wallet
-        .database()
+        .database
         .iter_transfers()
         .unwrap()
         .into_iter()
@@ -332,7 +322,7 @@ pub(crate) fn get_test_asset_transfer(wallet: &Wallet, batch_transfer_idx: i32) 
 
 pub(crate) fn get_test_colorings(wallet: &Wallet, asset_transfer_idx: i32) -> Vec<DbColoring> {
     wallet
-        .database()
+        .database
         .iter_colorings()
         .unwrap()
         .into_iter()
@@ -342,7 +332,7 @@ pub(crate) fn get_test_colorings(wallet: &Wallet, asset_transfer_idx: i32) -> Ve
 
 pub(crate) fn get_test_transfer_recipient(wallet: &Wallet, recipient_id: &str) -> DbTransfer {
     let mut transfers = wallet
-        .database()
+        .database
         .iter_transfers()
         .unwrap()
         .into_iter()
@@ -391,7 +381,7 @@ pub(crate) fn get_test_transfer_data(
     wallet: &Wallet,
     transfer: &DbTransfer,
 ) -> (TransferData, DbAssetTransfer) {
-    let db_data = wallet.database().get_db_data(false).unwrap();
+    let db_data = wallet.database.get_db_data(false).unwrap();
     let (asset_transfer, batch_transfer) = transfer
         .related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
         .unwrap();
@@ -411,23 +401,21 @@ pub(crate) fn get_test_transfer_related(
     wallet: &Wallet,
     transfer: &DbTransfer,
 ) -> (DbAssetTransfer, DbBatchTransfer) {
-    let db_data = wallet.database().get_db_data(false).unwrap();
+    let db_data = wallet.database.get_db_data(false).unwrap();
     transfer
         .related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
         .unwrap()
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn list_test_unspents(wallet: &mut Wallet, msg: &str) -> Vec<Unspent> {
     let unspents = test_list_unspents(wallet, None, false);
     print_unspents(&unspents, msg);
     unspents
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn get_colorable_unspents(
     wallet: &mut Wallet,
-    online: Option<Online>,
+    online: Option<&Online>,
     settled_only: bool,
 ) -> Vec<Unspent> {
     test_list_unspents(wallet, online, settled_only)
@@ -436,10 +424,9 @@ pub(crate) fn get_colorable_unspents(
         .collect()
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn assert_colorable_unspent_count(
     wallet: &mut Wallet,
-    online: Option<Online>,
+    online: Option<&Online>,
     settled_only: bool,
     expected_len: usize,
 ) {
@@ -490,11 +477,8 @@ pub(crate) fn wait_for_asset_balance(wallet: &Wallet, asset_id: &str, expected_b
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn restart_test_wallet(
-    wallet_data: WalletData,
-    keys: SinglesigKeys,
-) -> (Wallet, Online) {
-    let mut wallet = Wallet::new(wallet_data, keys).expect("wallet recreate failed");
+pub(crate) fn restart_test_wallet(wallet_data: WalletData) -> (Wallet, Online) {
+    let mut wallet = Wallet::new(wallet_data).expect("wallet recreate failed");
     let online = wallet
         .go_online(true, ELECTRUM_URL.to_string())
         .expect("go_online after recreate failed");
@@ -504,7 +488,7 @@ pub(crate) fn restart_test_wallet(
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn wait_for_btc_balance(
     wallet: &mut Wallet,
-    online: Online,
+    online: &Online,
     expected_balance: &BtcBalance,
 ) {
     println!("waiting for BTC balance");
@@ -540,8 +524,8 @@ where
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn wait_for_refresh(
-    wallet: &mut impl RgbWalletOpsOnline,
-    online: Online,
+    wallet: &mut Wallet,
+    online: &Online,
     asset_id: Option<&str>,
     transfer_ids: Option<&[i32]>,
 ) {
@@ -605,7 +589,7 @@ pub(crate) fn wait_for_refresh(
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn wait_for_unspents(
     wallet: &mut Wallet,
-    online: Option<Online>,
+    online: Option<&Online>,
     settled_only: bool,
     expected_len: u8,
 ) {
@@ -649,7 +633,7 @@ pub(crate) fn extract_opouts_from_transfer(
     assert_eq!(asset_transfers.len(), 1);
     let asset_transfer = asset_transfers.first().unwrap();
     let colorings: Vec<DbColoring> = wallet
-        .database()
+        .database
         .iter_colorings()
         .unwrap()
         .into_iter()
@@ -659,7 +643,7 @@ pub(crate) fn extract_opouts_from_transfer(
         panic!("cannot find colorings for this transfer");
     }
     let txo_indices = colorings.iter().map(|c| c.txo_idx).collect::<Vec<_>>();
-    let db_txos = wallet.database().iter_txos().unwrap();
+    let db_txos = wallet.database.iter_txos().unwrap();
     let relevant_txos = db_txos.into_iter().filter(|t| txo_indices.contains(&t.idx));
     let mut outpoints = relevant_txos
         .map(|txo| OutPoint::from(txo.clone()))
@@ -696,16 +680,15 @@ pub(crate) fn write_opouts_to_reject_list(filename: &str, opouts: &[String]) {
 
 /// print the provided message, then get colorings for each wallet unspent and print their status,
 /// type, amount and asset
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn show_unspent_colorings(wallet: &mut Wallet, msg: &str) {
     println!("\n{msg}");
     let unspents = test_list_unspents(wallet, None, false)
         .into_iter()
         .filter(|u| u.utxo.colorable);
-    let db_txos = wallet.database().iter_txos().unwrap();
-    let db_colorings = wallet.database().iter_colorings().unwrap();
-    let db_asset_transfers = wallet.database().iter_asset_transfers().unwrap();
-    let db_batch_transfers = wallet.database().iter_batch_transfers().unwrap();
+    let db_txos = wallet.database.iter_txos().unwrap();
+    let db_colorings = wallet.database.iter_colorings().unwrap();
+    let db_asset_transfers = wallet.database.iter_asset_transfers().unwrap();
+    let db_batch_transfers = wallet.database.iter_batch_transfers().unwrap();
     let pending_blind_transfers = get_pending_blind_transfers(wallet);
     for unspent in unspents {
         let outpoint = unspent.utxo.outpoint;
@@ -753,9 +736,4 @@ pub(crate) fn show_unspent_colorings(wallet: &mut Wallet, msg: &str) {
             println!("\t- pending blind receive with transfer ID {}", pbt.idx);
         }
     }
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn get_proxy_client(proxy_url: Option<&str>) -> ProxyClient {
-    ProxyClient::new(proxy_url.unwrap_or(PROXY_URL)).unwrap()
 }

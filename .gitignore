@@ -4,6 +4,5 @@
 **/target
 **/tests/tmp
 **/tests/lists
-**/tests/hub
 /.vim
 /.vscode

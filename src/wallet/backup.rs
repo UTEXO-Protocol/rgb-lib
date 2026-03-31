@@ -13,8 +13,8 @@ pub(crate) struct BackupPaths {
     zip: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ScryptParams {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct ScryptParams {
     log_n: u8,
     r: u32,
     p: u32,
@@ -69,63 +69,62 @@ impl BackupPubData {
     }
 }
 
-#[allow(async_fn_in_trait)]
-pub trait WalletBackup: WalletCore {
-    /// For now setting the scrypt params is done only for testing purposes,
-    /// a few details should be refined before allowing to set this in the public API:
+impl Wallet {
+    /// Create a backup of the wallet as a file with the provided name and encrypted with the
+    /// provided password.
+    ///
+    /// Scrypt is used for hashing and xchacha20poly1305 is used for encryption. A random salt for
+    /// hashing and a random nonce for encrypting are randomly generated and included in the final
+    /// backup file, along with the backup version.
+    pub fn backup(&self, backup_path: &str, password: &str) -> Result<(), Error> {
+        self.backup_customize(backup_path, password, None)
+    }
+
+    /// For now this method is only used for testing, a few details should be refined before
+    /// exposing it to the public:
     /// - Which parameters should we allow users to change? Should we set sensible minimums?
     /// - Can we guarantee old backups can always be recovered in the future?
-    fn backup_customize(
+    pub(crate) fn backup_customize(
         &self,
         backup_path: &str,
         password: &str,
         scrypt_params: Option<ScryptParams>,
     ) -> Result<(), Error> {
-        let prev_backup_info = self.update_backup_info(true)?;
-        match self.backup_raw(backup_path, password, scrypt_params) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                error!(self.logger(), "Error during backup: {e:?}");
-                if let Some(prev_backup_info) = prev_backup_info {
-                    let mut prev_backup_info: DbBackupInfoActMod = prev_backup_info.into();
-                    self.database().update_backup_info(&mut prev_backup_info)?;
-                } else {
-                    self.database().del_backup_info()?;
-                }
-                Err(e)
-            }
+        self.update_backup_info(true)?;
+        if let Err(e) = self._backup(backup_path, password, scrypt_params) {
+            // Reset: mark wallet as needing a backup again so backup_info() returns true.
+            let _ = self.update_backup_info(false);
+            return Err(e);
         }
+        Ok(())
     }
 
-    fn backup_raw(
+    fn _backup(
         &self,
         backup_path: &str,
         password: &str,
         scrypt_params: Option<ScryptParams>,
     ) -> Result<(), Error> {
         // setup
-        info!(self.logger(), "starting backup...");
+        info!(self.logger, "starting backup...");
         let backup_file = PathBuf::from(&backup_path);
         if backup_file.exists() {
             return Err(Error::FileAlreadyExists {
                 path: backup_path.to_string(),
             })?;
         }
-        let tmp_base_path = get_parent_path(&backup_file)?;
+        let tmp_base_path = _get_parent_path(&backup_file)?;
         let files = get_backup_paths(&tmp_base_path)?;
         let scrypt_params = scrypt_params.unwrap_or_default();
         let salt = SaltString::generate(&mut OsRng);
         let str_params = serde_json::to_string(&scrypt_params).map_err(InternalError::from)?;
-        debug!(
-            self.logger(),
-            "using generated scrypt params: {}", str_params
-        );
+        debug!(self.logger, "using generated scrypt params: {}", str_params);
         let nonce: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(BACKUP_NONCE_LENGTH)
             .map(char::from)
             .collect();
-        debug!(self.logger(), "using generated nonce: {}", &nonce);
+        debug!(self.logger, "using generated nonce: {}", &nonce);
         let backup_pub_data = BackupPubData {
             scrypt_params,
             salt: salt.to_string(),
@@ -135,19 +134,17 @@ pub trait WalletBackup: WalletCore {
 
         // create zip archive of wallet data
         debug!(
-            self.logger(),
-            "\nzipping {:?} to {:?}",
-            &self.wallet_dir(),
-            &files.zip
+            self.logger,
+            "\nzipping {:?} to {:?}", &self.wallet_dir, &files.zip
         );
-        zip_dir(self.wallet_dir(), &files.zip, true, self.logger())?;
+        zip_dir(&self.wallet_dir, &files.zip, true, &self.logger)?;
 
         // encrypt the backup file
         debug!(
-            self.logger(),
+            self.logger,
             "\nencrypting {:?} to {:?}", &files.zip, &files.encrypted
         );
-        encrypt_file(&files.zip, &files.encrypted, password, &backup_pub_data)?;
+        _encrypt_file(&files.zip, &files.encrypted, password, &backup_pub_data)?;
 
         // add backup nonce + salt + version to final zip file
         fs::write(
@@ -155,46 +152,40 @@ pub trait WalletBackup: WalletCore {
             serde_json::to_string(&backup_pub_data).unwrap(),
         )?;
         debug!(
-            self.logger(),
+            self.logger,
             "\nzipping {:?} to {:?}", &files.tempdir, &backup_file
         );
         zip_dir(
             &PathBuf::from(files.tempdir.path()),
             &backup_file,
             false,
-            self.logger(),
+            &self.logger,
         )?;
 
-        info!(self.logger(), "backup completed");
+        info!(self.logger, "backup completed");
         Ok(())
     }
 
-    fn get_backup_info(&self) -> Result<bool, Error> {
-        Ok(
-            if let Some(backup_info) = self.database().get_backup_info()? {
-                backup_info
-                    .last_operation_timestamp
-                    .parse::<i128>()
-                    .unwrap()
-                    > backup_info.last_backup_timestamp.parse::<i128>().unwrap()
-            } else {
-                false
-            },
-        )
+    /// Return whether the wallet requires to perform a backup.
+    pub fn backup_info(&self) -> Result<bool, Error> {
+        let backup_required = if let Some(backup_info) = self.database.get_backup_info()? {
+            backup_info
+                .last_operation_timestamp
+                .parse::<i128>()
+                .unwrap()
+                > backup_info.last_backup_timestamp.parse::<i128>().unwrap()
+        } else {
+            false
+        };
+        Ok(backup_required)
     }
 
-    fn update_backup_info_with_op_idx(
+    pub(crate) fn update_backup_info(
         &self,
         doing_backup: bool,
-        last_processed_operation_idx: Option<i32>,
     ) -> Result<Option<DbBackupInfo>, Error> {
         let now = ActiveValue::Set(now().unix_timestamp_nanos().to_string());
-        let last_processed_operation_idx = if last_processed_operation_idx.is_some() {
-            ActiveValue::Set(last_processed_operation_idx)
-        } else {
-            ActiveValue::NotSet
-        };
-        if let Some(backup_info) = self.database().get_backup_info()? {
+        if let Some(backup_info) = self.database.get_backup_info()? {
             let prev_backup_info = backup_info.clone();
             let mut backup_info: DbBackupInfoActMod = backup_info.into();
             if doing_backup {
@@ -202,8 +193,7 @@ pub trait WalletBackup: WalletCore {
             } else {
                 backup_info.last_operation_timestamp = now;
             }
-            backup_info.last_processed_operation_idx = last_processed_operation_idx;
-            self.database().update_backup_info(&mut backup_info)?;
+            self.database.update_backup_info(&mut backup_info)?;
             Ok(Some(prev_backup_info))
         } else {
             let (last_backup_timestamp, last_operation_timestamp) = if doing_backup {
@@ -214,10 +204,9 @@ pub trait WalletBackup: WalletCore {
             let backup_info = DbBackupInfoActMod {
                 last_backup_timestamp,
                 last_operation_timestamp,
-                last_processed_operation_idx,
                 ..Default::default()
             };
-            self.database().set_backup_info(backup_info)?;
+            self.database.set_backup_info(backup_info)?;
             Ok(None)
         }
     }
@@ -227,7 +216,7 @@ pub trait WalletBackup: WalletCore {
     /// Creates a backup of the wallet directory and uploads it to the VSS server.
     /// Returns the server-side version number of the uploaded backup.
     #[cfg(feature = "vss")]
-    async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
+    pub async fn vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
         self.update_backup_info(true)?;
         match self._vss_backup(client).await {
             Ok(version) => Ok(version),
@@ -241,13 +230,13 @@ pub trait WalletBackup: WalletCore {
 
     #[cfg(feature = "vss")]
     async fn _vss_backup(&self, client: &super::vss::VssBackupClient) -> Result<i64, Error> {
-        info!(self.logger(), "Starting VSS backup...");
-        let backup_data = super::vss::create_backup_data(self.wallet_dir(), self.logger())?;
+        info!(self.logger, "Starting VSS backup...");
+        let backup_data = super::vss::create_backup_data(&self.wallet_dir, &self.logger)?;
 
-        info!(self.logger(), "Uploading to VSS server...");
+        info!(self.logger, "Uploading to VSS server...");
         let version = client.upload_backup(backup_data).await?;
 
-        info!(self.logger(), "VSS backup completed, version: {}", version);
+        info!(self.logger, "VSS backup completed, version: {}", version);
         Ok(version)
     }
 
@@ -257,18 +246,21 @@ pub trait WalletBackup: WalletCore {
     /// Once configured, the wallet will automatically upload backups to the
     /// VSS server after operations like send, receive, issue, etc.
     #[cfg(feature = "vss")]
-    fn configure_vss_backup(&mut self, config: super::vss::VssBackupConfig) -> Result<(), Error> {
+    pub fn configure_vss_backup(
+        &mut self,
+        config: super::vss::VssBackupConfig,
+    ) -> Result<(), Error> {
         let client = super::vss::VssBackupClient::new(config)?;
-        self.set_vss_client(Some(Arc::new(client)));
-        info!(self.logger(), "VSS auto-backup configured");
+        self.vss_client = Some(Arc::new(client));
+        info!(self.logger, "VSS auto-backup configured");
         Ok(())
     }
 
     /// Disable VSS auto-backup.
     #[cfg(feature = "vss")]
-    fn disable_vss_auto_backup(&mut self) {
-        self.set_vss_client(None);
-        info!(self.logger(), "VSS auto-backup disabled");
+    pub fn disable_vss_auto_backup(&mut self) {
+        self.vss_client = None;
+        info!(self.logger, "VSS auto-backup disabled");
     }
 
     /// Trigger an automatic VSS backup if configured.
@@ -283,7 +275,7 @@ pub trait WalletBackup: WalletCore {
     /// latency proportional to wallet directory size to the calling
     /// operation. The upload itself runs asynchronously and does not block.
     #[cfg(feature = "vss")]
-    fn trigger_auto_backup(&self) {
+    pub(crate) fn trigger_auto_backup(&self) {
         use std::sync::atomic::Ordering;
 
         /// Guard that resets the `AtomicBool` on drop, ensuring the flag is
@@ -295,7 +287,7 @@ pub trait WalletBackup: WalletCore {
             }
         }
 
-        let Some(client) = self.vss_client() else {
+        let Some(client) = &self.vss_client else {
             return;
         };
 
@@ -305,9 +297,9 @@ pub trait WalletBackup: WalletCore {
 
         // Skip if a backup is already in progress (swap returns the previous value;
         // if it was already true, another backup is running so we skip this one).
-        if self.auto_backup_in_progress().swap(true, Ordering::SeqCst) {
+        if self.auto_backup_in_progress.swap(true, Ordering::SeqCst) {
             debug!(
-                self.logger(),
+                self.logger,
                 "VSS auto-backup: skipping, already in progress"
             );
             return;
@@ -316,15 +308,11 @@ pub trait WalletBackup: WalletCore {
         let handle = client.handle().clone();
 
         // Create backup data synchronously (zip the wallet directory)
-        let backup_data = match super::vss::create_backup_data(self.wallet_dir(), self.logger()) {
+        let backup_data = match super::vss::create_backup_data(&self.wallet_dir, &self.logger) {
             Ok(data) => data,
             Err(e) => {
-                error!(
-                    self.logger(),
-                    "VSS auto-backup: failed to create data: {}", e
-                );
-                self.auto_backup_in_progress()
-                    .store(false, Ordering::SeqCst);
+                error!(self.logger, "VSS auto-backup: failed to create data: {}", e);
+                self.auto_backup_in_progress.store(false, Ordering::SeqCst);
                 return;
             }
         };
@@ -332,9 +320,9 @@ pub trait WalletBackup: WalletCore {
         // Clone what the spawned task needs
         let client = Arc::clone(client);
         let backup_mode = client.backup_mode();
-        let logger = self.logger().clone();
-        let database = Arc::clone(self.database_arc());
-        let guard = BackupGuard(Arc::clone(self.auto_backup_in_progress()));
+        let logger = self.logger.clone();
+        let database = Arc::clone(&self.database);
+        let guard = BackupGuard(Arc::clone(&self.auto_backup_in_progress));
 
         let upload_future = async move {
             let _guard = guard;
@@ -376,13 +364,13 @@ pub trait WalletBackup: WalletCore {
     /// Returns information about the current VSS backup state, including
     /// whether a backup exists on the server and if a new backup is needed.
     #[cfg(feature = "vss")]
-    async fn vss_backup_info(
+    pub async fn vss_backup_info(
         &self,
         client: &super::vss::VssBackupClient,
     ) -> Result<super::vss::VssBackupInfo, Error> {
         let server_version = client.get_backup_version().await?;
         let backup_exists = server_version.is_some();
-        let backup_required = self.get_backup_info()?;
+        let backup_required = self.backup_info()?;
 
         Ok(super::vss::VssBackupInfo {
             backup_exists,
@@ -393,11 +381,7 @@ pub trait WalletBackup: WalletCore {
 
     /// No-op auto-backup trigger when VSS feature is not enabled.
     #[cfg(not(feature = "vss"))]
-    fn trigger_auto_backup(&self) {}
-
-    fn update_backup_info(&self, doing_backup: bool) -> Result<Option<DbBackupInfo>, Error> {
-        self.update_backup_info_with_op_idx(doing_backup, None)
-    }
+    pub(crate) fn trigger_auto_backup(&self) {}
 }
 
 /// Restore a backup from the given file and password to the provided target directory.
@@ -409,7 +393,7 @@ pub fn restore_backup(backup_path: &str, password: &str, target_dir: &str) -> Re
     let (logger, _logger_guard) = setup_logger(log_dir, Some(&log_name))?;
     info!(logger, "starting restore...");
     let backup_file = PathBuf::from(backup_path);
-    let tmp_base_path = get_parent_path(&backup_file)?;
+    let tmp_base_path = _get_parent_path(&backup_file)?;
     let files = get_backup_paths(&tmp_base_path)?;
     let target_dir_path = PathBuf::from(&target_dir);
 
@@ -433,10 +417,10 @@ pub fn restore_backup(backup_path: &str, password: &str, target_dir: &str) -> Re
         logger.clone(),
         "decrypting {:?} to {:?}", files.encrypted, files.zip
     );
-    decrypt_file(&files.encrypted, &files.zip, password, &backup_pub_data)?;
+    _decrypt_file(&files.encrypted, &files.zip, password, &backup_pub_data)?;
 
     // check the target wallet directory doesn't already exist
-    let fingerprint = get_fingerprint_from_zip(&files.zip)?;
+    let fingerprint = _get_fingerprint_from_zip(&files.zip)?;
     let wallet_dir = target_dir_path.join(fingerprint);
     if wallet_dir.exists() {
         return Err(Error::WalletDirAlreadyExists {
@@ -469,7 +453,7 @@ pub(crate) fn get_backup_paths(tmp_base_path: &Path) -> Result<BackupPaths, Erro
     })
 }
 
-fn get_parent_path(file: &Path) -> Result<PathBuf, Error> {
+fn _get_parent_path(file: &Path) -> Result<PathBuf, Error> {
     if let Some(parent) = file.parent() {
         Ok(parent.to_path_buf())
     } else {
@@ -539,19 +523,19 @@ pub(crate) fn zip_dir(
     Ok(())
 }
 
-fn get_zip_archive(zip_path: &PathBuf) -> Result<zip::ZipArchive<std::fs::File>, Error> {
+fn _get_zip_archive(zip_path: &PathBuf) -> Result<zip::ZipArchive<std::fs::File>, Error> {
     let file = fs::File::open(zip_path).map_err(InternalError::from)?;
     Ok(zip::ZipArchive::new(file).map_err(InternalError::from)?)
 }
 
-fn get_fingerprint_from_zip(zip_path: &PathBuf) -> Result<String, Error> {
-    let archive = get_zip_archive(zip_path)?;
+fn _get_fingerprint_from_zip(zip_path: &PathBuf) -> Result<String, Error> {
+    let archive = _get_zip_archive(zip_path)?;
     let fingerprint = archive.name_for_index(0).unwrap_or_default();
     Ok(fingerprint.to_string().replace("/", ""))
 }
 
 pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Result<(), Error> {
-    let mut archive = get_zip_archive(zip_path)?;
+    let mut archive = _get_zip_archive(zip_path)?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(InternalError::from)?;
         let outpath = match file.enclosed_name() {
@@ -568,11 +552,11 @@ pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Res
                 outpath.display(),
                 file.size()
             );
-            if let Some(p) = outpath.parent()
-                && !p.exists()
-            {
-                debug!(logger, "creating parent dir {}", p.display());
-                fs::create_dir_all(p)?;
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    debug!(logger, "creating parent dir {}", p.display());
+                    fs::create_dir_all(p)?;
+                }
             }
             let mut outfile = fs::File::create(&outpath)?;
             std::io::copy(&mut file, &mut outfile)?;
@@ -582,7 +566,7 @@ pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Res
     Ok(())
 }
 
-fn get_cypher_secrets(
+fn _get_cypher_secrets(
     password: &str,
     backup_pub_data: &BackupPubData,
 ) -> Result<GenericArray<u8, U32>, Error> {
@@ -609,13 +593,13 @@ fn get_cypher_secrets(
     Ok(key)
 }
 
-fn encrypt_file(
+fn _encrypt_file(
     path_cleartext: &PathBuf,
     path_encrypted: &PathBuf,
     password: &str,
     backup_pub_data: &BackupPubData,
 ) -> Result<(), Error> {
-    let key = get_cypher_secrets(password, backup_pub_data)?;
+    let key = _get_cypher_secrets(password, backup_pub_data)?;
 
     // - XChacha20Poly1305 is fast, requires no special hardware and supports stream operation
     // - stream mode required as files to encrypt may be big, so avoiding a memory buffer
@@ -652,13 +636,13 @@ fn encrypt_file(
     Ok(())
 }
 
-fn decrypt_file(
+fn _decrypt_file(
     path_encrypted: &PathBuf,
     path_cleartext: &PathBuf,
     password: &str,
     backup_pub_data: &BackupPubData,
 ) -> Result<(), Error> {
-    let key = get_cypher_secrets(password, backup_pub_data)?;
+    let key = _get_cypher_secrets(password, backup_pub_data)?;
 
     // setup
     let aead = XChaCha20Poly1305::new(&key);

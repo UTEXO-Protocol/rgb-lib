@@ -16,7 +16,6 @@ pub struct Model {
     pub idx: i32,
     pub last_backup_timestamp: String,
     pub last_operation_timestamp: String,
-    pub last_processed_operation_idx: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
@@ -24,7 +23,6 @@ pub enum Column {
     Idx,
     LastBackupTimestamp,
     LastOperationTimestamp,
-    LastProcessedOperationIdx,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
@@ -49,7 +47,6 @@ impl ColumnTrait for Column {
             Self::Idx => ColumnType::Integer.def(),
             Self::LastBackupTimestamp => ColumnType::String(StringLen::None).def(),
             Self::LastOperationTimestamp => ColumnType::String(StringLen::None).def(),
-            Self::LastProcessedOperationIdx => ColumnType::Integer.def().null(),
         }
     }
 }

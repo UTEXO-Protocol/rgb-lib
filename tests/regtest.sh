@@ -44,7 +44,6 @@ fi
 
 TMP_DIR="${CWD}/tmp"
 LISTS_DIR="${CWD}/lists"
-HUB_DIR="${CWD}/hub"
 COMPOSE_FPATH="${CWD}/compose.yaml"
 COMPOSE="$COMPOSE -f ${COMPOSE_FPATH}"
 EXPOSED_PORTS=(3000 50001)  # see compose.yaml for the exposed ports
@@ -156,7 +155,7 @@ prepare_tests_environment() {
     TESTS=1
 
     COMPOSE="$COMPOSE --profile tests --profile vss"
-    EXPOSED_PORTS+=(3001 3002 50002 50003 50004 50005 8094 8081 8140 8141)
+    EXPOSED_PORTS+=(3001 3002 50002 50003 50004 50005 8094 8081)
 
     PROXY_MOD_PROTO="proxy-mod-proto"
     PROXY_MOD_API="proxy-mod-api"
@@ -166,9 +165,6 @@ prepare_tests_environment() {
     $COMPOSE build $PROXY_MOD_API
     $COMPOSE build esplora
     $COMPOSE build vss-server
-
-    mkdir -p "${HUB_DIR}"
-    touch "${HUB_DIR}/config.toml"
 
     _start_services
 
