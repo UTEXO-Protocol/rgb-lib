@@ -271,7 +271,7 @@ pub(crate) fn blind_receive(
     wallet: &COpaqueStruct,
     asset_id_opt: *const c_char,
     assignment: *const c_char,
-    duration_seconds_opt: *const c_char,
+    expiration_timestamp_opt: *const c_char,
     transport_endpoints: *const c_char,
     min_confirmations: *const c_char,
 ) -> Result<String, Error> {
@@ -280,12 +280,12 @@ pub(crate) fn blind_receive(
         serde_json::from_str(&ptr_to_string(transport_endpoints))?;
     let asset_id = convert_optional_string(asset_id_opt);
     let assignment: Assignment = serde_json::from_str(&ptr_to_string(assignment))?;
-    let duration_seconds = convert_optional_number(duration_seconds_opt)?;
+    let expiration_timestamp = convert_optional_number(expiration_timestamp_opt)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
     let res = wallet.blind_receive(
         asset_id,
         assignment,
-        duration_seconds,
+        expiration_timestamp,
         transport_endpoints,
         min_confirmations,
     )?;
@@ -306,7 +306,7 @@ pub(crate) fn create_utxos(
     let num = convert_optional_number(num_opt)?;
     let size = convert_optional_number(size_opt)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.create_utxos((*online).clone(), up_to, num, size, fee_rate, skip_sync)?;
+    let res = wallet.create_utxos(*online, up_to, num, size, fee_rate, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -324,8 +324,7 @@ pub(crate) fn create_utxos_begin(
     let num = convert_optional_number(num_opt)?;
     let size = convert_optional_number(size_opt)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res =
-        wallet.create_utxos_begin((*online).clone(), up_to, num, size, fee_rate, skip_sync)?;
+    let res = wallet.create_utxos_begin(*online, up_to, num, size, fee_rate, skip_sync)?;
     Ok(res)
 }
 
@@ -338,7 +337,7 @@ pub(crate) fn create_utxos_end(
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let signed_psbt = ptr_to_string(signed_psbt);
-    let res = wallet.create_utxos_end((*online).clone(), signed_psbt, skip_sync)?;
+    let res = wallet.create_utxos_end(*online, signed_psbt, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -363,12 +362,7 @@ pub(crate) fn fail_transfers(
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let batch_transfer_idx = convert_optional_number(batch_transfer_idx_opt)?;
-    let res = wallet.fail_transfers(
-        (*online).clone(),
-        batch_transfer_idx,
-        no_asset_only,
-        skip_sync,
-    )?;
+    let res = wallet.fail_transfers(*online, batch_transfer_idx, no_asset_only, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -383,7 +377,7 @@ pub(crate) fn finalize_psbt(
 
 pub(crate) fn generate_keys(bitcoin_network: *const c_char) -> Result<String, Error> {
     let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
-    let res = rgb_lib::generate_keys(bitcoin_network);
+    let res = rgb_lib::keys::generate_keys(bitcoin_network);
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -431,7 +425,7 @@ pub(crate) fn get_fee_estimation(
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let blocks = ptr_to_num(blocks)?;
-    let res = wallet.get_fee_estimation((*online).clone(), blocks)?;
+    let res = wallet.get_fee_estimation(*online, blocks)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -459,7 +453,7 @@ pub(crate) fn inflate(
     let fee_rate = ptr_to_num(fee_rate)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
     let res = wallet.inflate(
-        (*online).clone(),
+        *online,
         asset_id,
         inflation_amounts,
         fee_rate,
@@ -494,14 +488,12 @@ pub(crate) fn issue_asset_ifa(
     precision: *const c_char,
     amounts: *const c_char,
     inflation_amounts: *const c_char,
-    replace_rights_num: *const c_char,
     reject_list_url_opt: *const c_char,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let precision = ptr_to_num(precision)?;
     let amounts = convert_strings_array(amounts)?;
     let inflation_amounts = convert_strings_array(inflation_amounts)?;
-    let replace_rights_num = ptr_to_num(replace_rights_num)?;
     let reject_list_url = convert_optional_string(reject_list_url_opt);
     let res = wallet.issue_asset_ifa(
         ptr_to_string(ticker),
@@ -509,7 +501,6 @@ pub(crate) fn issue_asset_ifa(
         precision,
         amounts,
         inflation_amounts,
-        replace_rights_num,
         reject_list_url,
     )?;
     Ok(serde_json::to_string(&res)?)
@@ -579,7 +570,7 @@ pub(crate) fn list_transactions(
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
-    let res = wallet.list_transactions(Some((*online).clone()), skip_sync)?;
+    let res = wallet.list_transactions(Some(*online), skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -601,13 +592,14 @@ pub(crate) fn list_unspents(
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
-    let res = wallet.list_unspents(Some((*online).clone()), settled_only, skip_sync)?;
+    let res = wallet.list_unspents(Some(*online), settled_only, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
-pub(crate) fn new_wallet(wallet_data: *const c_char) -> Result<Wallet, Error> {
+pub(crate) fn new_wallet(wallet_data: *const c_char, keys: *const c_char) -> Result<Wallet, Error> {
     let wallet_data: WalletData = serde_json::from_str(&ptr_to_string(wallet_data))?;
-    Ok(Wallet::new(wallet_data)?)
+    let keys: SinglesigKeys = serde_json::from_str(&ptr_to_string(keys))?;
+    Ok(Wallet::new(wallet_data, keys)?)
 }
 
 pub(crate) fn refresh(
@@ -621,7 +613,7 @@ pub(crate) fn refresh(
     let online = Online::from_opaque(online)?;
     let filter: Vec<RefreshFilter> = serde_json::from_str(&ptr_to_string(filter))?;
     let asset_id = convert_optional_string(asset_id_opt);
-    let res = wallet.refresh((*online).clone(), asset_id, filter, skip_sync)?;
+    let res = wallet.refresh(*online, asset_id, filter, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -633,7 +625,7 @@ pub(crate) fn restore_backup(
     let backup_path = ptr_to_string(backup_path);
     let password = ptr_to_string(password);
     let target_dir = ptr_to_string(target_dir);
-    rgb_lib::restore_backup(&backup_path, &password, &target_dir)?;
+    rgb_lib::wallet::restore_backup(&backup_path, &password, &target_dir)?;
     Ok(())
 }
 
@@ -643,10 +635,11 @@ pub(crate) fn restore_keys(
 ) -> Result<String, Error> {
     let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
     let mnemonic = ptr_to_string(mnemonic);
-    let res = rgb_lib::restore_keys(bitcoin_network, mnemonic)?;
+    let res = rgb_lib::keys::restore_keys(bitcoin_network, mnemonic)?;
     Ok(serde_json::to_string(&res)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -654,6 +647,7 @@ pub(crate) fn send(
     donation: bool,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
+    expiration_timestamp_opt: *const c_char,
     skip_sync: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
@@ -662,17 +656,20 @@ pub(crate) fn send(
         serde_json::from_str(&ptr_to_string(recipient_map))?;
     let fee_rate = ptr_to_num(fee_rate)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
+    let expiration_timestamp = convert_optional_number(expiration_timestamp_opt)?;
     let res = wallet.send(
-        (*online).clone(),
+        *online,
         recipient_map,
         donation,
         fee_rate,
         min_confirmations,
+        expiration_timestamp,
         skip_sync,
     )?;
     Ok(serde_json::to_string(&res)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send_begin(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -680,6 +677,8 @@ pub(crate) fn send_begin(
     donation: bool,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
+    expiration_timestamp_opt: *const c_char,
+    dry_run: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
@@ -687,26 +686,16 @@ pub(crate) fn send_begin(
         serde_json::from_str(&ptr_to_string(recipient_map))?;
     let fee_rate = ptr_to_num(fee_rate)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
+    let expiration_timestamp = convert_optional_number(expiration_timestamp_opt)?;
     let res = wallet.send_begin(
-        (*online).clone(),
+        *online,
         recipient_map,
         donation,
         fee_rate,
         min_confirmations,
+        expiration_timestamp,
+        dry_run,
     )?;
-    Ok(res)
-}
-
-pub(crate) fn send_end(
-    wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
-    signed_psbt: *const c_char,
-    skip_sync: bool,
-) -> Result<String, Error> {
-    let wallet = Wallet::from_opaque(wallet)?;
-    let online = Online::from_opaque(online)?;
-    let signed_psbt = ptr_to_string(signed_psbt);
-    let res = wallet.send_end((*online).clone(), signed_psbt, skip_sync)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -723,28 +712,11 @@ pub(crate) fn send_btc(
     let address = ptr_to_string(address);
     let amount = ptr_to_num(amount)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.send_btc((*online).clone(), address, amount, fee_rate, skip_sync)?;
+    let res = wallet.send_btc(*online, address, amount, fee_rate, skip_sync)?;
     Ok(res)
 }
 
-pub(crate) fn send_btc_begin(
-    wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
-    address: *const c_char,
-    amount: *const c_char,
-    fee_rate: *const c_char,
-    skip_sync: bool,
-) -> Result<String, Error> {
-    let wallet = Wallet::from_opaque(wallet)?;
-    let online = Online::from_opaque(online)?;
-    let address = ptr_to_string(address);
-    let amount = ptr_to_num(amount)?;
-    let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.send_btc_begin((*online).clone(), address, amount, fee_rate, skip_sync)?;
-    Ok(res)
-}
-
-pub(crate) fn send_btc_end(
+pub(crate) fn send_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     signed_psbt: *const c_char,
@@ -753,8 +725,8 @@ pub(crate) fn send_btc_end(
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let signed_psbt = ptr_to_string(signed_psbt);
-    let res = wallet.send_btc_end((*online).clone(), signed_psbt, skip_sync)?;
-    Ok(res)
+    let res = wallet.send_end(*online, signed_psbt, skip_sync)?;
+    Ok(serde_json::to_string(&res)?)
 }
 
 pub(crate) fn sign_psbt(
@@ -769,7 +741,7 @@ pub(crate) fn sign_psbt(
 pub(crate) fn sync(wallet: &COpaqueStruct, online: &COpaqueStruct) -> Result<(), Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
-    wallet.sync((*online).clone())?;
+    wallet.sync(*online)?;
     Ok(())
 }
 
@@ -777,7 +749,7 @@ pub(crate) fn witness_receive(
     wallet: &COpaqueStruct,
     asset_id_opt: *const c_char,
     assignment: *const c_char,
-    duration_seconds_opt: *const c_char,
+    expiration_timestamp_opt: *const c_char,
     transport_endpoints: *const c_char,
     min_confirmations: *const c_char,
 ) -> Result<String, Error> {
@@ -786,12 +758,12 @@ pub(crate) fn witness_receive(
         serde_json::from_str(&ptr_to_string(transport_endpoints))?;
     let asset_id = convert_optional_string(asset_id_opt);
     let assignment: Assignment = serde_json::from_str(&ptr_to_string(assignment))?;
-    let duration_seconds = convert_optional_number(duration_seconds_opt)?;
+    let expiration_timestamp = convert_optional_number(expiration_timestamp_opt)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
     let res = wallet.witness_receive(
         asset_id,
         assignment,
-        duration_seconds,
+        expiration_timestamp,
         transport_endpoints,
         min_confirmations,
     )?;

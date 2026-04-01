@@ -116,3 +116,14 @@ services:
     depends_on:
       vss-postgres:
         condition: service_healthy
+  rgb-multisig-hub:
+    image: ghcr.io/rgb-tools/rgb-multisig-hub:0.1.0
+    ports:
+      - 8141:3001
+    volumes:
+      - hub:/srv/data
+      - ./hub/config.toml:/srv/data/config.toml:ro
+
+
+volumes:
+  hub:

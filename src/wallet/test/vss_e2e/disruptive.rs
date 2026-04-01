@@ -33,7 +33,7 @@ fn scenario_4_2_vss_unavailable_backup_and_restore_fail_cleanly() {
 
     // Ensure wallet has a non-trivial on-chain state (funded address already exists via helper).
     let _ = wallet_a
-        .get_btc_balance(Some(online_a.clone()), false)
+        .get_btc_balance(Some(online_a), false)
         .expect("get_btc_balance");
 
     let (signing_key, store_id) = generate_signing_key_and_store_id("qa_neg_vss_down");
@@ -127,19 +127,18 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
     let rt = tokio_runtime();
 
     let keys = generate_keys(BitcoinNetwork::Regtest);
+    let wallet_keys = SinglesigKeys::from_keys(&keys, None);
     let tmp = tempfile::tempdir().expect("tempdir");
-    let mut wallet = Wallet::new(WalletData {
-        data_dir: tmp.path().to_str().unwrap().to_string(),
-        bitcoin_network: BitcoinNetwork::Regtest,
-        database_type: DatabaseType::Sqlite,
-        max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-        account_xpub_vanilla: keys.account_xpub_vanilla,
-        account_xpub_colored: keys.account_xpub_colored,
-        mnemonic: Some(keys.mnemonic),
-        master_fingerprint: keys.master_fingerprint,
-        vanilla_keychain: None,
-        supported_schemas: vec![AssetSchema::Nia],
-    })
+    let mut wallet = Wallet::new(
+        WalletData {
+            data_dir: tmp.path().to_str().unwrap().to_string(),
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: vec![AssetSchema::Nia],
+        },
+        wallet_keys,
+    )
     .expect("Wallet::new");
 
     // Make baseline non-empty.
