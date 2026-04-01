@@ -2,6 +2,8 @@ pub(crate) mod entities;
 
 use super::*;
 
+#[cfg(feature = "mpc")]
+use crate::database::entities::mpc_address;
 use crate::database::entities::{
     asset, coloring, media, prelude::*, transfer_transport_endpoint, transport_endpoint, txo,
 };
@@ -858,6 +860,54 @@ impl RgbLibDatabase {
                 })
             })
             .collect()
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn set_mpc_address(
+        &self,
+        addr: mpc_address::ActiveModel,
+    ) -> Result<i32, InternalError> {
+        let res = block_on(MpcAddress::insert(addr).exec(self.get_connection()))?;
+        Ok(res.last_insert_id)
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn get_mpc_addresses_by_keychain(
+        &self,
+        keychain: u8,
+    ) -> Result<Vec<mpc_address::Model>, InternalError> {
+        Ok(block_on(
+            mpc_address::Entity::find()
+                .filter(mpc_address::Column::Keychain.eq(keychain))
+                .all(self.get_connection()),
+        )?)
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn get_mpc_address_by_script(
+        &self,
+        script_hex: &str,
+    ) -> Result<mpc_address::Model, Error> {
+        block_on(
+            mpc_address::Entity::find()
+                .filter(mpc_address::Column::ScriptPubkey.eq(script_hex))
+                .one(self.get_connection()),
+        )
+        .map_err(InternalError::from)?
+        .ok_or(Error::Internal {
+            details: format!("MPC address not found for script {script_hex}"),
+        })
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn get_next_mpc_derivation_index(&self, keychain: u8) -> Result<u32, InternalError> {
+        let max_idx = block_on(
+            mpc_address::Entity::find()
+                .filter(mpc_address::Column::Keychain.eq(keychain))
+                .order_by_desc(mpc_address::Column::DerivationIndex)
+                .one(self.get_connection()),
+        )?;
+        Ok(max_idx.map(|a| a.derivation_index + 1).unwrap_or(0))
     }
 }
 

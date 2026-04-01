@@ -87,6 +87,8 @@ vss-client = { package = "vss-client-ng", git = "https://github.com/lightningdev
     "sigs-auth",
 ] }
 hkdf = { version = "0.12", default-features = false, optional = true }
+p256 = { version = "0.13", features = ["ecdsa"], optional = true }
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"], optional = true }
 sha2 = { version = "0.10", default-features = false, optional = true }
 
 # RGB-related deps
@@ -133,7 +135,9 @@ esplora = [
     "reqwest",
     "rgb-ops/esplora_blocking",
 ]
-vss = ["vss-client", "hkdf", "sha2"]
+vss = ["vss-client", "hkdf", "dep:sha2"]
+mpc = []
+dfns = ["mpc", "dep:p256", "dep:ed25519-dalek", "dep:sha2"]
 camel_case = ["default"]
 
 [[example]]
@@ -143,6 +147,14 @@ required-features = ["vss"]
 [[example]]
 name = "vss_unencrypted_example"
 required-features = ["vss"]
+
+[[example]]
+name = "dfns_e2e"
+required-features = ["dfns", "electrum"]
+
+[[example]]
+name = "bdk_peer"
+required-features = ["electrum"]
 
 [profile.reldebug]
 inherits = "release"

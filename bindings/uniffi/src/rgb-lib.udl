@@ -75,6 +75,7 @@ interface RgbLibError {
   InvalidVanillaKeychain();
   MaxFeeExceeded(string txid);
   MinFeeNotMet(string txid);
+  MpcProvider(string details);
   MultisigHubService(string details);
   MultisigCannotMarkOperationProcessed(string details);
   MultisigCannotRespondToOperation(string details);

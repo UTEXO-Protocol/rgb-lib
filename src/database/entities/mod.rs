@@ -8,6 +8,8 @@ pub mod backup_info;
 pub mod batch_transfer;
 pub mod coloring;
 pub mod media;
+#[cfg(feature = "mpc")]
+pub mod mpc_address;
 pub mod pending_witness_script;
 pub mod token;
 pub mod token_media;

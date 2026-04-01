@@ -383,6 +383,13 @@ pub enum Error {
         txid: String,
     },
 
+    /// MPC provider error
+    #[error("MPC provider error: {details}")]
+    MpcProvider {
+        /// Error details
+        details: String,
+    },
+
     /// Multisig hub service error
     #[error("Multisig hub service error: {details}")]
     MultisigHubService {
