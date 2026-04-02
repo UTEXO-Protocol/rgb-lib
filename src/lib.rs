@@ -53,6 +53,7 @@
 //!         database_type: DatabaseType::Sqlite,
 //!         max_allocations_per_utxo: 5,
 //!         supported_schemas: vec![AssetSchema::Nia],
+//!         reuse_addresses: false,
 //!     };
 //!     let wallet = Wallet::new(wallet_data, single_sig_keys)?;
 //!

@@ -109,6 +109,13 @@ impl WalletOffline for MpcWallet {
             KeychainKind::External => 0u8,
             KeychainKind::Internal => 1u8,
         };
+
+        if self.wallet_data().reuse_addresses
+            && let Some(last) = self.database().get_last_mpc_address(keychain_u8)?
+        {
+            return parse_address_str(&last.address, self.bitcoin_network());
+        }
+
         let index = self.database().get_next_mpc_derivation_index(keychain_u8)?;
 
         let addr_info: MpcAddressInfo =
@@ -575,6 +582,9 @@ impl RgbWalletOpsOnline for MpcWallet {}
 
 impl MpcWallet {
     /// Create a new MPC wallet.
+    ///
+    /// **Note:** For MPC wallets, `wallet_data.reuse_addresses` is recommended to be `true`
+    /// to avoid unnecessary provider API calls for address generation.
     pub fn new(
         wallet_data: WalletData,
         wallet_id: String,
@@ -621,6 +631,7 @@ impl MpcWallet {
                 wallet_dir,
                 bdk_wallet,
                 bdk_database,
+                reuse_address_index: HashMap::new(),
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
                 #[cfg(feature = "vss")]
@@ -802,6 +813,36 @@ impl MpcWallet {
         let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         info!(self.logger(), "Get MPC address completed");
         Ok(address.to_string())
+    }
+
+    /// Rotate the pinned address for the given keychain.
+    ///
+    /// Creates a new address via the MPC provider. Future reuse will return this new address.
+    /// Only meaningful when `reuse_addresses` is `true`.
+    pub fn rotate_address(&mut self, keychain: KeychainKind) -> Result<String, Error> {
+        if !self.wallet_data().reuse_addresses {
+            return Err(Error::AddressReuseDisabled);
+        }
+        let keychain_u8 = match keychain {
+            KeychainKind::External => 0u8,
+            KeychainKind::Internal => 1u8,
+        };
+        let index = self.database().get_next_mpc_derivation_index(keychain_u8)?;
+        let addr_info: MpcAddressInfo =
+            self.provider
+                .create_address(self.bitcoin_network(), keychain, index)?;
+
+        let db_addr = database::entities::mpc_address::ActiveModel {
+            address: ActiveValue::Set(addr_info.address.clone()),
+            script_pubkey: ActiveValue::Set(addr_info.script_pubkey.to_hex_string()),
+            signing_key_id: ActiveValue::Set(addr_info.signing_key_id),
+            keychain: ActiveValue::Set(keychain_u8),
+            derivation_index: ActiveValue::Set(index),
+            ..Default::default()
+        };
+        self.database().set_mpc_address(db_addr)?;
+
+        Ok(addr_info.address)
     }
 
     /// Create new colored UTXOs (begin + MPC sign + end).

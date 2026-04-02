@@ -1396,6 +1396,16 @@ pub trait WalletOffline: WalletBackup {
         keychain: KeychainKind,
         _count: u32,
     ) -> Result<BdkAddress, Error> {
+        if self.wallet_data().reuse_addresses {
+            let index = self
+                .internals()
+                .reuse_address_index
+                .get(&keychain)
+                .copied()
+                .unwrap_or(0);
+            let address = self.bdk_wallet().peek_address(keychain, index).address;
+            return Ok(address);
+        }
         let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
         let address = bdk_wallet.reveal_next_address(keychain).address;
         bdk_wallet.persist(bdk_db)?;

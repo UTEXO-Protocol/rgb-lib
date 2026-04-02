@@ -900,6 +900,19 @@ impl RgbLibDatabase {
     }
 
     #[cfg(feature = "mpc")]
+    pub(crate) fn get_last_mpc_address(
+        &self,
+        keychain: u8,
+    ) -> Result<Option<mpc_address::Model>, InternalError> {
+        Ok(block_on(
+            mpc_address::Entity::find()
+                .filter(mpc_address::Column::Keychain.eq(keychain))
+                .order_by_desc(mpc_address::Column::DerivationIndex)
+                .one(self.get_connection()),
+        )?)
+    }
+
+    #[cfg(feature = "mpc")]
     pub(crate) fn get_next_mpc_derivation_index(&self, keychain: u8) -> Result<u32, InternalError> {
         let max_idx = block_on(
             mpc_address::Entity::find()

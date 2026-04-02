@@ -1009,6 +1009,16 @@ impl Wallet {
         self._get_wallet().get_address()
     }
 
+    fn rotate_vanilla_address(&self) -> Result<String, RgbLibError> {
+        self._get_wallet()
+            .rotate_address(rgb_lib::bdk_wallet::KeychainKind::Internal)
+    }
+
+    fn rotate_colored_address(&self) -> Result<String, RgbLibError> {
+        self._get_wallet()
+            .rotate_address(rgb_lib::bdk_wallet::KeychainKind::External)
+    }
+
     fn get_asset_balance(&self, asset_id: String) -> Result<Balance, RgbLibError> {
         self._get_wallet().get_asset_balance(asset_id)
     }

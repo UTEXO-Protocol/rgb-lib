@@ -300,6 +300,7 @@ mod utils;
 pub(crate) use utils::{api::*, chain::*, helpers::*};
 
 // API tests
+mod address_reuse;
 mod backup;
 mod blind_receive;
 mod create_utxos;

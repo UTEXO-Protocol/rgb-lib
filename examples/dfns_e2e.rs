@@ -192,6 +192,7 @@ fn open_wallet(data_dir: &str) -> MpcWallet {
         database_type: DatabaseType::Sqlite,
         max_allocations_per_utxo: 5,
         supported_schemas: vec![AssetSchema::Nia],
+        reuse_addresses: false,
     };
     MpcWallet::new(
         wallet_data,

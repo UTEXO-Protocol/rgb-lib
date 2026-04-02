@@ -190,6 +190,16 @@ pub extern "C" fn rgblib_get_address(wallet: &COpaqueStruct) -> CResultString {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_rotate_vanilla_address(wallet: &COpaqueStruct) -> CResultString {
+    rotate_vanilla_address(wallet).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_rotate_colored_address(wallet: &COpaqueStruct) -> CResultString {
+    rotate_colored_address(wallet).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_get_asset_balance(
     wallet: &COpaqueStruct,
     asset_id: *const c_char,

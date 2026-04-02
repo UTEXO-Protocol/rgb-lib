@@ -74,6 +74,7 @@ fn success() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, vanilla_keychain),
     )
@@ -161,6 +162,7 @@ fn mainnet_esplora_success() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     )
@@ -191,6 +193,7 @@ fn mainnet_electrum_success() {
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             // IFA not supported on mainnet
             supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     )
@@ -362,6 +365,7 @@ fn watch_only_success() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys_no_mnemonic(&keys, None),
     )
@@ -378,6 +382,7 @@ fn watch_only_success() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     )
@@ -431,6 +436,7 @@ fn watch_only_fail() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys_no_mnemonic(&keys_bad, None),
     );
@@ -495,6 +501,7 @@ fn supported_schemas() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Nia],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     )
@@ -526,6 +533,7 @@ fn supported_schemas() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Uda],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys_rcv, None),
     )
@@ -570,6 +578,7 @@ fn supported_schemas() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Cfa],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     )
@@ -600,6 +609,7 @@ fn supported_schemas() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys, None),
     );
@@ -618,6 +628,7 @@ fn supported_schemas() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Nia, AssetSchema::Ifa],
+            reuse_addresses: false,
         },
         SinglesigKeys::from_keys(&keys_mainnet, None),
     );

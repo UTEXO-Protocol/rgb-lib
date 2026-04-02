@@ -125,6 +125,7 @@ fn open_wallet(state: &PeerState) -> Wallet {
         database_type: DatabaseType::Sqlite,
         max_allocations_per_utxo: 5,
         supported_schemas: vec![AssetSchema::Nia],
+        reuse_addresses: false,
     };
     let keys = SinglesigKeys {
         account_xpub_vanilla: state

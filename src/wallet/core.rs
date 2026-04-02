@@ -21,6 +21,8 @@ pub struct WalletInternals {
     pub(crate) wallet_dir: PathBuf,
     pub(crate) bdk_wallet: PersistedWallet<Store<ChangeSet>>,
     pub(crate) bdk_database: Store<ChangeSet>,
+    /// Pinned derivation index per keychain for address reuse.
+    pub(crate) reuse_address_index: HashMap<KeychainKind, u32>,
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) online_data: Option<OnlineData>,
     #[cfg(feature = "vss")]
