@@ -259,6 +259,14 @@ impl WalletOffline for MultisigWallet {
                 .copied()
                 .unwrap_or(0);
             let address = self.bdk_wallet().peek_address(keychain, index).address;
+            let revealed = self.bdk_wallet().derivation_index(keychain).unwrap_or(0);
+            if revealed <= index {
+                let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
+                for _ in revealed..=index {
+                    bdk_wallet.reveal_next_address(keychain);
+                }
+                bdk_wallet.persist(bdk_db)?;
+            }
             return Ok(address);
         }
         let is_internal = keychain == KeychainKind::Internal;

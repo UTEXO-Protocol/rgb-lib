@@ -1404,6 +1404,15 @@ pub trait WalletOffline: WalletBackup {
                 .copied()
                 .unwrap_or(0);
             let address = self.bdk_wallet().peek_address(keychain, index).address;
+            // Ensure BDK has revealed up to this index so UTXO scanning finds it
+            let revealed = self.bdk_wallet().derivation_index(keychain).unwrap_or(0);
+            if revealed <= index {
+                let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
+                for _ in revealed..=index {
+                    bdk_wallet.reveal_next_address(keychain);
+                }
+                bdk_wallet.persist(bdk_db)?;
+            }
             return Ok(address);
         }
         let (bdk_wallet, bdk_db) = self.bdk_wallet_db_mut();
