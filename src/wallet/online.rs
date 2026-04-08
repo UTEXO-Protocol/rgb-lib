@@ -148,6 +148,22 @@ pub trait WalletOnline: WalletOffline {
         size: u32,
         fee_rate: FeeRate,
     ) -> Result<Psbt, bdk_wallet::error::CreateTxError> {
+        let change_script = if self.wallet_data().reuse_addresses {
+            let index = self
+                .internals()
+                .reuse_address_index
+                .get(&KeychainKind::Internal)
+                .copied()
+                .unwrap_or(0);
+            Some(
+                self.bdk_wallet()
+                    .peek_address(KeychainKind::Internal, index)
+                    .address
+                    .script_pubkey(),
+            )
+        } else {
+            None
+        };
         let mut tx_builder = self.bdk_wallet_mut().build_tx();
         tx_builder
             .add_utxos(inputs)
@@ -156,6 +172,9 @@ pub trait WalletOnline: WalletOffline {
             .fee_rate(fee_rate);
         for address in addresses {
             tx_builder.add_recipient(address.clone(), BdkAmount::from_sat(size as u64));
+        }
+        if let Some(script) = change_script {
+            tx_builder.drain_to(script);
         }
         tx_builder.finish()
     }
@@ -3006,11 +3025,22 @@ pub trait WalletOnline: WalletOffline {
 
         let unspendable = self.get_unspendable_bdk_outpoints()?;
 
+        let change_script = if self.wallet_data().reuse_addresses {
+            Some(
+                self.get_new_addresses(KeychainKind::Internal, 1)?
+                    .script_pubkey(),
+            )
+        } else {
+            None
+        };
         let mut tx_builder = self.bdk_wallet_mut().build_tx();
         tx_builder
             .unspendable(unspendable)
             .add_recipient(script_pubkey, BdkAmount::from_sat(amount))
             .fee_rate(fee_rate_checked);
+        if let Some(script) = change_script {
+            tx_builder.drain_to(script);
+        }
         tx_builder.finish().map_err(|e| match e {
             bdk_wallet::error::CreateTxError::CoinSelection(InsufficientFunds {
                 needed,

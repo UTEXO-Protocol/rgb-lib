@@ -195,4 +195,35 @@ impl Indexer {
                 .map_err(|e| IndexerError::from(*e)),
         }
     }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn list_unspent_for_script(
+        &self,
+        script: &ScriptBuf,
+    ) -> Result<Vec<(OutPoint, TxOut)>, Error> {
+        match self {
+            #[cfg(feature = "electrum")]
+            Indexer::Electrum(client) => {
+                let unspents = client
+                    .inner
+                    .script_list_unspent(script)
+                    .map_err(IndexerError::from)?;
+                Ok(unspents
+                    .into_iter()
+                    .map(|u| {
+                        let outpoint = OutPoint::new(u.tx_hash, u.tx_pos as u32);
+                        let txout = TxOut {
+                            value: BdkAmount::from_sat(u.value),
+                            script_pubkey: script.clone(),
+                        };
+                        (outpoint, txout)
+                    })
+                    .collect())
+            }
+            #[cfg(feature = "esplora")]
+            Indexer::Esplora(_client) => Err(Error::Internal {
+                details: s!("Esplora MPC UTXO query not yet implemented"),
+            }),
+        }
+    }
 }

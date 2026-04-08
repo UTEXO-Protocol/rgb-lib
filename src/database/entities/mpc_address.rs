@@ -1,0 +1,67 @@
+use sea_orm::entity::prelude::*;
+
+#[derive(Copy, Clone, Default, Debug, DeriveEntity)]
+pub struct Entity;
+
+impl EntityName for Entity {
+    fn table_name(&self) -> &str {
+        "mpc_address"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Eq)]
+pub struct Model {
+    pub idx: i32,
+    pub address: String,
+    pub script_pubkey: String,
+    pub signing_key_id: String,
+    pub keychain: u8,
+    pub derivation_index: u32,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveColumn)]
+pub enum Column {
+    Idx,
+    Address,
+    ScriptPubkey,
+    SigningKeyId,
+    Keychain,
+    DerivationIndex,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DerivePrimaryKey)]
+pub enum PrimaryKey {
+    Idx,
+}
+
+impl PrimaryKeyTrait for PrimaryKey {
+    type ValueType = i32;
+    fn auto_increment() -> bool {
+        true
+    }
+}
+
+#[derive(Copy, Clone, Debug, EnumIter)]
+pub enum Relation {}
+
+impl ColumnTrait for Column {
+    type EntityName = Entity;
+    fn def(&self) -> ColumnDef {
+        match self {
+            Self::Idx => ColumnType::Integer.def(),
+            Self::Address => ColumnType::String(StringLen::None).def(),
+            Self::ScriptPubkey => ColumnType::String(StringLen::None).def(),
+            Self::SigningKeyId => ColumnType::String(StringLen::None).def(),
+            Self::Keychain => ColumnType::SmallInteger.def(),
+            Self::DerivationIndex => ColumnType::BigInteger.def(),
+        }
+    }
+}
+
+impl RelationTrait for Relation {
+    fn def(&self) -> RelationDef {
+        panic!("No relations defined")
+    }
+}
+
+impl ActiveModelBehavior for ActiveModel {}

@@ -386,6 +386,16 @@ pub(crate) fn get_address(wallet: &COpaqueStruct) -> Result<String, Error> {
     Ok(wallet.get_address()?)
 }
 
+pub(crate) fn rotate_vanilla_address(wallet: &COpaqueStruct) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    Ok(wallet.rotate_address(rgb_lib::bdk_wallet::KeychainKind::Internal)?)
+}
+
+pub(crate) fn rotate_colored_address(wallet: &COpaqueStruct) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    Ok(wallet.rotate_address(rgb_lib::bdk_wallet::KeychainKind::External)?)
+}
+
 pub(crate) fn get_asset_balance(
     wallet: &COpaqueStruct,
     asset_id: *const c_char,

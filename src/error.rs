@@ -8,6 +8,10 @@ use super::*;
 /// The error variants returned by functions.
 #[derive(Debug, Clone, PartialEq, thiserror::Error, Deserialize, Serialize)]
 pub enum Error {
+    /// Address rotation called when reuse_addresses is false
+    #[error("Address reuse is not enabled")]
+    AddressReuseDisabled,
+
     /// No need to create more allocations
     #[error("Allocations already available")]
     AllocationsAlreadyAvailable,
@@ -381,6 +385,13 @@ pub enum Error {
     MinFeeNotMet {
         /// TXID of the transfer having fee issues
         txid: String,
+    },
+
+    /// MPC provider error
+    #[error("MPC provider error: {details}")]
+    MpcProvider {
+        /// Error details
+        details: String,
     },
 
     /// Multisig hub service error

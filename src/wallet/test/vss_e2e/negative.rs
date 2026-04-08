@@ -274,6 +274,7 @@ fn scenario_4_3_wrong_url_vss_backup_fails_and_keeps_backup_info() {
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
             supported_schemas: vec![AssetSchema::Nia],
+            reuse_addresses: false,
         },
         wallet_keys,
     )

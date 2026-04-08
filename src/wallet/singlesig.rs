@@ -186,6 +186,7 @@ impl Wallet {
                 wallet_dir,
                 bdk_wallet,
                 bdk_database,
+                reuse_address_index: HashMap::new(),
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
                 #[cfg(feature = "vss")]
@@ -248,6 +249,28 @@ impl Wallet {
         self.trigger_auto_backup();
 
         info!(self.logger(), "Get address completed");
+        Ok(address.to_string())
+    }
+
+    /// Rotate the pinned address for the given keychain.
+    ///
+    /// Only meaningful when `reuse_addresses` is `true`. Increments the pinned derivation
+    /// index so subsequent address generation returns a fresh address.
+    pub fn rotate_address(&mut self, keychain: KeychainKind) -> Result<String, Error> {
+        if !self.wallet_data().reuse_addresses {
+            return Err(Error::AddressReuseDisabled);
+        }
+        let index = self
+            .internals()
+            .reuse_address_index
+            .get(&keychain)
+            .copied()
+            .unwrap_or(0);
+        let new_index = index + 1;
+        self.internals_mut()
+            .reuse_address_index
+            .insert(keychain, new_index);
+        let address = self.bdk_wallet().peek_address(keychain, new_index).address;
         Ok(address.to_string())
     }
 

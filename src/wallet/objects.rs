@@ -31,6 +31,14 @@ pub struct WalletData {
     /// List of schemas the wallet should support (when issuing, sending and receiving). Empty list
     /// means the wallet should support all the schemas rgb-lib supports.
     pub supported_schemas: Vec<AssetSchema>,
+    /// When `true`, address generation returns a pinned address instead of creating new ones.
+    /// Default: `false`
+    ///
+    /// **Privacy:** enabling this reduces on-chain privacy since all incoming transactions to the
+    /// same keychain become linkable. Only enable when address reuse is acceptable (e.g. MPC
+    /// wallets, CEX deposit addresses).
+    #[serde(default)]
+    pub reuse_addresses: bool,
 }
 
 /// Descriptors for an RGB wallet.

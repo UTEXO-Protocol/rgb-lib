@@ -6,6 +6,10 @@ pub(crate) mod backup;
 pub(crate) mod core;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) mod indexer;
+#[cfg(feature = "mpc")]
+pub(crate) mod mpc;
+#[cfg(feature = "mpc")]
+pub(crate) mod mpc_psbt;
 pub(crate) mod multisig;
 pub(crate) mod objects;
 pub(crate) mod offline;
@@ -20,6 +24,8 @@ pub mod vss;
 pub(crate) mod test;
 
 pub use backup::restore_backup;
+#[cfg(feature = "mpc")]
+pub use mpc::MpcWallet;
 pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use multisig::{

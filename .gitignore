@@ -7,3 +7,5 @@
 **/tests/hub
 /.vim
 /.vscode
+.env
+.env.*

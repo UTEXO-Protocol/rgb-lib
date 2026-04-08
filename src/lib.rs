@@ -53,6 +53,7 @@
 //!         database_type: DatabaseType::Sqlite,
 //!         max_allocations_per_utxo: 5,
 //!         supported_schemas: vec![AssetSchema::Nia],
+//!         reuse_addresses: false,
 //!     };
 //!     let wallet = Wallet::new(wallet_data, single_sig_keys)?;
 //!
@@ -65,6 +66,8 @@ pub(crate) mod api;
 pub(crate) mod database;
 pub(crate) mod error;
 pub mod keys;
+#[cfg(feature = "mpc")]
+pub mod mpc;
 pub mod utils;
 pub mod wallet;
 
@@ -87,6 +90,10 @@ pub use crate::{
     utils::{BitcoinNetwork, block_on},
     wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
 };
+#[cfg(feature = "mpc")]
+pub use mpc::MpcWalletProvider;
+#[cfg(feature = "dfns")]
+pub use mpc::dfns::{DfnsConfig, DfnsProvider};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use rgbstd::validation::{ValidationConfig, ValidationError};
 
