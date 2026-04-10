@@ -178,6 +178,67 @@ pub struct ValidateConsignmentResult {
     pub details: Option<String>,
 }
 
+/// Validate a consignment using the indexer only (witness TX must be visible to the indexer).
+///
+/// For transfers where the witness is not on-chain yet, use [`validate_consignment_offchain`].
+///
+/// <div class="warning">This method is meant for special usage and is normally not needed, use
+/// it only if you know what you're doing</div>
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn validate_consignment(
+    file_path: &str,
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, Error> {
+    use rgbstd::validation::ValidationError;
+
+    let consignment = RgbTransfer::load_file(file_path).map_err(|e| Error::Internal {
+        details: format!("Failed to load consignment: {e}"),
+    })?;
+
+    let chain_net: ChainNet = bitcoin_network.into();
+    let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+    let trusted_typesystem = asset_schema.types();
+
+    let resolver = get_resolver(indexer_url, bitcoin_network)?;
+
+    let validation_config = ValidationConfig {
+        chain_net,
+        trusted_typesystem,
+        ..Default::default()
+    };
+
+    match consignment.clone().validate(&resolver, &validation_config) {
+        Ok(valid_consignment) => {
+            let status = valid_consignment.validation_status();
+            Ok(ValidateConsignmentResult {
+                valid: true,
+                warnings: Some(
+                    status
+                        .warnings
+                        .iter()
+                        .map(|w| w.to_string())
+                        .collect::<Vec<_>>(),
+                ),
+                error: None,
+                details: None,
+            })
+        }
+        Err(ValidationError::InvalidConsignment(failure)) => Ok(ValidateConsignmentResult {
+            valid: false,
+            warnings: None,
+            error: Some("invalid".to_string()),
+            details: Some(failure.to_string()),
+        }),
+        Err(ValidationError::ResolverError(e)) => Ok(ValidateConsignmentResult {
+            valid: false,
+            warnings: None,
+            error: Some("resolver".to_string()),
+            details: Some(e.to_string()),
+        }),
+    }
+}
+
 /// Rust-only APIs of the wallet.
 impl Wallet {
     /// Color a PSBT.
