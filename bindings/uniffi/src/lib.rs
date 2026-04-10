@@ -714,6 +714,51 @@ fn restore_keys(bitcoin_network: BitcoinNetwork, mnemonic: String) -> Result<Key
     rgb_lib::keys::restore_keys(bitcoin_network, mnemonic)
 }
 
+pub struct ValidateConsignmentResult {
+    pub valid: bool,
+    pub warnings: Option<Vec<String>>,
+    pub error: Option<String>,
+    pub details: Option<String>,
+}
+
+fn validate_consignment(
+    file_path: String,
+    indexer_url: String,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, RgbLibError> {
+    let r = rgb_lib::wallet::rust_only::validate_consignment(
+        &file_path,
+        &indexer_url,
+        bitcoin_network,
+    )?;
+    Ok(ValidateConsignmentResult {
+        valid: r.valid,
+        warnings: r.warnings,
+        error: r.error,
+        details: r.details,
+    })
+}
+
+fn validate_consignment_offchain(
+    file_path: String,
+    txid: String,
+    indexer_url: String,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, RgbLibError> {
+    let r = rgb_lib::wallet::rust_only::validate_consignment_offchain(
+        &file_path,
+        &txid,
+        &indexer_url,
+        bitcoin_network,
+    )?;
+    Ok(ValidateConsignmentResult {
+        valid: r.valid,
+        warnings: r.warnings,
+        error: r.error,
+        details: r.details,
+    })
+}
+
 fn restore_backup(
     backup_path: String,
     password: String,

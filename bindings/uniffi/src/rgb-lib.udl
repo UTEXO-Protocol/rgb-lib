@@ -5,6 +5,21 @@ namespace rgb_lib {
   Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic);
 
   [Throws=RgbLibError]
+  ValidateConsignmentResult validate_consignment(
+    string file_path,
+    string indexer_url,
+    BitcoinNetwork bitcoin_network
+  );
+
+  [Throws=RgbLibError]
+  ValidateConsignmentResult validate_consignment_offchain(
+    string file_path,
+    string txid,
+    string indexer_url,
+    BitcoinNetwork bitcoin_network
+  );
+
+  [Throws=RgbLibError]
   void restore_backup(string backup_path, string password, string data_dir);
 
   [Throws=RgbLibError]
@@ -329,6 +344,13 @@ dictionary InvoiceData {
   BitcoinNetwork network;
   u64? expiration_timestamp;
   sequence<string> transport_endpoints;
+};
+
+dictionary ValidateConsignmentResult {
+  boolean valid;
+  sequence<string>? warnings;
+  string? error;
+  string? details;
 };
 
 [Remote]
