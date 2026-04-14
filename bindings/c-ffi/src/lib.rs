@@ -458,6 +458,28 @@ pub extern "C" fn rgblib_send_btc(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    address: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    send_btc_begin(wallet, online, address, amount, fee_rate, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> CResultString {
+    send_btc_end(wallet, online, signed_psbt, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,

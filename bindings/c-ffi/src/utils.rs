@@ -726,6 +726,36 @@ pub(crate) fn send_btc(
     Ok(res)
 }
 
+pub(crate) fn send_btc_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    address: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let address = ptr_to_string(address);
+    let amount = ptr_to_num(amount)?;
+    let fee_rate = ptr_to_num(fee_rate)?;
+    let res = wallet.send_btc_begin(*online, address, amount, fee_rate, skip_sync)?;
+    Ok(res)
+}
+
+pub(crate) fn send_btc_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+    skip_sync: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let signed_psbt = ptr_to_string(signed_psbt);
+    let res = wallet.send_btc_end(*online, signed_psbt, skip_sync)?;
+    Ok(res)
+}
+
 pub(crate) fn send_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
