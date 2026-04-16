@@ -154,6 +154,26 @@ pub extern "C" fn rgblib_delete_transfers(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_drain_to_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    address: *const c_char,
+    destroy_assets: bool,
+    fee_rate: *const c_char,
+) -> CResultString {
+    drain_to_begin(wallet, online, address, destroy_assets, fee_rate).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_drain_to_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    drain_to_end(wallet, online, signed_psbt).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_fail_transfers(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -260,6 +280,37 @@ pub extern "C" fn rgblib_inflate(
         min_confirmations,
     )
     .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_inflate_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    asset_id: *const c_char,
+    inflation_amounts: *const c_char,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+    dry_run: bool,
+) -> CResultString {
+    inflate_begin(
+        wallet,
+        online,
+        asset_id,
+        inflation_amounts,
+        fee_rate,
+        min_confirmations,
+        dry_run,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_inflate_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    inflate_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]

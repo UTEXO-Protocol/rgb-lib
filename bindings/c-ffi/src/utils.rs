@@ -352,6 +352,33 @@ pub(crate) fn delete_transfers(
     Ok(serde_json::to_string(&res)?)
 }
 
+pub(crate) fn drain_to_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    address: *const c_char,
+    destroy_assets: bool,
+    fee_rate: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let address = ptr_to_string(address);
+    let fee_rate = ptr_to_num(fee_rate)?;
+    let res = wallet.drain_to_begin(*online, address, destroy_assets, fee_rate)?;
+    Ok(res)
+}
+
+pub(crate) fn drain_to_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let signed_psbt = ptr_to_string(signed_psbt);
+    let res = wallet.drain_to_end(*online, signed_psbt)?;
+    Ok(res)
+}
+
 pub(crate) fn fail_transfers(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -469,6 +496,44 @@ pub(crate) fn inflate(
         fee_rate,
         min_confirmations,
     )?;
+    Ok(serde_json::to_string(&res)?)
+}
+
+pub(crate) fn inflate_begin(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    asset_id: *const c_char,
+    inflation_amounts: *const c_char,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+    dry_run: bool,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let asset_id = ptr_to_string(asset_id);
+    let inflation_amounts = convert_strings_array(inflation_amounts)?;
+    let fee_rate = ptr_to_num(fee_rate)?;
+    let min_confirmations = ptr_to_num(min_confirmations)?;
+    let res = wallet.inflate_begin(
+        *online,
+        asset_id,
+        inflation_amounts,
+        fee_rate,
+        min_confirmations,
+        dry_run,
+    )?;
+    Ok(serde_json::to_string(&res)?)
+}
+
+pub(crate) fn inflate_end(
+    wallet: &COpaqueStruct,
+    online: &COpaqueStruct,
+    signed_psbt: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let online = Online::from_opaque(online)?;
+    let signed_psbt = ptr_to_string(signed_psbt);
+    let res = wallet.inflate_end(*online, signed_psbt)?;
     Ok(serde_json::to_string(&res)?)
 }
 
