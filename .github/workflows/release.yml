@@ -27,6 +27,10 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             lib_name: librgblibuniffi.so
+          # Linux ARM64 (cross-compiled)
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            lib_name: librgblibuniffi.so
           # macOS ARM64 (Apple Silicon)
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -35,6 +39,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install cross-compilation toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Setup rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -45,6 +55,8 @@ jobs:
       - name: Build uniffi library
         working-directory: bindings/uniffi
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -172,7 +184,7 @@ jobs:
           mkdir -p release-assets
 
           # Package uniffi libraries
-          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu aarch64-apple-darwin; do
             if [ -d "artifacts/uniffi-$target" ]; then
               echo "Packaging uniffi for $target"
               cd artifacts/uniffi-$target
