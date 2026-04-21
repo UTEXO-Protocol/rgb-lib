@@ -421,7 +421,7 @@ fn fail() {
     // - schema not supported
     create_test_data_dir();
     let bitcoin_network = BitcoinNetwork::Regtest;
-    let keys = generate_keys(bitcoin_network);
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
     let mut wallet_nia = Wallet::new(
         WalletData {
             data_dir: get_test_data_dir_string(),
@@ -503,7 +503,7 @@ fn fail() {
     // inflate_end input params
     let address = test_get_address(&mut wallet);
     let unsigned_psbt = wallet
-        .send_btc_begin(online, address, 1000, FEE_RATE, false)
+        .send_btc_begin(online, address, 1000, FEE_RATE, false, true)
         .unwrap();
     let signed_psbt = wallet.sign_psbt(unsigned_psbt, None).unwrap();
     // - check online is correct

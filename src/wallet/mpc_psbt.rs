@@ -95,7 +95,7 @@ pub fn select_coins(
 ) -> Result<(Vec<(OutPoint, TxOut)>, u64), Error> {
     // Sort by value descending (largest first)
     let mut sorted: Vec<_> = available.to_vec();
-    sorted.sort_by(|a, b| b.1.value.cmp(&a.1.value));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.1.value));
 
     let mut selected = Vec::new();
     let mut total: u64 = 0;

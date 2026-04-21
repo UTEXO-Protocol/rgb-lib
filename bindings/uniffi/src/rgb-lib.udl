@@ -1,8 +1,8 @@
 namespace rgb_lib {
-  Keys generate_keys(BitcoinNetwork bitcoin_network);
+  Keys generate_keys(BitcoinNetwork bitcoin_network, WitnessVersion witness_version);
 
   [Throws=RgbLibError]
-  Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic);
+  Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic, WitnessVersion witness_version);
 
   [Throws=RgbLibError]
   ValidateConsignmentResult validate_consignment(
@@ -33,6 +33,7 @@ interface RgbLibError {
   AssetNotFound(string asset_id);
   BatchTransferNotFound(i32 idx);
   BitcoinNetworkMismatch();
+  CannotAbortPendingVanillaTx();
   CannotChangeOnline();
   CannotCombinePsbts();
   CannotDeleteBatchTransfer();
@@ -89,6 +90,7 @@ interface RgbLibError {
   InvalidTransportEndpoints(string details);
   InvalidTxid();
   InvalidVanillaKeychain();
+  InvalidWitnessVersion(string witness_version);
   MaxFeeExceeded(string txid);
   MinFeeNotMet(string txid);
   MpcProvider(string details);
@@ -294,6 +296,12 @@ enum DatabaseType {
   "Sqlite",
 };
 
+[Remote]
+enum WitnessVersion {
+  "SegWitV0",
+  "Taproot",
+};
+
 interface Address {
   [Throws=RgbLibError]
   constructor(string address_string, BitcoinNetwork bitcoin_network);
@@ -360,6 +368,7 @@ dictionary Keys {
   string account_xpub_vanilla;
   string account_xpub_colored;
   string master_fingerprint;
+  WitnessVersion witness_version;
 };
 
 [Remote]
@@ -496,7 +505,8 @@ enum TransactionType {
   "RgbSend",
   "Drain",
   "CreateUtxos",
-  "User",
+  "SendBtc",
+  "Incoming",
 };
 
 [Remote]
@@ -555,6 +565,7 @@ dictionary SinglesigKeys {
   u8? vanilla_keychain;
   string master_fingerprint;
   string? mnemonic;
+  WitnessVersion witness_version;
 };
 
 [Remote]
@@ -829,7 +840,7 @@ interface Wallet {
   [Throws=RgbLibError]
   string create_utxos_begin(
     Online online, boolean up_to, u8? num, u32? size, u64 fee_rate,
-    boolean skip_sync);
+    boolean skip_sync, boolean dry_run);
 
   [Throws=RgbLibError]
   u8 create_utxos_end(Online online, string signed_psbt, boolean skip_sync);
@@ -839,11 +850,12 @@ interface Wallet {
 
   [Throws=RgbLibError]
   string drain_to(
-    Online online, string address, boolean destroy_assets, u64 fee_rate);
+    Online online, string address, u64 fee_rate);
 
   [Throws=RgbLibError]
   string drain_to_begin(
-    Online online, string address, boolean destroy_assets, u64 fee_rate);
+    Online online, string address, u64 fee_rate,
+    boolean dry_run);
 
   [Throws=RgbLibError]
   string drain_to_end(Online online, string signed_psbt);
@@ -948,7 +960,8 @@ interface Wallet {
 
   [Throws=RgbLibError]
   string send_btc_begin(
-    Online online, string address, u64 amount, u64 fee_rate, boolean skip_sync);
+    Online online, string address, u64 amount, u64 fee_rate, boolean skip_sync,
+    boolean dry_run);
 
   [Throws=RgbLibError]
   string send_btc_end(Online online, string signed_psbt, boolean skip_sync);

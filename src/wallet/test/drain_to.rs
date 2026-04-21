@@ -26,7 +26,7 @@ fn success() {
     wait_for_btc_balance(&mut wallet, online, &expected_balance);
     let address = test_get_address(&mut rcv_wallet); // also updates backup_info
     let bak_info_before = wallet.database().get_backup_info().unwrap().unwrap();
-    test_drain_to_keep(&mut wallet, online, &address);
+    test_drain_to(&mut wallet, online, &address);
     let bak_info_after = wallet.database().get_backup_info().unwrap().unwrap();
     assert!(bak_info_after.last_operation_timestamp > bak_info_before.last_operation_timestamp);
     mine(false, false);
@@ -52,10 +52,7 @@ fn success() {
         },
     };
     wait_for_btc_balance(&mut wallet, online, &expected_balance);
-    test_drain_to_keep(&mut wallet, online, &test_get_address(&mut rcv_wallet));
-    mine(false, false);
-    wait_for_unspents(&mut wallet, Some(online), false, UTXO_NUM);
-    test_drain_to_destroy(&mut wallet, online, &test_get_address(&mut rcv_wallet));
+    test_drain_to(&mut wallet, online, &test_get_address(&mut rcv_wallet));
     mine(false, false);
     wait_for_unspents(&mut wallet, Some(online), false, 0);
 }
@@ -105,7 +102,7 @@ fn pending_witness_receive() {
 
     // drain receiver, which syncs the wallet, detecting (and draining) the new UTXO as well
     let address = test_get_address(&mut drain_wallet);
-    test_drain_to_destroy(&mut rcv_wallet, rcv_online, &address);
+    test_drain_to(&mut rcv_wallet, rcv_online, &address);
     let unspents = list_test_unspents(&mut rcv_wallet, "after draining");
     assert_eq!(unspents.len(), 0);
 
@@ -130,7 +127,7 @@ fn drain_to_begin_and_end_success() {
 
     // drain_to_begin does not update backup_info
     let unsigned_psbt = wallet
-        .drain_to_begin(online, address, false, FEE_RATE)
+        .drain_to_begin(online, address, FEE_RATE, true)
         .unwrap();
     let bak_info_after_begin = wallet.database().get_backup_info().unwrap().unwrap();
     assert_eq!(
@@ -163,12 +160,7 @@ fn fail() {
     let (mut rcv_wallet, rcv_online) = get_empty_wallet!();
 
     // drain empty wallet
-    let result = test_drain_to_result(
-        &mut wallet,
-        online,
-        &test_get_address(&mut rcv_wallet),
-        true,
-    );
+    let result = test_drain_to_result(&mut wallet, online, &test_get_address(&mut rcv_wallet));
     assert!(matches!(
         result,
         Err(Error::InsufficientBitcoins {
@@ -179,27 +171,17 @@ fn fail() {
 
     // bad online object
     fund_wallet(test_get_address(&mut wallet));
-    let result = test_drain_to_result(
-        &mut wallet,
-        rcv_online,
-        &test_get_address(&mut rcv_wallet),
-        false,
-    );
+    let result = test_drain_to_result(&mut wallet, rcv_online, &test_get_address(&mut rcv_wallet));
     assert!(matches!(result, Err(Error::CannotChangeOnline)));
 
     // bad address
-    let result = test_drain_to_result(&mut wallet, online, "invalid address", false);
+    let result = test_drain_to_result(&mut wallet, online, "invalid address");
     assert!(matches!(result, Err(Error::InvalidAddress { details: _ })));
 
     // fee min
     fund_wallet(test_get_address(&mut wallet));
-    let result = test_drain_to_begin_result(
-        &mut wallet,
-        online,
-        &test_get_address(&mut rcv_wallet),
-        true,
-        0,
-    );
+    let result =
+        test_drain_to_begin_result(&mut wallet, online, &test_get_address(&mut rcv_wallet), 0);
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_LOW));
 
     // fee overflow
@@ -208,18 +190,94 @@ fn fail() {
         &mut wallet,
         online,
         &test_get_address(&mut rcv_wallet),
-        true,
         u64::MAX,
     );
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_OVER));
 
     // no private keys
     let (mut wallet, online) = get_funded_noutxo_wallet(false, None);
-    let result = test_drain_to_result(
-        &mut wallet,
+    let result = test_drain_to_result(&mut wallet, online, &test_get_address(&mut rcv_wallet));
+    assert!(matches!(result, Err(Error::WatchOnly)));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn reservation_interaction() {
+    initialize();
+
+    // wallet with several vanilla UTXOs so they can be reserved
+    let (mut wallet, online) = get_empty_wallet!();
+    for _ in 0..3 {
+        fund_wallet(test_get_address(&mut wallet));
+    }
+    wallet.sync(online).unwrap();
+
+    let (mut rcv_wallet, _rcv_online) = get_empty_wallet!();
+    let (mut drain_wallet, _drain_online) = get_empty_wallet!();
+
+    // reserve all vanilla UTXO via drain_to_begin(dry_run=false)
+    let psbt = wallet
+        .drain_to_begin(online, test_get_address(&mut rcv_wallet), FEE_RATE, false)
+        .unwrap();
+
+    // check send_btc cannot spend the reserved UTXOs
+    let res = wallet.send_btc_begin(
         online,
-        &test_get_address(&mut rcv_wallet),
+        test_get_address(&mut rcv_wallet),
+        1000,
+        FEE_RATE,
+        true,
         false,
     );
-    assert!(matches!(result, Err(Error::WatchOnly)));
+    assert_matches!(
+        res,
+        Err(Error::InsufficientBitcoins {
+            needed: _,
+            available: _
+        })
+    );
+
+    // cancel pending drain_to to unlock the reserved inputs
+    let txid = Psbt::from_str(&psbt).unwrap().get_txid().to_string();
+    wallet.abort_pending_vanilla_tx(txid).unwrap();
+
+    // reserve one (or more) vanilla UTXO via send_btc_begin(dry_run=false)
+    let send_psbt_str = wallet
+        .send_btc_begin(
+            online,
+            test_get_address(&mut rcv_wallet),
+            1000,
+            FEE_RATE,
+            true,
+            false,
+        )
+        .unwrap();
+    let send_psbt = Psbt::from_str(&send_psbt_str).unwrap();
+    let reserved_inputs: HashSet<(String, u32)> = send_psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .map(|i| (i.previous_output.txid.to_string(), i.previous_output.vout))
+        .collect();
+    assert!(!reserved_inputs.is_empty());
+
+    // drain always spends all wallet UTXOs, including those reserved by in-flight vanilla
+    // transactions
+    let drain_psbt_str = wallet
+        .drain_to_begin(online, test_get_address(&mut drain_wallet), FEE_RATE, true)
+        .unwrap();
+    let drain_psbt = Psbt::from_str(&drain_psbt_str).unwrap();
+    let drain_inputs: HashSet<(String, u32)> = drain_psbt
+        .unsigned_tx
+        .input
+        .iter()
+        .map(|i| (i.previous_output.txid.to_string(), i.previous_output.vout))
+        .collect();
+    assert!(!drain_inputs.is_empty());
+    assert!(
+        reserved_inputs
+            .iter()
+            .all(|outpoint| drain_inputs.contains(outpoint))
+    );
 }

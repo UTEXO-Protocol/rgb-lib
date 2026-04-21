@@ -42,6 +42,10 @@ pub enum Error {
     #[error("The given PSBTs cannot be combined")]
     CannotCombinePsbts,
 
+    /// Requested pending vanilla TX cannot be aborted
+    #[error("Pending vanilla TX cannot be aborted")]
+    CannotAbortPendingVanillaTx,
+
     /// Requested batch transfer cannot be deleted
     #[error("Batch transfer cannot be deleted")]
     CannotDeleteBatchTransfer,
@@ -372,6 +376,13 @@ pub enum Error {
     /// The provided vanilla keychain is invalid
     #[error("Invalid vanilla keychain")]
     InvalidVanillaKeychain,
+
+    /// Invalid witness version
+    #[error("Invalid witness version: {witness_version}")]
+    InvalidWitnessVersion {
+        /// The invalid witness version
+        witness_version: String,
+    },
 
     /// The maximum fee has been exceeded
     #[error("Max fee exceeded for transfer with TXID: {txid}")]

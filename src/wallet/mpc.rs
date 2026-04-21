@@ -214,13 +214,6 @@ impl WalletOnline for MpcWallet {
         Ok(())
     }
 
-    fn list_internal_for_broadcast(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        // Return empty — MPC vanilla UTXOs don't exist in BDK
-        // broadcast_psbt uses this to skip marking internal inputs as spent
-        // For MPC, all inputs are colored (External) and should be marked spent
-        std::iter::empty()
-    }
-
     fn broadcast_psbt(
         &mut self,
         signed_psbt: &Psbt,
@@ -365,6 +358,7 @@ impl WalletOnline for MpcWallet {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
+        _dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -463,6 +457,7 @@ impl WalletOnline for MpcWallet {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
+        _dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -507,8 +502,8 @@ impl WalletOnline for MpcWallet {
     fn drain_to_begin_impl(
         &mut self,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
+        _dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -516,29 +511,17 @@ impl WalletOnline for MpcWallet {
 
         let script_pubkey = self.get_script_pubkey(&address)?;
 
-        // Collect all UTXOs
+        // Collect all UTXOs (vanilla only; never drain colored)
         let vanilla_utxos = self.query_vanilla_utxos()?;
         let mut all_inputs: Vec<(OutPoint, TxOut)> = vanilla_utxos
             .into_iter()
             .map(|(op, txout, _)| (op, txout))
             .collect();
 
-        if destroy_assets {
-            let colored_addrs = self.database().get_mpc_addresses_by_keychain(0)?;
-            for addr in &colored_addrs {
-                let script =
-                    ScriptBuf::from_hex(&addr.script_pubkey).map_err(|e| Error::Internal {
-                        details: format!("invalid script_pubkey hex: {e}"),
-                    })?;
-                let utxos = self.indexer().list_unspent_for_script(&script)?;
-                all_inputs.extend(utxos);
-            }
-        } else {
-            // Filter out colored UTXOs
-            let unspendable = self.get_unspendable_bdk_outpoints()?;
-            let unspendable_set: HashSet<OutPoint> = unspendable.into_iter().collect();
-            all_inputs.retain(|(op, _)| !unspendable_set.contains(op));
-        }
+        // Filter out colored UTXOs
+        let unspendable = self.get_unspendable_bdk_outpoints()?;
+        let unspendable_set: HashSet<OutPoint> = unspendable.into_iter().collect();
+        all_inputs.retain(|(op, _)| !unspendable_set.contains(op));
 
         if all_inputs.is_empty() {
             return Err(Error::InsufficientBitcoins {
@@ -857,7 +840,7 @@ impl MpcWallet {
     ) -> Result<u8, Error> {
         info!(self.logger(), "Creating UTXOs...");
         self.check_online(online)?;
-        let psbt = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync)?;
+        let psbt = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let res = self.create_utxos_end_impl(&signed, skip_sync)?;
         info!(self.logger(), "Create UTXOs completed");
@@ -873,10 +856,11 @@ impl MpcWallet {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<String, Error> {
         info!(self.logger(), "Creating UTXOs (begin)...");
         self.check_online(online)?;
-        let res = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync)?;
+        let res = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync, dry_run)?;
         info!(self.logger(), "Create UTXOs (begin) completed");
         Ok(res.to_string())
     }
@@ -987,7 +971,7 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC...");
         self.check_online(online)?;
-        let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync)?;
+        let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let res = self.send_btc_end_impl(&signed, skip_sync)?;
         info!(self.logger(), "Send BTC completed");
@@ -1002,10 +986,11 @@ impl MpcWallet {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
-        let res = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync)?;
+        let res = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, dry_run)?;
         info!(self.logger(), "Send BTC (begin) completed");
         Ok(res.to_string())
     }
@@ -1030,12 +1015,11 @@ impl MpcWallet {
         &mut self,
         online: Online,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
     ) -> Result<String, Error> {
         info!(self.logger(), "Draining...");
         self.check_online(online)?;
-        let psbt = self.drain_to_begin_impl(address, destroy_assets, fee_rate)?;
+        let psbt = self.drain_to_begin_impl(address, fee_rate, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let tx = self.drain_to_end_impl(&signed)?;
         info!(self.logger(), "Drain completed");
@@ -1047,12 +1031,12 @@ impl MpcWallet {
         &mut self,
         online: Online,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
+        dry_run: bool,
     ) -> Result<String, Error> {
         info!(self.logger(), "Draining (begin)...");
         self.check_online(online)?;
-        let psbt = self.drain_to_begin_impl(address, destroy_assets, fee_rate)?;
+        let psbt = self.drain_to_begin_impl(address, fee_rate, dry_run)?;
         info!(self.logger(), "Drain (begin) completed");
         Ok(psbt.to_string())
     }

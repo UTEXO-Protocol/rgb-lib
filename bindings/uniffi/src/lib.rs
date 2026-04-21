@@ -21,7 +21,7 @@ use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, Error as RgbLibError, TransferStatus,
     TransportType,
     bdk_wallet::bitcoin::secp256k1::SecretKey,
-    keys::Keys,
+    keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
         Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
@@ -706,12 +706,16 @@ impl From<RespondToOperation> for RgbLibRespondToOperation {
     }
 }
 
-fn generate_keys(bitcoin_network: BitcoinNetwork) -> Keys {
-    rgb_lib::keys::generate_keys(bitcoin_network)
+fn generate_keys(bitcoin_network: BitcoinNetwork, witness_version: WitnessVersion) -> Keys {
+    rgb_lib::keys::generate_keys(bitcoin_network, witness_version)
 }
 
-fn restore_keys(bitcoin_network: BitcoinNetwork, mnemonic: String) -> Result<Keys, RgbLibError> {
-    rgb_lib::keys::restore_keys(bitcoin_network, mnemonic)
+fn restore_keys(
+    bitcoin_network: BitcoinNetwork,
+    mnemonic: String,
+    witness_version: WitnessVersion,
+) -> Result<Keys, RgbLibError> {
+    rgb_lib::keys::restore_keys(bitcoin_network, mnemonic, witness_version)
 }
 
 pub struct ValidateConsignmentResult {
@@ -989,9 +993,10 @@ impl Wallet {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<String, RgbLibError> {
         self._get_wallet()
-            .create_utxos_begin(online, up_to, num, size, fee_rate, skip_sync)
+            .create_utxos_begin(online, up_to, num, size, fee_rate, skip_sync, dry_run)
     }
 
     fn create_utxos_end(
@@ -1017,22 +1022,20 @@ impl Wallet {
         &self,
         online: Online,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
     ) -> Result<String, RgbLibError> {
-        self._get_wallet()
-            .drain_to(online, address, destroy_assets, fee_rate)
+        self._get_wallet().drain_to(online, address, fee_rate)
     }
 
     fn drain_to_begin(
         &self,
         online: Online,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
+        dry_run: bool,
     ) -> Result<String, RgbLibError> {
         self._get_wallet()
-            .drain_to_begin(online, address, destroy_assets, fee_rate)
+            .drain_to_begin(online, address, fee_rate, dry_run)
     }
 
     fn drain_to_end(&self, online: Online, signed_psbt: String) -> Result<String, RgbLibError> {
@@ -1314,9 +1317,10 @@ impl Wallet {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<String, RgbLibError> {
         self._get_wallet()
-            .send_btc_begin(online, address, amount, fee_rate, skip_sync)
+            .send_btc_begin(online, address, amount, fee_rate, skip_sync, dry_run)
     }
 
     fn send_btc_end(

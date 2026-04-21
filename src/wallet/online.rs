@@ -88,8 +88,6 @@ pub trait WalletOnline: WalletOffline {
         }
     }
 
-    fn list_internal_for_broadcast(&self) -> impl Iterator<Item = LocalOutput> + '_;
-
     fn broadcast_psbt(
         &mut self,
         signed_psbt: &Psbt,
@@ -102,24 +100,14 @@ pub trait WalletOnline: WalletOffline {
                 .map_err(InternalError::from)?,
         )?;
 
-        let internal_outpoints: Vec<(String, u32)> = self
-            .list_internal_for_broadcast()
-            .map(|u| (u.outpoint.txid.to_string(), u.outpoint.vout))
-            .collect();
-
         for input in tx.clone().input {
             let txid = input.previous_output.txid.to_string();
             let vout = input.previous_output.vout;
-            if internal_outpoints.contains(&(txid.clone(), vout)) {
-                continue;
+            if let Some(db_txo) = self.database().get_txo(&Outpoint { txid, vout })? {
+                let mut db_txo: DbTxoActMod = db_txo.into();
+                db_txo.spent = ActiveValue::Set(true);
+                self.database().update_txo(db_txo)?;
             }
-            let mut db_txo: DbTxoActMod = self
-                .database()
-                .get_txo(&Outpoint { txid, vout })?
-                .expect("outpoint should be in the DB")
-                .into();
-            db_txo.spent = ActiveValue::Set(true);
-            self.database().update_txo(db_txo)?;
         }
 
         if !skip_sync {
@@ -127,6 +115,59 @@ pub trait WalletOnline: WalletOffline {
         }
 
         Ok(tx)
+    }
+
+    fn reserve_vanilla_txos(
+        &self,
+        psbt: &Psbt,
+        r#type: WalletTransactionType,
+    ) -> Result<(), Error> {
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
+        let wt_idx = self
+            .database()
+            .set_wallet_transaction(DbWalletTransactionActMod {
+                txid: ActiveValue::Set(txid),
+                r#type: ActiveValue::Set(r#type),
+                ..Default::default()
+            })?;
+        let reservations: Vec<DbReservedTxoActMod> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|i| DbReservedTxoActMod {
+                txid: ActiveValue::Set(i.previous_output.txid.to_string()),
+                vout: ActiveValue::Set(i.previous_output.vout),
+                reserved_for: ActiveValue::Set(Some(wt_idx)),
+                ..Default::default()
+            })
+            .collect();
+        self.database().set_reserved_txos(reservations)?;
+        Ok(())
+    }
+
+    fn finalize_vanilla_wallet_transaction(
+        &self,
+        psbt: &Psbt,
+        r#type: WalletTransactionType,
+    ) -> Result<(), Error> {
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
+        match self
+            .database()
+            .get_wallet_transaction_with_reserved_txos_by_txid(&txid)?
+        {
+            Some((_wt, reservations)) => {
+                self.database().del_reserved_txos(&reservations)?;
+            }
+            None => {
+                self.database()
+                    .set_wallet_transaction(DbWalletTransactionActMod {
+                        txid: ActiveValue::Set(txid),
+                        r#type: ActiveValue::Set(r#type),
+                        ..Default::default()
+                    })?;
+            }
+        }
+        Ok(())
     }
 
     fn broadcast_and_update_rgb(
@@ -186,6 +227,7 @@ pub trait WalletOnline: WalletOffline {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -211,9 +253,21 @@ pub trait WalletOnline: WalletOffline {
             "Will try to create {} UTXOs", utxos_to_create
         );
 
-        let inputs: Vec<BdkOutPoint> = self.internal_unspents().map(|u| u.outpoint).collect();
-        let inputs: &[BdkOutPoint] = &inputs;
-        let usable_btc_amount = self.get_uncolorable_btc_sum()?;
+        let reserved: HashSet<BdkOutPoint> =
+            self.get_reserved_vanilla_outpoints()?.into_iter().collect();
+        let (inputs, usable_btc_amount) = self.internal_unspents().fold(
+            (Vec::new(), 0u64),
+            |(mut inputs, usable_btc_amount), u| {
+                let outpoint = u.outpoint;
+                let value = u.txout.value.to_sat();
+                if reserved.contains(&outpoint) {
+                    (inputs, usable_btc_amount)
+                } else {
+                    inputs.push(outpoint);
+                    (inputs, usable_btc_amount + value)
+                }
+            },
+        );
         let utxo_size = size.unwrap_or(UTXO_SIZE);
         if utxo_size == 0 {
             return Err(Error::InvalidAmountZero);
@@ -232,8 +286,13 @@ pub trait WalletOnline: WalletOffline {
             addresses.push(self.get_new_address()?.script_pubkey());
         }
         while !addresses.is_empty() {
-            match self.create_split_tx(inputs, &addresses, utxo_size, fee_rate_checked) {
-                Ok(psbt) => return Ok(psbt),
+            match self.create_split_tx(&inputs, &addresses, utxo_size, fee_rate_checked) {
+                Ok(psbt) => {
+                    if !dry_run {
+                        self.reserve_vanilla_txos(&psbt, WalletTransactionType::CreateUtxos)?;
+                    }
+                    return Ok(psbt);
+                }
                 Err(e) => {
                     (btc_needed, btc_available) = match e {
                         bdk_wallet::error::CreateTxError::CoinSelection(InsufficientFunds {
@@ -262,12 +321,7 @@ pub trait WalletOnline: WalletOffline {
     fn create_utxos_end_impl(&mut self, signed_psbt: &Psbt, skip_sync: bool) -> Result<u8, Error> {
         let tx = self.broadcast_psbt(signed_psbt, skip_sync)?;
 
-        self.database()
-            .set_wallet_transaction(DbWalletTransactionActMod {
-                txid: ActiveValue::Set(tx.compute_txid().to_string()),
-                r#type: ActiveValue::Set(WalletTransactionType::CreateUtxos),
-                ..Default::default()
-            })?;
+        self.finalize_vanilla_wallet_transaction(signed_psbt, WalletTransactionType::CreateUtxos)?;
 
         let mut num_utxos_created = 0;
         if !skip_sync {
@@ -289,8 +343,8 @@ pub trait WalletOnline: WalletOffline {
     fn drain_to_begin_impl(
         &mut self,
         address: String,
-        destroy_assets: bool,
         fee_rate: u64,
+        dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -298,22 +352,13 @@ pub trait WalletOnline: WalletOffline {
 
         let script_pubkey = self.get_script_pubkey(&address)?;
 
-        let mut unspendable = None;
-        if !destroy_assets {
-            unspendable = Some(self.get_unspendable_bdk_outpoints()?);
-        }
-
         let mut tx_builder = self.bdk_wallet_mut().build_tx();
         tx_builder
             .drain_wallet()
             .drain_to(script_pubkey)
             .fee_rate(fee_rate_checked);
 
-        if let Some(unspendable) = unspendable {
-            tx_builder.unspendable(unspendable);
-        }
-
-        tx_builder.finish().map_err(|e| match e {
+        let psbt = tx_builder.finish().map_err(|e| match e {
             bdk_wallet::error::CreateTxError::CoinSelection(InsufficientFunds {
                 needed,
                 available,
@@ -327,17 +372,18 @@ pub trait WalletOnline: WalletOffline {
             _ => Error::Internal {
                 details: e.to_string(),
             },
-        })
+        })?;
+
+        if !dry_run {
+            self.reserve_vanilla_txos(&psbt, WalletTransactionType::Drain)?;
+        }
+
+        Ok(psbt)
     }
 
     fn drain_to_end_impl(&mut self, signed_psbt: &Psbt) -> Result<BdkTransaction, Error> {
         let tx = self.broadcast_psbt(signed_psbt, false)?;
-        self.database()
-            .set_wallet_transaction(DbWalletTransactionActMod {
-                txid: ActiveValue::Set(tx.compute_txid().to_string()),
-                r#type: ActiveValue::Set(WalletTransactionType::Drain),
-                ..Default::default()
-            })?;
+        self.finalize_vanilla_wallet_transaction(signed_psbt, WalletTransactionType::Drain)?;
 
         self.update_backup_info(false)?;
         self.trigger_auto_backup();
@@ -903,6 +949,16 @@ pub trait WalletOnline: WalletOffline {
         };
         let contract_id = consignment.contract_id();
         let asset_id = contract_id.to_string();
+        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+
+        // check if the received schema is supported
+        if !self.supports_schema(&asset_schema) {
+            error!(
+                self.logger(),
+                "The wallet doesn't support the provided schema: {}", asset_schema
+            );
+            return self.refuse_consignment(proxy_url, recipient_id, &mut updated_batch_transfer);
+        }
 
         // check if DB transfer is connected to an asset
         if let Some(aid) = asset_transfer.asset_id.clone() {
@@ -935,7 +991,6 @@ pub trait WalletOnline: WalletOffline {
 
         // validate consignment
         debug!(self.logger(), "Validating consignment...");
-        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
         let trusted_typesystem = asset_schema.types();
         let validation_config = ValidationConfig {
             chain_net: self.chain_net(),
@@ -1027,14 +1082,6 @@ pub trait WalletOnline: WalletOffline {
                     &mut updated_batch_transfer,
                 );
             }
-        }
-
-        if !self.supports_schema(&asset_schema) {
-            error!(
-                self.logger(),
-                "The wallet doesn't support the provided schema: {}", asset_schema
-            );
-            return self.refuse_consignment(proxy_url, recipient_id, &mut updated_batch_transfer);
         }
 
         let known_concealed = if let Some(RecipientTypeFull::Blind { .. }) = transfer.recipient_type
@@ -3014,6 +3061,7 @@ pub trait WalletOnline: WalletOffline {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
+        dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -3041,7 +3089,7 @@ pub trait WalletOnline: WalletOffline {
         if let Some(script) = change_script {
             tx_builder.drain_to(script);
         }
-        tx_builder.finish().map_err(|e| match e {
+        let psbt = tx_builder.finish().map_err(|e| match e {
             bdk_wallet::error::CreateTxError::CoinSelection(InsufficientFunds {
                 needed,
                 available,
@@ -3055,11 +3103,18 @@ pub trait WalletOnline: WalletOffline {
             _ => Error::Internal {
                 details: e.to_string(),
             },
-        })
+        })?;
+
+        if !dry_run {
+            self.reserve_vanilla_txos(&psbt, WalletTransactionType::SendBtc)?;
+        }
+
+        Ok(psbt)
     }
 
     fn send_btc_end_impl(&mut self, signed_psbt: &Psbt, skip_sync: bool) -> Result<String, Error> {
         let tx = self.broadcast_psbt(signed_psbt, skip_sync)?;
+        self.finalize_vanilla_wallet_transaction(signed_psbt, WalletTransactionType::SendBtc)?;
         Ok(tx.compute_txid().to_string())
     }
 

@@ -74,7 +74,7 @@ pub(crate) fn get_test_wallet_with_net(
     max_allocations_per_utxo: Option<u32>,
     bitcoin_network: BitcoinNetwork,
 ) -> Wallet {
-    let keys = generate_keys(bitcoin_network);
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
     let wallet_keys = if private_keys {
         SinglesigKeys::from_keys(&keys, None)
     } else {
@@ -117,6 +117,28 @@ pub(crate) fn get_test_wallet(private_keys: bool, max_allocations_per_utxo: Opti
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn get_funded_wallet_p2wpkh() -> (Wallet, Online) {
+    create_test_data_dir();
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::SegWitV0);
+    let mut wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network: BitcoinNetwork::Regtest,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: false,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let online = wallet.go_online(true, ELECTRUM_URL.to_string()).unwrap();
+    fund_wallet(wallet.get_address().unwrap());
+    test_create_utxos_default(&mut wallet, online);
+    (wallet, online)
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn get_empty_wallet(
     private_keys: bool,
     indexer_url: Option<String>,
@@ -151,7 +173,7 @@ pub(crate) fn get_funded_wallet(
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn drain_wallet(wallet: &mut Wallet, online: Online) {
     let mut rcv_wallet = get_test_wallet(false, None);
-    test_drain_to_destroy(wallet, online, &rcv_wallet.get_address().unwrap());
+    test_drain_to(wallet, online, &rcv_wallet.get_address().unwrap());
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -547,7 +569,10 @@ pub(crate) fn wait_for_refresh(
     asset_id: Option<&str>,
     transfer_ids: Option<&[i32]>,
 ) {
-    println!("waiting for refresh");
+    println!(
+        "waiting for refresh ({})",
+        wallet.internals().wallet_data.data_dir
+    );
     let mut seen = HashSet::new();
     let mut target_set = HashSet::new();
     if let Some(t_ids) = transfer_ids {
@@ -625,7 +650,7 @@ pub(crate) fn wait_for_unspents(
     }
 }
 
-pub(crate) fn get_pending_blind_transfers(wallet: &mut Wallet) -> Vec<Transfer> {
+pub(crate) fn get_pending_blind_transfers(wallet: &mut impl RgbWalletOpsOffline) -> Vec<Transfer> {
     let transfers = test_list_transfers(wallet, None);
     transfers
         .into_iter()
@@ -699,8 +724,11 @@ pub(crate) fn write_opouts_to_reject_list(filename: &str, opouts: &[String]) {
 /// print the provided message, then get colorings for each wallet unspent and print their status,
 /// type, amount and asset
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn show_unspent_colorings(wallet: &mut Wallet, msg: &str) {
-    println!("\n{msg}");
+pub(crate) fn show_unspent_colorings(wallet: &mut impl RgbWalletOpsOnline, msg: &str) {
+    println!(
+        "\nwallet {} unspent colorings ({msg})",
+        wallet.get_wallet_data().data_dir
+    );
     let unspents = test_list_unspents(wallet, None, false)
         .into_iter()
         .filter(|u| u.utxo.colorable);

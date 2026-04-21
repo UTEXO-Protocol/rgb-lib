@@ -143,7 +143,8 @@ fn transaction_type_code(ty: &TransactionType) -> u8 {
         TransactionType::RgbSend => 0,
         TransactionType::Drain => 1,
         TransactionType::CreateUtxos => 2,
-        TransactionType::User => 3,
+        TransactionType::Incoming => 3,
+        TransactionType::SendBtc => 4,
     }
 }
 
