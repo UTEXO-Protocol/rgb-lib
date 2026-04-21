@@ -7363,8 +7363,8 @@ fn allocations() {
             .collect();
         // check input colorings
         let input_colorings: Vec<_> = coloring_map
-            .iter()
-            .flat_map(|(_, c)| c)
+            .values()
+            .flatten()
             .filter(|c| c.r#type == ColoringType::Input)
             .collect();
         if pending_xfer {
@@ -7408,8 +7408,8 @@ fn allocations() {
         }
         // check change colorings
         let change_colorings: Vec<_> = coloring_map
-            .iter()
-            .flat_map(|(_, c)| c)
+            .values()
+            .flatten()
             .filter(|c| c.r#type == ColoringType::Change)
             .collect();
         assert_eq!(change_colorings.len(), amounts_auto.len());
@@ -7705,8 +7705,8 @@ fn allocations() {
     let db_asset_transfers = wallet_2.database().iter_asset_transfers().unwrap();
     // check input colorings
     let input_colorings: Vec<_> = coloring_map
-        .iter()
-        .flat_map(|(_, c)| c)
+        .values()
+        .flatten()
         .filter(|c| c.r#type == ColoringType::Input)
         .collect();
     // - 4 colorings
@@ -7743,8 +7743,8 @@ fn allocations() {
     }
     // check change colorings
     let change_colorings: Vec<_> = coloring_map
-        .iter()
-        .flat_map(|(_, c)| c)
+        .values()
+        .flatten()
         .filter(|c| c.r#type == ColoringType::Change)
         .filter(|c| {
             db_batch_transfers
