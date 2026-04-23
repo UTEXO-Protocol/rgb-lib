@@ -516,7 +516,7 @@ fn cmd_drain(state: &mut E2eState) {
     let online = go_online(&mut wallet);
 
     println!("[..] Draining to {address}...");
-    match wallet.drain_to(online, address, true, 1) {
+    match wallet.drain_to(online, address, 1) {
         Ok(txid) => println!("[OK] Drained! Txid: {txid}"),
         Err(e) => println!("[!!] drain_to failed: {e}"),
     }

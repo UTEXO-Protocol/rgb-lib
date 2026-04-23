@@ -262,7 +262,7 @@ fn scenario_4_3_wrong_url_vss_backup_fails_and_keeps_backup_info() {
 
     let rt = tokio_runtime();
 
-    let keys = generate_keys(BitcoinNetwork::Regtest);
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
     let wallet_keys = SinglesigKeys::from_keys(&keys, None);
     // Keep tempdir alive for the entire test; Wallet::new requires the directory to exist.
     let tmp = tempfile::tempdir().expect("tempdir");

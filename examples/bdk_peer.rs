@@ -139,6 +139,7 @@ fn open_wallet(state: &PeerState) -> Wallet {
         mnemonic: state.mnemonic.clone(),
         master_fingerprint: state.fingerprint.clone().expect("no fingerprint in state"),
         vanilla_keychain: None,
+        witness_version: rgb_lib::keys::WitnessVersion::Taproot,
     };
     Wallet::new(wallet_data, keys).expect("failed to create BDK wallet")
 }
@@ -180,7 +181,7 @@ fn cmd_setup(state: &mut PeerState) {
     fs::create_dir_all(&state.data_dir).unwrap();
 
     let network = bitcoin_network();
-    let keys = generate_keys(network);
+    let keys = generate_keys(network, rgb_lib::keys::WitnessVersion::Taproot);
     state.mnemonic = Some(keys.mnemonic.clone());
     state.xpub_vanilla = Some(keys.account_xpub_vanilla.clone());
     state.xpub_colored = Some(keys.account_xpub_colored.clone());

@@ -126,7 +126,7 @@ fn scenario_4_5_interrupt_during_chunked_upload_keeps_baseline_atomic() {
     let vss_url = vss_server_url();
     let rt = tokio_runtime();
 
-    let keys = generate_keys(BitcoinNetwork::Regtest);
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
     let wallet_keys = SinglesigKeys::from_keys(&keys, None);
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut wallet = Wallet::new(

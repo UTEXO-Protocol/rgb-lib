@@ -6,7 +6,7 @@ fn reuse_returns_same_address() {
     create_test_data_dir();
 
     let bitcoin_network = BitcoinNetwork::Regtest;
-    let keys = generate_keys(bitcoin_network);
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
     let mut wallet = Wallet::new(
         WalletData {
             data_dir: get_test_data_dir_string(),
@@ -38,7 +38,7 @@ fn rotate_changes_address() {
     create_test_data_dir();
 
     let bitcoin_network = BitcoinNetwork::Regtest;
-    let keys = generate_keys(bitcoin_network);
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
     let mut wallet = Wallet::new(
         WalletData {
             data_dir: get_test_data_dir_string(),
@@ -76,7 +76,7 @@ fn send_btc_change_reuses_address() {
     initialize();
 
     let bitcoin_network = BitcoinNetwork::Regtest;
-    let keys = generate_keys(bitcoin_network);
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
     let mut wallet = Wallet::new(
         WalletData {
             data_dir: get_test_data_dir_string(),

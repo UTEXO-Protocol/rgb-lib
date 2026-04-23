@@ -310,6 +310,7 @@ pub(crate) fn create_utxos(
     Ok(serde_json::to_string(&res)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_utxos_begin(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -318,13 +319,14 @@ pub(crate) fn create_utxos_begin(
     size_opt: *const c_char,
     fee_rate: *const c_char,
     skip_sync: bool,
+    dry_run: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let num = convert_optional_number(num_opt)?;
     let size = convert_optional_number(size_opt)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.create_utxos_begin(*online, up_to, num, size, fee_rate, skip_sync)?;
+    let res = wallet.create_utxos_begin(*online, up_to, num, size, fee_rate, skip_sync, dry_run)?;
     Ok(res)
 }
 
@@ -356,14 +358,14 @@ pub(crate) fn drain_to_begin(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     address: *const c_char,
-    destroy_assets: bool,
     fee_rate: *const c_char,
+    dry_run: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let address = ptr_to_string(address);
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.drain_to_begin(*online, address, destroy_assets, fee_rate)?;
+    let res = wallet.drain_to_begin(*online, address, fee_rate, dry_run)?;
     Ok(res)
 }
 
@@ -402,9 +404,13 @@ pub(crate) fn finalize_psbt(
     Ok(wallet.finalize_psbt(signed_psbt, None)?)
 }
 
-pub(crate) fn generate_keys(bitcoin_network: *const c_char) -> Result<String, Error> {
+pub(crate) fn generate_keys(
+    bitcoin_network: *const c_char,
+    witness_version: *const c_char,
+) -> Result<String, Error> {
     let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
-    let res = rgb_lib::keys::generate_keys(bitcoin_network);
+    let witness_version = WitnessVersion::from_str(&ptr_to_string(witness_version))?;
+    let res = rgb_lib::keys::generate_keys(bitcoin_network, witness_version);
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -707,10 +713,12 @@ pub(crate) fn restore_backup(
 pub(crate) fn restore_keys(
     bitcoin_network: *const c_char,
     mnemonic: *const c_char,
+    witness_version: *const c_char,
 ) -> Result<String, Error> {
     let bitcoin_network = BitcoinNetwork::from_str(&ptr_to_string(bitcoin_network))?;
     let mnemonic = ptr_to_string(mnemonic);
-    let res = rgb_lib::keys::restore_keys(bitcoin_network, mnemonic)?;
+    let witness_version = WitnessVersion::from_str(&ptr_to_string(witness_version))?;
+    let res = rgb_lib::keys::restore_keys(bitcoin_network, mnemonic, witness_version)?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -791,6 +799,7 @@ pub(crate) fn send_btc(
     Ok(res)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn send_btc_begin(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
@@ -798,13 +807,14 @@ pub(crate) fn send_btc_begin(
     amount: *const c_char,
     fee_rate: *const c_char,
     skip_sync: bool,
+    dry_run: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let address = ptr_to_string(address);
     let amount = ptr_to_num(amount)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.send_btc_begin(*online, address, amount, fee_rate, skip_sync)?;
+    let res = wallet.send_btc_begin(*online, address, amount, fee_rate, skip_sync, dry_run)?;
     Ok(res)
 }
 

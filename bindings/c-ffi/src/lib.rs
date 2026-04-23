@@ -13,6 +13,7 @@ use std::{
 
 use rgb_lib::{
     AssetSchema, Assignment, Error as RgbLibError,
+    keys::WitnessVersion,
     utils::BitcoinNetwork,
     wallet::{
         Invoice, Online, Recipient, RefreshFilter, RgbWalletOpsOffline, RgbWalletOpsOnline,
@@ -127,9 +128,10 @@ pub extern "C" fn rgblib_create_utxos_begin(
     size_opt: *const c_char,
     fee_rate: *const c_char,
     skip_sync: bool,
+    dry_run: bool,
 ) -> CResultString {
     create_utxos_begin(
-        wallet, online, up_to, num_opt, size_opt, fee_rate, skip_sync,
+        wallet, online, up_to, num_opt, size_opt, fee_rate, skip_sync, dry_run,
     )
     .into()
 }
@@ -158,10 +160,10 @@ pub extern "C" fn rgblib_drain_to_begin(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     address: *const c_char,
-    destroy_assets: bool,
     fee_rate: *const c_char,
+    dry_run: bool,
 ) -> CResultString {
-    drain_to_begin(wallet, online, address, destroy_assets, fee_rate).into()
+    drain_to_begin(wallet, online, address, fee_rate, dry_run).into()
 }
 
 #[unsafe(no_mangle)]
@@ -200,8 +202,11 @@ pub extern "C" fn rgblib_finalize_psbt(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rgblib_generate_keys(bitcoin_network: *const c_char) -> CResultString {
-    generate_keys(bitcoin_network).into()
+pub extern "C" fn rgblib_generate_keys(
+    bitcoin_network: *const c_char,
+    witness_version: *const c_char,
+) -> CResultString {
+    generate_keys(bitcoin_network, witness_version).into()
 }
 
 #[unsafe(no_mangle)]
@@ -444,8 +449,9 @@ pub extern "C" fn rgblib_restore_backup(
 pub extern "C" fn rgblib_restore_keys(
     bitcoin_network: *const c_char,
     mnemonic: *const c_char,
+    witness_version: *const c_char,
 ) -> CResultString {
-    restore_keys(bitcoin_network, mnemonic).into()
+    restore_keys(bitcoin_network, mnemonic, witness_version).into()
 }
 
 #[unsafe(no_mangle)]
@@ -516,8 +522,12 @@ pub extern "C" fn rgblib_send_btc_begin(
     amount: *const c_char,
     fee_rate: *const c_char,
     skip_sync: bool,
+    dry_run: bool,
 ) -> CResultString {
-    send_btc_begin(wallet, online, address, amount, fee_rate, skip_sync).into()
+    send_btc_begin(
+        wallet, online, address, amount, fee_rate, skip_sync, dry_run,
+    )
+    .into()
 }
 
 #[unsafe(no_mangle)]

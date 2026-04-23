@@ -477,7 +477,7 @@ async fn auto_backup() {
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
     let (wallet_data, wallet_keys) = {
-        let keys = generate_keys(BitcoinNetwork::Regtest);
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
 
@@ -565,7 +565,7 @@ async fn unencrypted_auto_backup() {
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
     let (wallet_data, wallet_keys) = {
-        let keys = generate_keys(BitcoinNetwork::Regtest);
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
 
@@ -668,7 +668,7 @@ async fn blocking_auto_backup() {
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
     let (wallet_data, wallet_keys) = {
-        let keys = generate_keys(BitcoinNetwork::Regtest);
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
 
@@ -748,7 +748,7 @@ async fn auto_backup_disabled_by_default() {
     let (signing_key, _) = secp.generate_keypair(&mut OsRng);
 
     let (wallet_data, wallet_keys) = {
-        let keys = generate_keys(BitcoinNetwork::Regtest);
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
         let temp_dir = tempfile::tempdir().unwrap();
         let data_dir = temp_dir.path().to_str().unwrap().to_string();
 

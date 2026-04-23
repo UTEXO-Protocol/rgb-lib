@@ -11,6 +11,7 @@ pub mod media;
 #[cfg(feature = "mpc")]
 pub mod mpc_address;
 pub mod pending_witness_script;
+pub mod reserved_txo;
 pub mod token;
 pub mod token_media;
 pub mod transfer;
