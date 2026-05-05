@@ -16,8 +16,8 @@ use rgb_lib::{
     keys::WitnessVersion,
     utils::BitcoinNetwork,
     wallet::{
-        Invoice, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline, RgbWalletOpsOnline,
-        SinglesigKeys, SyncOptions, Wallet, WalletData,
+        Invoice, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline,
+        RgbWalletOpsOnline, SinglesigKeys, SyncOptions, Wallet, WalletData,
     },
 };
 
@@ -575,9 +575,8 @@ pub extern "C" fn rgblib_send_btc_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     signed_psbt: *const c_char,
-    skip_sync: bool,
 ) -> CResultString {
-    send_btc_end(wallet, online, signed_psbt, skip_sync).into()
+    send_btc_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]

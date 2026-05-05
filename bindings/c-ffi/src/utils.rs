@@ -877,12 +877,11 @@ pub(crate) fn send_btc_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     signed_psbt: *const c_char,
-    skip_sync: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = Online::from_opaque(online)?;
     let signed_psbt = ptr_to_string(signed_psbt);
-    let res = wallet.send_btc_end(*online, signed_psbt, skip_sync)?;
+    let res = wallet.send_btc_end(*online, signed_psbt)?;
     Ok(res)
 }
 

@@ -37,7 +37,11 @@ impl WalletCore for MpcWallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn sync_db_txos(&mut self, _full_scan: bool, _include_spent: bool) -> Result<(), Error> {
+    fn sync_bdk_and_db_txos(
+        &mut self,
+        _options: SyncOptions,
+        _include_spent: bool,
+    ) -> Result<(), Error> {
         debug!(self.logger(), "MPC: Syncing TXOs from indexer...");
 
         // Get colored (External) MPC addresses and query indexer for their UTXOs
@@ -163,7 +167,8 @@ impl WalletOffline for MpcWallet {
         online: Option<Online>,
         skip_sync: bool,
     ) -> Result<BtcBalance, Error> {
-        self.sync_if_requested(online, skip_sync)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::External)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::Internal)?;
 
         #[cfg(any(feature = "electrum", feature = "esplora"))]
         {
@@ -214,11 +219,7 @@ impl WalletOnline for MpcWallet {
         Ok(())
     }
 
-    fn broadcast_psbt(
-        &mut self,
-        signed_psbt: &Psbt,
-        skip_sync: bool,
-    ) -> Result<BdkTransaction, Error> {
+    fn broadcast_psbt(&mut self, signed_psbt: &Psbt) -> Result<BdkTransaction, Error> {
         let tx = self.broadcast_tx(
             signed_psbt
                 .clone()
@@ -239,10 +240,6 @@ impl WalletOnline for MpcWallet {
                 self.database().update_txo(db_txo)?;
             }
             // Vanilla UTXOs not in txo table — skip silently
-        }
-
-        if !skip_sync {
-            self.sync_db_txos(false, false)?;
         }
 
         Ok(tx)
@@ -363,7 +360,13 @@ impl WalletOnline for MpcWallet {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
         if !skip_sync {
-            self.sync_db_txos(false, false)?;
+            self.sync_bdk_and_db_txos(
+                SyncOptions {
+                    keychain: SyncKeychain::Colored,
+                    strategy: SyncStrategy::FastSync,
+                },
+                false,
+            )?;
         }
 
         let unspent_txos = self.database().get_unspent_txos(vec![])?;
@@ -462,7 +465,13 @@ impl WalletOnline for MpcWallet {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
         if !skip_sync {
-            self.sync_db_txos(false, false)?;
+            self.sync_bdk_and_db_txos(
+                SyncOptions {
+                    keychain: SyncKeychain::Colored,
+                    strategy: SyncStrategy::FastSync,
+                },
+                false,
+            )?;
         }
 
         let script_pubkey = self.get_script_pubkey(&address)?;
@@ -507,7 +516,13 @@ impl WalletOnline for MpcWallet {
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
-        self.sync_db_txos(false, false)?;
+        self.sync_bdk_and_db_txos(
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+            false,
+        )?;
 
         let script_pubkey = self.get_script_pubkey(&address)?;
 
@@ -771,21 +786,17 @@ impl MpcWallet {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl MpcWallet {
     /// Return the existing or freshly generated wallet [`Online`] data.
-    pub fn go_online(
-        &mut self,
-        skip_consistency_check: bool,
-        indexer_url: String,
-    ) -> Result<Online, Error> {
+    pub fn go_online(&mut self, online_options: OnlineOptions) -> Result<Online, Error> {
         info!(self.logger(), "Going online...");
-        let online = self.go_online_impl(skip_consistency_check, &indexer_url)?;
+        let online = self.go_online_impl(&online_options)?;
         info!(self.logger(), "Go online completed");
         Ok(online)
     }
 
     /// Sync the wallet.
-    pub fn sync(&mut self, online: Online) -> Result<(), Error> {
+    pub fn sync(&mut self, online: Online, options: SyncOptions) -> Result<(), Error> {
         info!(self.logger(), "Syncing...");
-        self.sync_impl(online)?;
+        self.sync_impl(online, options)?;
         info!(self.logger(), "Sync completed");
         Ok(())
     }
@@ -842,7 +853,7 @@ impl MpcWallet {
         self.check_online(online)?;
         let psbt = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
-        let res = self.create_utxos_end_impl(&signed, skip_sync)?;
+        let res = self.create_utxos_end_impl(&signed)?;
         info!(self.logger(), "Create UTXOs completed");
         Ok(res)
     }
@@ -866,16 +877,11 @@ impl MpcWallet {
     }
 
     /// Broadcast signed PSBT to create UTXOs.
-    pub fn create_utxos_end(
-        &mut self,
-        online: Online,
-        signed_psbt: String,
-        skip_sync: bool,
-    ) -> Result<u8, Error> {
+    pub fn create_utxos_end(&mut self, online: Online, signed_psbt: String) -> Result<u8, Error> {
         info!(self.logger(), "Creating UTXOs (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.create_utxos_end_impl(&psbt, skip_sync)?;
+        let res = self.create_utxos_end_impl(&psbt)?;
         info!(self.logger(), "Create UTXOs (end) completed");
         Ok(res)
     }
@@ -889,7 +895,6 @@ impl MpcWallet {
         fee_rate: u64,
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
-        skip_sync: bool,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending...");
         self.check_online(online)?;
@@ -902,7 +907,7 @@ impl MpcWallet {
             true,
         )?;
         begin_op_data.psbt = self.mpc_sign_psbt(begin_op_data.psbt)?;
-        let res = self.send_end_impl(&begin_op_data.psbt, skip_sync)?;
+        let res = self.send_end_impl(&begin_op_data.psbt)?;
         info!(self.logger(), "Send completed");
         Ok(res)
     }
@@ -950,12 +955,11 @@ impl MpcWallet {
         &mut self,
         online: Online,
         signed_psbt: String,
-        skip_sync: bool,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.send_end_impl(&psbt, skip_sync)?;
+        let res = self.send_end_impl(&psbt)?;
         info!(self.logger(), "Send (end) completed");
         Ok(res)
     }
@@ -973,7 +977,7 @@ impl MpcWallet {
         self.check_online(online)?;
         let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
-        let res = self.send_btc_end_impl(&signed, skip_sync)?;
+        let res = self.send_btc_end_impl(&signed)?;
         info!(self.logger(), "Send BTC completed");
         Ok(res)
     }
@@ -996,16 +1000,11 @@ impl MpcWallet {
     }
 
     /// Broadcast signed PSBT for BTC send.
-    pub fn send_btc_end(
-        &mut self,
-        online: Online,
-        signed_psbt: String,
-        skip_sync: bool,
-    ) -> Result<String, Error> {
+    pub fn send_btc_end(&mut self, online: Online, signed_psbt: String) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.send_btc_end_impl(&psbt, skip_sync)?;
+        let res = self.send_btc_end_impl(&psbt)?;
         info!(self.logger(), "Send BTC (end) completed");
         Ok(res)
     }

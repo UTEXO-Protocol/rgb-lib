@@ -7914,7 +7914,7 @@ fn offline_receiver_blind_restart_waiting_counterparty() {
         TransferStatus::WaitingConfirmations
     ));
 
-    mine(false, true);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8023,7 +8023,15 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         TransferStatus::WaitingConfirmations
     ));
 
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
@@ -8043,7 +8051,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         .unwrap();
     assert!(pws_after_broadcast.is_empty());
 
-    mine(false, true);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8109,7 +8117,6 @@ fn offline_receiver_witness_restart_donation_true() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!txid.is_empty());
@@ -8137,7 +8144,15 @@ fn offline_receiver_witness_restart_donation_true() {
         TransferStatus::WaitingCounterparty
     ));
 
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
@@ -8172,7 +8187,7 @@ fn offline_receiver_witness_restart_donation_true() {
         TransferStatus::WaitingConfirmations
     ));
 
-    mine(false, true);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8236,7 +8251,6 @@ fn offline_receiver_blind_restart_donation_true() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!txid.is_empty());
@@ -8279,7 +8293,7 @@ fn offline_receiver_blind_restart_donation_true() {
         TransferStatus::WaitingConfirmations
     ));
 
-    mine(false, true);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8438,7 +8452,7 @@ fn offline_receiver_nack_receiver_fails_after_sender_failure() {
         TransferStatus::Failed
     ));
 
-    mine(false, true);
+    mine(false);
     test_refresh_all(&mut rcv_wallet, rcv_online);
     assert!(check_test_transfer_status_recipient(
         &rcv_wallet,
@@ -8548,7 +8562,6 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!txid.is_empty());
@@ -8588,7 +8601,7 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
         Err(e) => panic!("unexpected receiver balance result after NACK: {e:?}"),
     }
 
-    mine(false, true);
+    mine(false);
     test_refresh_all(&mut rcv_wallet, rcv_online);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8661,7 +8674,7 @@ fn offline_receiver_sequential_receives_slot_integrity_after_restart() {
         };
         wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
 
-        mine(false, false);
+        mine(false);
         wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
         wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8800,7 +8813,7 @@ fn offline_receiver_mixed_blind_witness_batch_donation_false() {
         TransferStatus::WaitingConfirmations
     ));
 
-    mine(false, true);
+    mine(false);
     wait_for_refresh(&mut blind_wallet, blind_online, None, None);
     wait_for_refresh(&mut witness_wallet, witness_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);

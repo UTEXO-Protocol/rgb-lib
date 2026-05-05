@@ -915,10 +915,24 @@ pub trait WalletOnline: WalletOffline {
         let proxy_client = ProxyClient::new(&proxy_url)?;
         match proxy_client.post_ack(&recipient_id, true) {
             Ok(r) => {
+                if let Some(ref err) = r.error {
+                    if err.message.contains("Cannot change ACK") {
+                        warn!(
+                            self.logger(),
+                            "Pre-existing NACK found when trying to ACK, failing transfer"
+                        );
+                        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+                        return Ok(Some(
+                            self.database()
+                                .update_batch_transfer(updated_batch_transfer)?,
+                        ));
+                    }
+                    error!(self.logger(), "Proxy error posting ACK: {}", err.message);
+                    return Err(Error::Proxy {
+                        details: err.message.clone(),
+                    });
+                }
                 debug!(self.logger(), "Consignment ACK response: {:?}", r);
-            }
-            Err(e) if e.to_string().contains("Cannot change ACK") => {
-                warn!(self.logger(), "Found an NACK when trying ACK");
             }
             Err(e) => {
                 error!(self.logger(), "Failed to post ACK: {e}");
@@ -999,61 +1013,38 @@ pub trait WalletOnline: WalletOffline {
                     Ok(r) => r,
                 };
 
-            proxy_res = Some((
-                result.consignment,
-                transport_endpoint.endpoint,
-                result.txid,
-                result.vout,
-                result.validated,
-            ));
-            let mut updated_transfer_transport_endpoint: DbTransferTransportEndpointActMod =
-                transfer_transport_endpoint.into();
-            updated_transfer_transport_endpoint.used = ActiveValue::Set(true);
-            self.database()
-                .update_transfer_transport_endpoint(&mut updated_transfer_transport_endpoint)?;
-            break;
-        };
-
-        let (consignment, proxy_url, txid, vout, validated) = if let Some(res) = proxy_res {
-            (res.0, res.1, res.2, res.3, res.4)
-        } else {
-            return Ok(None);
-        };
-
-        let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
-
-        // if the proxy already validated and NACKed, fail immediately
-        if validated == Some(false) {
-            warn!(
-                self.logger(),
-                "Proxy already NACKed consignment for {recipient_id}, failing transfer"
-            );
-            updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-            return Ok(Some(
+                proxy_res = Some((
+                    result.consignment,
+                    transport_endpoint.endpoint,
+                    result.txid,
+                    result.vout,
+                    result.validated,
+                ));
+                let mut updated_transfer_transport_endpoint: DbTransferTransportEndpointActMod =
+                    transfer_transport_endpoint.into();
+                updated_transfer_transport_endpoint.used = ActiveValue::Set(true);
                 self.database()
-                    .update_batch_transfer(&mut updated_batch_transfer)?,
-            ));
-        }
-
-        // write consignment
-        let consignment_path = self.get_receive_consignment_path(&recipient_id);
-        let transfer_dir = consignment_path.parent().unwrap();
-        fs::create_dir_all(transfer_dir)?;
-        let consignment_bytes = match general_purpose::STANDARD.decode(consignment) {
-            Ok(b) => b,
-            Err(e) => {
-                error!(self.logger(), "Failed to decode consignment bytes: {e}");
-                return self.refuse_consignment(
-                    proxy_url,
-                    recipient_id,
-                    &mut updated_batch_transfer,
-                );
+                    .update_transfer_transport_endpoint(&mut updated_transfer_transport_endpoint)?;
+                break;
             }
-            let (consignment_b64, proxy_url, txid, vout) = if let Some(res) = proxy_res {
-                (res.0, res.1, res.2, res.3)
+            let (consignment_b64, proxy_url, txid, vout, validated) = if let Some(res) = proxy_res {
+                (res.0, res.1, res.2, res.3, res.4)
             } else {
                 return Ok(None);
             };
+
+            // if the proxy already validated and NACKed, fail immediately
+            if validated == Some(false) {
+                warn!(
+                    self.logger(),
+                    "Proxy already NACKed consignment for {recipient_id}, failing transfer"
+                );
+                updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
+                return Ok(Some(
+                    self.database()
+                        .update_batch_transfer(&mut updated_batch_transfer)?,
+                ));
+            }
 
             // write consignment
             let transfer_dir = consignment_path.parent().unwrap();
@@ -1374,39 +1365,7 @@ pub trait WalletOnline: WalletOffline {
             "Consignment is valid. Receiving '{:?}' of contract '{}'", receiving, asset_id
         );
 
-        match self.set_hub_accept_status(batch_transfer.idx)? {
-            Some(true) => {}
-            Some(false) => return Ok(Some(self.fail_batch_transfer(batch_transfer)?)),
-            None => return Ok(None),
-        }
-
-        let proxy_client = ProxyClient::new(&proxy_url)?;
-        match proxy_client.post_ack(&recipient_id, true) {
-            Ok(r) => {
-                if let Some(ref err) = r.error {
-                    if err.message.contains("Cannot change ACK") {
-                        warn!(
-                            self.logger(),
-                            "Pre-existing NACK found when trying to ACK, failing transfer"
-                        );
-                        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-                        return Ok(Some(
-                            self.database()
-                                .update_batch_transfer(&mut updated_batch_transfer)?,
-                        ));
-                    }
-                    error!(self.logger(), "Proxy error posting ACK: {}", err.message);
-                    return Err(Error::Proxy {
-                        details: err.message.clone(),
-                    });
-                }
-                debug!(self.logger(), "Consignment ACK response: {:?}", r);
-            }
-            Err(e) => {
-                error!(self.logger(), "Failed to post ACK: {e}");
-                return Err(e);
-            }
-        };
+        updated_batch_transfer.txid = ActiveValue::Set(Some(txid.clone()));
 
         let utxo_idx = match transfer.recipient_type {
             Some(RecipientTypeFull::Blind { ref unblinded_utxo }) => {

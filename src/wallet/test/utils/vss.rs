@@ -114,6 +114,7 @@ fn kind_order(kind: &TransferKind) -> u8 {
         TransferKind::ReceiveWitness => 2,
         TransferKind::Send => 3,
         TransferKind::Inflation => 4,
+        TransferKind::Burn => 5,
     }
 }
 

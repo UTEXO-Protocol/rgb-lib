@@ -520,7 +520,7 @@ pub(crate) fn restart_test_wallet(
 ) -> (Wallet, Online) {
     let mut wallet = Wallet::new(wallet_data, keys).expect("wallet recreate failed");
     let online = wallet
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online after recreate failed");
     (wallet, online)
 }

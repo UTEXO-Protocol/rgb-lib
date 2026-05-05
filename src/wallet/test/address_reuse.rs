@@ -90,7 +90,7 @@ fn send_btc_change_reuses_address() {
     )
     .unwrap();
 
-    let online = wallet.go_online(true, ELECTRUM_URL.to_string()).unwrap();
+    let online = wallet.go_online(test_go_online_options(None)).unwrap();
 
     // pinned vanilla address
     let pinned_addr = wallet.get_address().unwrap();
@@ -98,7 +98,7 @@ fn send_btc_change_reuses_address() {
     // fund and create utxos
     fund_wallet(pinned_addr.clone());
     test_create_utxos_default(&mut wallet, online);
-    mine(false, false);
+    mine(false);
 
     // send BTC to a separate wallet (generates change)
     let mut rcv_wallet = get_test_wallet(false, None);
@@ -106,7 +106,7 @@ fn send_btc_change_reuses_address() {
     wallet
         .send_btc(online, rcv_addr, 1000, FEE_RATE, false)
         .unwrap();
-    mine(false, false);
+    mine(false);
 
     // all vanilla unspents should be at the pinned address
     let pinned_script = wallet
