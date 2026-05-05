@@ -422,20 +422,14 @@ fn fail() {
 
     // insufficient funds
     let result = test_blind_receive_result(&mut wallet);
-    assert!(matches!(
-        result,
-        Err(Error::InsufficientBitcoins {
-            needed: _,
-            available: _
-        })
-    ));
+    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
 
     // invalid recipient ID
     let result = RecipientInfo::new(s!("invalid"));
     assert!(matches!(result, Err(Error::InvalidRecipientID)));
 
     fund_wallet(test_get_address(&mut wallet));
-    mine(false, false);
+    mine(false);
     test_create_utxos(&mut wallet, online, true, Some(1), None, FEE_RATE, None);
 
     // expiration in the past

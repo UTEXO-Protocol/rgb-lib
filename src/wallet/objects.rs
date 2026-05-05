@@ -74,6 +74,28 @@ pub struct OnlineData {
     pub(crate) resolver: AnyResolver,
     pub(crate) hub_client: Option<MultisigHubClient>,
     pub(crate) user_role: Option<UserRole>,
+    pub(crate) vanilla_sync_lookback: u32,
+}
+
+/// Options for the [`Wallet::go_online`] and [`MultisigWallet::go_online`] methods.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct OnlineOptions {
+    /// URL of the indexer to use
+    pub indexer_url: String,
+    /// Whether to skip the consistency check when going online.
+    ///
+    /// Setting this to false runs a check on UTXOs (BDK vs rgb-lib DB), assets (RGB vs rgb-lib DB)
+    /// and media (DB vs actual files) to try and detect possible inconsistencies in the wallet.
+    /// Setting this to true bypasses the check and allows operating an inconsistent wallet.
+    ///
+    /// <div class="warning">Warning: setting <tt>skip_consistency_check</tt> to true is dangerous,
+    /// only do this if you know what you're doing!</div>
+    pub skip_consistency_check: bool,
+    /// Number of addresses before the last used (or last revealed if none) address to sync when
+    /// doing an automatic FastSync for the vanilla keychain
+    pub vanilla_sync_lookback: u32,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -857,6 +879,8 @@ pub enum TypeOfTransition {
     Inflate,
     /// Transfer transition (moving existing tokens)
     Transfer,
+    /// Burn transition (burning existing tokens)
+    Burn,
 }
 
 impl TypeOfTransition {
@@ -865,6 +889,7 @@ impl TypeOfTransition {
         match self {
             Self::Inflate => "inflate",
             Self::Transfer => "transfer",
+            Self::Burn => "burn",
         }
     }
 }
@@ -1171,6 +1196,8 @@ pub enum TransferKind {
     Send,
     /// An inflation transfer
     Inflation,
+    /// A burn transfer
+    Burn,
 }
 
 #[derive(Debug, Clone)]
@@ -1571,8 +1598,34 @@ pub struct RgbInspection {
 }
 
 // ────────────────────────────────────────────────────────────
-// Send, inflate & refresh operations
+// Send, inflate, burn & refresh operations
 // ────────────────────────────────────────────────────────────
+
+/// The result of a burn begin operation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BurnBeginResult {
+    /// PSBT to inspect and sign
+    pub psbt: String,
+    /// Batch transfer idx, None when `dry_run: true`
+    pub batch_transfer_idx: Option<i32>,
+    /// Operation details
+    pub details: BurnDetails,
+}
+
+/// Details for burn operations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BurnDetails {
+    /// Path to fascia file for inspection
+    pub fascia_path: String,
+    /// Minimum confirmations for the operation
+    pub min_confirmations: u8,
+    /// Entropy used for the merkle tree construction operation
+    pub entropy: u64,
+}
 
 /// The result of an inflate begin operation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1847,4 +1900,11 @@ pub enum PrepareRgbPsbtResult {
 pub enum PrepareTransferPsbtResult {
     Retry,
     Success(Box<BeginOperationData>),
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ReceivedConsignmentMeta {
+    pub txid: String,
+    pub vout: Option<u32>,
 }

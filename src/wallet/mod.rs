@@ -29,8 +29,8 @@ pub use mpc::MpcWallet;
 pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use multisig::{
-    HubInfo, InitOperationResult, MultisigVotingStatus, Operation, OperationInfo,
-    RespondToOperation, UserRole,
+    HubInfo, InitOperationResult, MultisigOnlineOptions, MultisigVotingStatus, Operation,
+    OperationInfo, RespondToOperation, UserRole,
 };
 pub use objects::{
     Address, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection, Balance,
@@ -43,8 +43,9 @@ pub use objects::{
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use objects::{
-    InflateBeginResult, InflateDetails, OperationResult, RefreshFilter, RefreshResult,
-    RefreshTransferStatus, RefreshedTransfer, SendBeginResult, SendDetails,
+    BurnBeginResult, BurnDetails, InflateBeginResult, InflateDetails, OnlineOptions,
+    OperationResult, RefreshFilter, RefreshResult, RefreshTransferStatus, RefreshedTransfer,
+    SendBeginResult, SendDetails,
 };
 pub use offline::RgbWalletOpsOffline;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -57,12 +58,14 @@ pub(crate) use core::{
     setup_new_wallet, setup_rgb,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
+pub use core::{SyncKeychain, SyncOptions, SyncStrategy};
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) use indexer::Indexer;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) use objects::{
     AssetInfo, AssetSpend, BeginOperationData, BtcChange, LocalRecipient, LocalRecipientData,
     LocalWitnessData, OnlineData, PrepareRgbPsbtResult, PrepareTransferPsbtResult,
-    RefreshResultTrait,
+    ReceivedConsignmentMeta, RefreshResultTrait,
 };
 pub(crate) use objects::{
     InfoAssetTransfer, InfoBatchTransfer, IssueData, IssuedAssetDetails, LocalAssetData,
@@ -87,7 +90,7 @@ pub(crate) const SCHEMA_ID_UDA: &str =
 pub(crate) const SCHEMA_ID_CFA: &str =
     "rgb:sch:JgqK5hJX9YBT4osCV7VcW_iLTcA5csUCnLzvaKTTrNY#mars-house-friend";
 pub(crate) const SCHEMA_ID_IFA: &str =
-    "rgb:sch:p6H_wtDgei9HHUVLjKW0tNdHHFLhfHxrn9QX_QQUE78#scale-year-shave";
+    "rgb:sch:IpjJhFLz3oywYKQxO3KmFgR0Aa415nlTNrNyEFqMZCE#shoe-colombo-mango";
 
 pub(crate) const RGB_STATE_ASSET_OWNER: &str = "assetOwner";
 pub(crate) const RGB_STATE_INFLATION_ALLOWANCE: &str = "inflationAllowance";
@@ -95,3 +98,7 @@ pub(crate) const RGB_GLOBAL_ISSUED_SUPPLY: &str = "issuedSupply";
 pub(crate) const RGB_GLOBAL_REJECT_LIST_URL: &str = "rejectListUrl";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_ALLOWED_INFLATION: &str = "allowedInflation";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_METADATA_BURNED_ASSET: &str = "burnedAsset";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_METADATA_BURNED_INFLATION: &str = "burnedInflation";

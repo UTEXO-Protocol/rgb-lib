@@ -85,6 +85,8 @@ const TINY_BTC_AMOUNT: u32 = 330;
 const QUEUE_DEPTH_EXCEEDED: &str = "Work queue depth exceeded";
 const DURATION_RCV_TRANSFER: u32 = 86400;
 const DURATION_SEND_TRANSFER: u32 = 3600;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const INDEXER_SYNC_LOOKBACK: usize = 20;
 
 static INIT: Once = Once::new();
 
@@ -304,6 +306,7 @@ mod abort_pending_vanilla_tx;
 mod address_reuse;
 mod backup;
 mod blind_receive;
+mod burn;
 mod create_utxos;
 mod delete_transfers;
 mod drain_to;

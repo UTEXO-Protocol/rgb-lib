@@ -3,53 +3,72 @@
 use std::{
     collections::HashMap,
     str::FromStr,
-    sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard},
+    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard},
 };
 
-/// Shared tokio runtime for VSS async operations.
-///
-/// vss-client-ng requires a tokio runtime for HTTP networking.
-/// `futures::executor::block_on` does not provide one, so we maintain
-/// a shared runtime for all VSS FFI calls.
-fn vss_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Runtime::new().expect("Failed to create tokio runtime for VSS")
-    })
-}
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, Error as RgbLibError, TransferStatus,
     TransportType,
-    bdk_wallet::bitcoin::secp256k1::SecretKey,
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
         Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
-        AssignmentsCollection, Balance, BlockTime, BtcBalance, Cosigner as CosignerData,
-        DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult, InflateDetails,
-        InitOperationResult, Invoice as RgbLibInvoice, InvoiceData as RgbLibInvoiceData, Media,
-        Metadata, MultisigKeys, MultisigVotingStatus as RgbLibMultisigVotingStatus,
-        MultisigWallet as RgbLibMultisigWallet, Online, Operation as RgbLibOperation,
-        OperationInfo as RgbLibOperationInfo, OperationResult, Outpoint, ProofOfReserves,
-        PsbtInputInfo, PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient as RgbLibRecipient,
-        RecipientInfo as RgbLibRecipientInfo, RecipientType, RefreshFilter, RefreshTransferStatus,
-        RefreshedTransfer, RespondToOperation as RgbLibRespondToOperation,
-        RgbAllocation as RgbLibRgbAllocation, RgbInputInfo as RgbLibRgbInputInfo,
-        RgbInspection as RgbLibRgbInspection, RgbOperationInfo as RgbLibRgbOperationInfo,
-        RgbOutputInfo as RgbLibRgbOutputInfo, RgbTransitionInfo as RgbLibRgbTransitionInfo,
-        RgbWalletOpsOffline, RgbWalletOpsOnline, SendBeginResult, SendDetails, SinglesigKeys,
-        Token, TokenLight, Transaction, TransactionType, Transfer as RgbLibTransfer, TransferKind,
-        TransferTransportEndpoint, TransportEndpoint as RgbLibTransportEndpoint, TypeOfTransition,
-        Unspent as RgbLibUnspent, UserRole, Utxo, Wallet as RgbLibWallet, WalletData,
-        WalletDescriptors, WitnessData,
-        vss::{
-            VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
-            VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
-        },
+        AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult, BurnDetails,
+        Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
+        InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
+        InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
+        MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
+        Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
+        OperationResult, Outpoint, ProofOfReserves, PsbtInputInfo, PsbtInspection, PsbtOutputInfo,
+        ReceiveData, Recipient as RgbLibRecipient, RecipientInfo as RgbLibRecipientInfo,
+        RecipientType, RefreshFilter, RefreshTransferStatus, RefreshedTransfer,
+        RespondToOperation as RgbLibRespondToOperation, RgbAllocation as RgbLibRgbAllocation,
+        RgbInputInfo as RgbLibRgbInputInfo, RgbInspection as RgbLibRgbInspection,
+        RgbOperationInfo as RgbLibRgbOperationInfo, RgbOutputInfo as RgbLibRgbOutputInfo,
+        RgbTransitionInfo as RgbLibRgbTransitionInfo, RgbWalletOpsOffline, RgbWalletOpsOnline,
+        SendBeginResult, SendDetails, SinglesigKeys, SyncKeychain as RgbLibSyncKeychain,
+        SyncOptions as RgbLibSyncOptions, SyncStrategy, Token, TokenLight, Transaction,
+        TransactionType, Transfer as RgbLibTransfer, TransferKind, TransferTransportEndpoint,
+        TransportEndpoint as RgbLibTransportEndpoint, TypeOfTransition, Unspent as RgbLibUnspent,
+        UserRole, Utxo, Wallet as RgbLibWallet, WalletData, WalletDescriptors, WitnessData,
     },
 };
 
 uniffi::include_scaffolding!("rgb-lib");
+
+// temporary solution needed because the Enum attribute doesn't support the Remote one
+pub enum SyncKeychain {
+    Colored,
+    Vanilla { lookback: u32 },
+}
+impl From<RgbLibSyncKeychain> for SyncKeychain {
+    fn from(orig: RgbLibSyncKeychain) -> Self {
+        match orig {
+            RgbLibSyncKeychain::Colored => SyncKeychain::Colored,
+            RgbLibSyncKeychain::Vanilla { lookback } => SyncKeychain::Vanilla { lookback },
+        }
+    }
+}
+impl From<SyncKeychain> for RgbLibSyncKeychain {
+    fn from(orig: SyncKeychain) -> Self {
+        match orig {
+            SyncKeychain::Colored => RgbLibSyncKeychain::Colored,
+            SyncKeychain::Vanilla { lookback } => RgbLibSyncKeychain::Vanilla { lookback },
+        }
+    }
+}
+pub struct SyncOptions {
+    pub keychain: SyncKeychain,
+    pub strategy: SyncStrategy,
+}
+impl From<SyncOptions> for RgbLibSyncOptions {
+    fn from(orig: SyncOptions) -> Self {
+        Self {
+            keychain: orig.keychain.into(),
+            strategy: orig.strategy,
+        }
+    }
+}
 
 // temporary solution needed because the Enum attribute doesn't support the Remote one
 pub enum Assignment {
@@ -429,6 +448,24 @@ pub enum Operation {
         details: InflateDetails,
         status: MultisigVotingStatus,
     },
+    BurnToReview {
+        psbt: String,
+        details: BurnDetails,
+        status: MultisigVotingStatus,
+    },
+    BurnPending {
+        details: BurnDetails,
+        status: MultisigVotingStatus,
+    },
+    BurnCompleted {
+        txid: String,
+        details: BurnDetails,
+        status: MultisigVotingStatus,
+    },
+    BurnDiscarded {
+        details: BurnDetails,
+        status: MultisigVotingStatus,
+    },
     IssuanceCompleted {
         asset_id: String,
     },
@@ -556,6 +593,32 @@ impl From<RgbLibOperation> for Operation {
                     status: status.into(),
                 }
             }
+            RgbLibOperation::BurnToReview {
+                psbt,
+                details,
+                status,
+            } => Operation::BurnToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BurnPending { status, details } => Operation::BurnPending {
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BurnCompleted {
+                txid,
+                details,
+                status,
+            } => Operation::BurnCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BurnDiscarded { details, status } => Operation::BurnDiscarded {
+                details,
+                status: status.into(),
+            },
             RgbLibOperation::IssuanceCompleted { asset_id } => {
                 Operation::IssuanceCompleted { asset_id }
             }
@@ -657,6 +720,32 @@ impl From<Operation> for RgbLibOperation {
                     status: status.into(),
                 }
             }
+            Operation::BurnToReview {
+                psbt,
+                details,
+                status,
+            } => RgbLibOperation::BurnToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            Operation::BurnPending { status, details } => RgbLibOperation::BurnPending {
+                details,
+                status: status.into(),
+            },
+            Operation::BurnCompleted {
+                txid,
+                details,
+                status,
+            } => RgbLibOperation::BurnCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            Operation::BurnDiscarded { details, status } => RgbLibOperation::BurnDiscarded {
+                details,
+                status: status.into(),
+            },
             Operation::IssuanceCompleted { asset_id } => {
                 RgbLibOperation::IssuanceCompleted { asset_id }
             }
@@ -716,51 +805,6 @@ fn restore_keys(
     witness_version: WitnessVersion,
 ) -> Result<Keys, RgbLibError> {
     rgb_lib::keys::restore_keys(bitcoin_network, mnemonic, witness_version)
-}
-
-pub struct ValidateConsignmentResult {
-    pub valid: bool,
-    pub warnings: Option<Vec<String>>,
-    pub error: Option<String>,
-    pub details: Option<String>,
-}
-
-fn validate_consignment(
-    file_path: String,
-    indexer_url: String,
-    bitcoin_network: BitcoinNetwork,
-) -> Result<ValidateConsignmentResult, RgbLibError> {
-    let r = rgb_lib::wallet::rust_only::validate_consignment(
-        &file_path,
-        &indexer_url,
-        bitcoin_network,
-    )?;
-    Ok(ValidateConsignmentResult {
-        valid: r.valid,
-        warnings: r.warnings,
-        error: r.error,
-        details: r.details,
-    })
-}
-
-fn validate_consignment_offchain(
-    file_path: String,
-    txid: String,
-    indexer_url: String,
-    bitcoin_network: BitcoinNetwork,
-) -> Result<ValidateConsignmentResult, RgbLibError> {
-    let r = rgb_lib::wallet::rust_only::validate_consignment_offchain(
-        &file_path,
-        &txid,
-        &indexer_url,
-        bitcoin_network,
-    )?;
-    Ok(ValidateConsignmentResult {
-        valid: r.valid,
-        warnings: r.warnings,
-        error: r.error,
-        details: r.details,
-    })
 }
 
 fn restore_backup(
@@ -999,14 +1043,8 @@ impl Wallet {
             .create_utxos_begin(online, up_to, num, size, fee_rate, skip_sync, dry_run)
     }
 
-    fn create_utxos_end(
-        &self,
-        online: Online,
-        signed_psbt: String,
-        skip_sync: bool,
-    ) -> Result<u8, RgbLibError> {
-        self._get_wallet()
-            .create_utxos_end(online, signed_psbt, skip_sync)
+    fn create_utxos_end(&self, online: Online, signed_psbt: String) -> Result<u8, RgbLibError> {
+        self._get_wallet().create_utxos_end(online, signed_psbt)
     }
 
     fn delete_transfers(
@@ -1057,16 +1095,6 @@ impl Wallet {
         self._get_wallet().get_address()
     }
 
-    fn rotate_vanilla_address(&self) -> Result<String, RgbLibError> {
-        self._get_wallet()
-            .rotate_address(rgb_lib::bdk_wallet::KeychainKind::Internal)
-    }
-
-    fn rotate_colored_address(&self) -> Result<String, RgbLibError> {
-        self._get_wallet()
-            .rotate_address(rgb_lib::bdk_wallet::KeychainKind::External)
-    }
-
     fn get_asset_balance(&self, asset_id: String) -> Result<Balance, RgbLibError> {
         self._get_wallet().get_asset_balance(asset_id)
     }
@@ -1087,13 +1115,47 @@ impl Wallet {
         self._get_wallet().get_fee_estimation(online, blocks)
     }
 
-    fn go_online(
+    fn go_online(&self, online_options: OnlineOptions) -> Result<Online, RgbLibError> {
+        self._get_wallet().go_online(online_options)
+    }
+
+    fn burn(
         &self,
-        skip_consistency_check: bool,
-        indexer_url: String,
-    ) -> Result<Online, RgbLibError> {
+        online: Online,
+        asset_id: String,
+        amount: u64,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<OperationResult, RgbLibError> {
         self._get_wallet()
-            .go_online(skip_consistency_check, indexer_url)
+            .burn(online, asset_id, amount, fee_rate, min_confirmations)
+    }
+
+    fn burn_begin(
+        &self,
+        online: Online,
+        asset_id: String,
+        amount: u64,
+        fee_rate: u64,
+        min_confirmations: u8,
+        dry_run: bool,
+    ) -> Result<BurnBeginResult, RgbLibError> {
+        self._get_wallet().burn_begin(
+            online,
+            asset_id,
+            amount,
+            fee_rate,
+            min_confirmations,
+            dry_run,
+        )
+    }
+
+    fn burn_end(
+        &self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, RgbLibError> {
+        self._get_wallet().burn_end(online, signed_psbt)
     }
 
     fn inflate(
@@ -1255,7 +1317,6 @@ impl Wallet {
         fee_rate: u64,
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
-        skip_sync: bool,
     ) -> Result<OperationResult, RgbLibError> {
         self._get_wallet().send(
             online,
@@ -1264,7 +1325,6 @@ impl Wallet {
             fee_rate,
             min_confirmations,
             expiration_timestamp,
-            skip_sync,
         )
     }
 
@@ -1293,9 +1353,8 @@ impl Wallet {
         &self,
         online: Online,
         signed_psbt: String,
-        skip_sync: bool,
     ) -> Result<OperationResult, RgbLibError> {
-        self._get_wallet().send_end(online, signed_psbt, skip_sync)
+        self._get_wallet().send_end(online, signed_psbt)
     }
 
     fn send_btc(
@@ -1323,40 +1382,12 @@ impl Wallet {
             .send_btc_begin(online, address, amount, fee_rate, skip_sync, dry_run)
     }
 
-    fn send_btc_end(
-        &self,
-        online: Online,
-        signed_psbt: String,
-        skip_sync: bool,
-    ) -> Result<String, RgbLibError> {
-        self._get_wallet()
-            .send_btc_end(online, signed_psbt, skip_sync)
+    fn send_btc_end(&self, online: Online, signed_psbt: String) -> Result<String, RgbLibError> {
+        self._get_wallet().send_btc_end(online, signed_psbt)
     }
 
-    fn sync(&self, online: Online) -> Result<(), RgbLibError> {
-        self._get_wallet().sync(online)
-    }
-
-    fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {
-        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
-        self._get_wallet().configure_vss_backup(rgb_lib_config)
-    }
-
-    fn disable_vss_auto_backup(&self) {
-        self._get_wallet().disable_vss_auto_backup()
-    }
-
-    fn vss_backup(&self, client: std::sync::Arc<VssBackupClient>) -> Result<i64, RgbLibError> {
-        let vss_client = client._get_client();
-        vss_runtime().block_on(self._get_wallet().vss_backup(&vss_client))
-    }
-
-    fn vss_backup_info(
-        &self,
-        client: std::sync::Arc<VssBackupClient>,
-    ) -> Result<VssBackupInfo, RgbLibError> {
-        let vss_client = client._get_client();
-        vss_runtime().block_on(self._get_wallet().vss_backup_info(&vss_client))
+    fn sync(&self, online: Online, options: SyncOptions) -> Result<(), RgbLibError> {
+        self._get_wallet().sync(online, options.into())
     }
 
     fn inspect_psbt(&self, psbt: String) -> Result<PsbtInspection, RgbLibError> {
@@ -1388,67 +1419,7 @@ fn _convert_recipient_map(
         .collect()
 }
 
-pub struct VssBackupConfig {
-    pub server_url: String,
-    pub store_id: String,
-    pub signing_key: Vec<u8>,
-    pub encryption_enabled: bool,
-    pub auto_backup: bool,
-    pub backup_mode: VssBackupMode,
-}
-
-impl TryFrom<VssBackupConfig> for RgbLibVssBackupConfig {
-    type Error = RgbLibError;
-
-    fn try_from(orig: VssBackupConfig) -> Result<Self, Self::Error> {
-        let signing_key =
-            SecretKey::from_slice(&orig.signing_key).map_err(|e| RgbLibError::Internal {
-                details: format!("Invalid signing key: {e}"),
-            })?;
-
-        let mut config = RgbLibVssBackupConfig::new(orig.server_url, orig.store_id, signing_key);
-        config = config.with_encryption(orig.encryption_enabled);
-        config = config.with_auto_backup(orig.auto_backup);
-        config = config.with_backup_mode(orig.backup_mode);
-        Ok(config)
-    }
-}
-
-struct VssBackupClient {
-    client: RwLock<RgbLibVssBackupClient>,
-}
-
-impl VssBackupClient {
-    fn new(config: VssBackupConfig) -> Result<Self, RgbLibError> {
-        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
-        let client = RgbLibVssBackupClient::new(rgb_lib_config)?;
-        Ok(VssBackupClient {
-            client: RwLock::new(client),
-        })
-    }
-
-    fn _get_client(&self) -> RwLockReadGuard<'_, RgbLibVssBackupClient> {
-        self.client.read().expect("vss_backup_client")
-    }
-
-    fn encryption_enabled(&self) -> bool {
-        self._get_client().encryption_enabled()
-    }
-
-    fn delete_backup(&self) -> Result<(), RgbLibError> {
-        vss_runtime().block_on(self._get_client().delete_backup())
-    }
-}
-
-fn restore_from_vss(config: VssBackupConfig, target_dir: String) -> Result<String, RgbLibError> {
-    let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
-    let wallet_path =
-        vss_runtime().block_on(rgb_lib_restore_from_vss(rgb_lib_config, &target_dir))?;
-    Ok(wallet_path.to_string_lossy().to_string())
-}
-
 uniffi::deps::static_assertions::assert_impl_all!(Wallet: Sync, Send);
-uniffi::deps::static_assertions::assert_impl_all!(VssBackupClient: Sync, Send);
 
 struct MultisigWallet {
     wallet_mutex: Mutex<RgbLibMultisigWallet>,
@@ -1585,17 +1556,27 @@ impl MultisigWallet {
 
     fn go_online(
         &self,
-        skip_consistency_check: bool,
-        indexer_url: String,
-        hub_url: String,
-        hub_token: String,
+        online_options: OnlineOptions,
+        multisig_online_options: MultisigOnlineOptions,
     ) -> Result<Online, RgbLibError> {
         let mut wallet = self.wallet_mutex.lock().expect("wallet");
-        wallet.go_online(skip_consistency_check, indexer_url, hub_url, hub_token)
+        wallet.go_online(online_options, multisig_online_options)
     }
 
     fn hub_info(&self, online: Online) -> Result<HubInfo, RgbLibError> {
         self._get_wallet().hub_info(online)
+    }
+
+    fn burn_init(
+        &self,
+        online: Online,
+        asset_id: String,
+        amount: u64,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<InitOperationResult, RgbLibError> {
+        self._get_wallet()
+            .burn_init(online, asset_id, amount, fee_rate, min_confirmations)
     }
 
     fn inflate_init(
@@ -1759,9 +1740,9 @@ impl MultisigWallet {
             .send_btc_init(online, address, amount, fee_rate, skip_sync)
     }
 
-    fn sync(&self, online: Online) -> Result<(), RgbLibError> {
+    fn sync(&self, online: Online, options: SyncOptions) -> Result<(), RgbLibError> {
         let mut wallet = self.wallet_mutex.lock().expect("wallet");
-        wallet.sync(online)
+        wallet.sync(online, options.into())
     }
 
     fn get_address(&self, online: Online) -> Result<String, RgbLibError> {
@@ -1801,149 +1782,6 @@ impl MultisigWallet {
             .inspect_rgb_transfer(psbt, fascia_path, entropy)?
             .into())
     }
-
-    fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {
-        let rgb_lib_config: RgbLibVssBackupConfig = config.try_into()?;
-        self._get_wallet().configure_vss_backup(rgb_lib_config)
-    }
-
-    fn disable_vss_auto_backup(&self) {
-        self._get_wallet().disable_vss_auto_backup()
-    }
-
-    fn vss_backup(&self, client: std::sync::Arc<VssBackupClient>) -> Result<i64, RgbLibError> {
-        let vss_client = client._get_client();
-        vss_runtime().block_on(self._get_wallet().vss_backup(&vss_client))
-    }
-
-    fn vss_backup_info(
-        &self,
-        client: std::sync::Arc<VssBackupClient>,
-    ) -> Result<VssBackupInfo, RgbLibError> {
-        let vss_client = client._get_client();
-        vss_runtime().block_on(self._get_wallet().vss_backup_info(&vss_client))
-    }
 }
 
 uniffi::deps::static_assertions::assert_impl_all!(MultisigWallet: Sync, Send);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn compact(s: &str) -> String {
-        s.split_whitespace().collect()
-    }
-
-    #[test]
-    fn udl_exports_vss_api_surface() {
-        let udl = include_str!("rgb-lib.udl");
-        let udl = compact(udl);
-
-        // Types
-        assert!(
-            udl.contains("enumVssBackupMode"),
-            "missing VssBackupMode in UDL"
-        );
-        assert!(
-            udl.contains("dictionaryVssBackupConfig"),
-            "missing VssBackupConfig in UDL"
-        );
-        assert!(
-            udl.contains("dictionaryVssBackupInfo"),
-            "missing VssBackupInfo in UDL"
-        );
-        assert!(
-            udl.contains("interfaceVssBackupClient"),
-            "missing VssBackupClient in UDL"
-        );
-
-        // Functions / methods
-        assert!(
-            udl.contains("restore_from_vss(VssBackupConfigconfig,stringtarget_dir);"),
-            "missing restore_from_vss(...) in UDL"
-        );
-        assert!(
-            udl.contains("configure_vss_backup(VssBackupConfigconfig);"),
-            "missing Wallet.configure_vss_backup(...) in UDL"
-        );
-        assert!(
-            udl.contains("vss_backup(VssBackupClientclient);"),
-            "missing Wallet.vss_backup(...) in UDL"
-        );
-        assert!(
-            udl.contains("vss_backup_info(VssBackupClientclient);"),
-            "missing Wallet.vss_backup_info(...) in UDL"
-        );
-        assert!(
-            udl.contains("disable_vss_auto_backup();"),
-            "missing Wallet.disable_vss_auto_backup() in UDL"
-        );
-    }
-
-    #[test]
-    fn vss_bindings_smoke_runtime_and_type_conversion() {
-        // Shared runtime must be reusable and safe to call from multiple threads (FFI-style).
-        let rt_ptr_1 = std::ptr::from_ref(vss_runtime());
-        let rt_ptr_2 = std::ptr::from_ref(vss_runtime());
-        assert_eq!(
-            rt_ptr_1, rt_ptr_2,
-            "expected vss_runtime() to be a singleton"
-        );
-
-        let threads = (0..8)
-            .map(|_| {
-                std::thread::spawn(|| {
-                    for _ in 0..50 {
-                        let v = vss_runtime().block_on(async { 42u8 });
-                        assert_eq!(v, 42);
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        for t in threads {
-            t.join().expect("thread join");
-        }
-
-        // Config conversion must validate signing key shape (SDK uses bytes).
-        let bad = VssBackupConfig {
-            server_url: "http://127.0.0.1:1/vss".to_string(),
-            store_id: "qa_udl_smoke_store".to_string(),
-            signing_key: vec![1, 2, 3],
-            encryption_enabled: true,
-            auto_backup: false,
-            backup_mode: VssBackupMode::Async,
-        };
-        let err = match RgbLibVssBackupConfig::try_from(bad) {
-            Ok(_) => panic!("expected invalid signing key error"),
-            Err(e) => e,
-        };
-        match err {
-            RgbLibError::Internal { details } => {
-                assert!(
-                    details.contains("Invalid signing key"),
-                    "unexpected error: {details}"
-                );
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-
-        // Use a deterministic unreachable local URL (no DNS dependency). This test must remain
-        // unit-level and must not require a live VSS server.
-        let server_url = "http://127.0.0.1:1/vss".to_string();
-
-        let good = VssBackupConfig {
-            server_url: server_url.clone(),
-            store_id: "qa_udl_smoke_store".to_string(),
-            signing_key: vec![1u8; 32],
-            encryption_enabled: true,
-            auto_backup: false,
-            backup_mode: VssBackupMode::Async,
-        };
-        let client = VssBackupClient::new(good).expect("VssBackupClient::new");
-        assert!(
-            client.encryption_enabled(),
-            "expected encryption_enabled=true"
-        );
-    }
-}

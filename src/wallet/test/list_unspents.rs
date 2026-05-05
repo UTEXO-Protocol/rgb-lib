@@ -23,7 +23,7 @@ fn success() {
     assert_eq!(unspent_list_all.len(), 0);
 
     fund_wallet(test_get_address(&mut wallet));
-    mine(false, false);
+    mine(false);
 
     // one unspent, no RGB allocations
     let unspent_list_settled = test_list_unspents(&mut wallet, Some(online), true);
@@ -335,7 +335,7 @@ fn success() {
     );
 
     // transfer progresses to status Settled
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
     show_unspent_colorings(&mut rcv_wallet, "receiver after send - Settled");
@@ -407,7 +407,17 @@ fn skip_sync() {
     assert_eq!(unspents.len(), 0);
 
     // 1 unspent after manually syncing
-    wallet.sync(online).unwrap();
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Vanilla {
+                    lookback: INDEXER_SYNC_LOOKBACK as u32,
+                },
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
     let unspents = test_list_unspents(&mut wallet, None, false);
     assert_eq!(unspents.len(), 1);
 }

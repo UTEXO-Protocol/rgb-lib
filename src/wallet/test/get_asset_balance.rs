@@ -303,7 +303,7 @@ fn transfer_balances() {
     wait_for_asset_balance(&wallet_recv, &asset_1.asset_id, &expected_balance_1);
 
     // take transfers from WaitingConfirmations to Settled
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_recv, online_recv, Some(&asset_1.asset_id), None);
     wait_for_refresh(&mut wallet_send, online_send, Some(&asset_1.asset_id), None);
     // balances with transfer Settled
@@ -411,7 +411,7 @@ fn transfer_balances() {
     wait_for_asset_balance(&wallet_recv, &asset_1.asset_id, &expected_balance);
 
     // take transfers from WaitingConfirmations to Settled
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_recv, online_recv, Some(&asset_1.asset_id), None);
     wait_for_refresh(&mut wallet_send, online_send, Some(&asset_1.asset_id), None);
 
@@ -465,13 +465,28 @@ fn transfer_balances() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
 
     // sync the wallets
-    wallet_send.sync(online_send).unwrap();
-    wallet_recv.sync(online_recv).unwrap();
+    wallet_send
+        .sync(
+            online_send,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
+    wallet_recv
+        .sync(
+            online_recv,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     show_unspent_colorings(&mut wallet_send, "send after 3rd send");
     show_unspent_colorings(&mut wallet_recv, "recv after 3rd send");
@@ -531,7 +546,7 @@ fn transfer_balances() {
     wait_for_asset_balance(&wallet_recv, &asset_1.asset_id, &expected_balance);
 
     // take transfers from WaitingConfirmations to Settled
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_recv, online_recv, Some(&asset_1.asset_id), None);
     wait_for_refresh(&mut wallet_send, online_send, Some(&asset_1.asset_id), None);
 

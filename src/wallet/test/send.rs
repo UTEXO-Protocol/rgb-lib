@@ -40,7 +40,6 @@ fn success() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             Some(expiration_timestamp),
-            false,
         )
         .unwrap();
     let bak_info_after = wallet.database().get_backup_info().unwrap().unwrap();
@@ -169,7 +168,7 @@ fn success() {
     );
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     std::thread::sleep(Duration::from_millis(1000)); // make sure updated_at will be at least +1s
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
@@ -256,7 +255,7 @@ fn success() {
     // settle transfer
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
     let rcv_transfer =
@@ -298,15 +297,7 @@ fn success() {
     let unspents = test_list_unspents(&mut wallet, None, false);
     let unspents_color_count_before = unspents.iter().filter(|u| u.utxo.colorable).count();
     let txid = wallet
-        .send(
-            online,
-            recipient_map,
-            false,
-            7,
-            MIN_CONFIRMATIONS,
-            None,
-            false,
-        )
+        .send(online, recipient_map, false, 7, MIN_CONFIRMATIONS, None)
         .unwrap()
         .txid;
     assert!(!txid.is_empty());
@@ -339,7 +330,7 @@ fn success() {
     // settle transfer
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
     let (transfer, _, _) = get_test_transfer_sender(&wallet, &txid);
@@ -455,7 +446,7 @@ fn spend_all() {
     assert_eq!(transfer_data.status, TransferStatus::WaitingConfirmations);
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -524,7 +515,7 @@ fn send_twice_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -577,7 +568,7 @@ fn send_twice_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -678,7 +669,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -761,7 +752,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -864,7 +855,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -954,7 +945,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -1059,7 +1050,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -1115,7 +1106,7 @@ fn send_extra_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -1208,7 +1199,7 @@ fn send_received_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -1304,7 +1295,7 @@ fn send_received_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -1437,7 +1428,7 @@ fn send_received_uda_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
 
@@ -1484,7 +1475,7 @@ fn send_received_uda_success() {
             .is_none()
     );
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
 
@@ -1590,7 +1581,7 @@ fn send_received_cfa_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
 
@@ -1643,7 +1634,7 @@ fn send_received_cfa_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
 
@@ -1919,7 +1910,7 @@ fn receive_multiple_same_asset_success() {
     assert!(updated_at_2 > transfer_data_2.created_at);
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     std::thread::sleep(Duration::from_millis(1000)); // make sure updated_at will be at least +1s
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
@@ -2226,7 +2217,7 @@ fn receive_multiple_different_assets_success() {
 
     // transfers progress to status Settled after tx mining + refresh
     std::thread::sleep(Duration::from_millis(1000)); // make sure updated_at will be at least +1s
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset_1.asset_id), None);
 
@@ -2344,7 +2335,6 @@ fn batch_donation_success() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap()
         .txid;
@@ -2386,7 +2376,7 @@ fn batch_donation_success() {
     test_list_transfers(&rcv_wallet_1, Some(&asset_b.asset_id));
     test_list_transfers(&rcv_wallet_2, Some(&asset_a.asset_id));
     test_list_transfers(&rcv_wallet_2, Some(&asset_b.asset_id));
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet_1, rcv_online_1, None, None);
     wait_for_refresh(&mut rcv_wallet_2, rcv_online_2, None, None);
     test_list_transfers(&rcv_wallet_1, Some(&asset_a.asset_id));
@@ -3039,7 +3029,7 @@ fn pending_incoming_transfer_fail() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -3488,13 +3478,7 @@ fn insufficient_bitcoins() {
         }],
     )]);
     let result = test_send_begin_result(&mut wallet, online, &recipient_map);
-    assert!(matches!(
-        result,
-        Err(Error::InsufficientBitcoins {
-            needed: _,
-            available: _
-        })
-    ));
+    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
 
     // create 1 UTXO for change (add funds, create UTXO, send the rest)
     fund_wallet(test_get_address(&mut wallet));
@@ -3656,7 +3640,7 @@ fn send_to_oneself() {
 
     // transfers progress to status Settled after refreshes
     wait_for_refresh(&mut wallet, online, None, Some(&[2, 3]));
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet, online, None, None);
 
     let batch_transfers = get_test_batch_transfers(&wallet, &txid);
@@ -3748,7 +3732,7 @@ fn send_received_back_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -3801,7 +3785,7 @@ fn send_received_back_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut wallet, online, None, None);
     wait_for_refresh(&mut rcv_wallet, rcv_online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet, online, None, None);
     wait_for_refresh(&mut rcv_wallet, rcv_online, Some(&asset.asset_id), None);
 
@@ -3860,7 +3844,7 @@ fn send_received_back_success() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -3998,7 +3982,7 @@ fn witness_success() {
     );
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -4240,7 +4224,7 @@ fn witness_multiple_assets_success() {
     });
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
 
@@ -4366,7 +4350,7 @@ fn witness_multiple_assets_success() {
     );
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
 
@@ -4434,7 +4418,7 @@ fn witness_multiple_inputs_success() {
     // settle transfers
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
 
@@ -4458,7 +4442,7 @@ fn witness_multiple_inputs_success() {
     // settle transfers
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
 
@@ -4482,7 +4466,7 @@ fn witness_multiple_inputs_success() {
     // settle transfers
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
 
@@ -4579,7 +4563,7 @@ fn min_confirmations_common(
     let asset = test_issue_asset_nia(wallet, online, None);
 
     // avoid bitcoind sync issues
-    stop_mining_when_alone();
+    let _guard = stop_mining_when_alone();
     force_mine_no_resume_when_alone(esplora);
 
     // send
@@ -4609,7 +4593,6 @@ fn min_confirmations_common(
             FEE_RATE,
             min_confirmations,
             None,
-            false,
         )
         .unwrap()
         .txid;
@@ -4695,7 +4678,6 @@ fn min_confirmations_common(
             FEE_RATE,
             min_confirmations,
             None,
-            false,
         )
         .unwrap()
         .txid;
@@ -4750,9 +4732,11 @@ fn min_confirmations_common(
     let txid = test_send(rcv_wallet, rcv_online, &recipient_map);
     assert!(!txid.is_empty());
 
+    force_mine_no_resume_when_alone(esplora);
     wait_for_refresh(wallet, online, None, None);
     wait_for_refresh(rcv_wallet, rcv_online, Some(&asset.asset_id), None);
-    mine(esplora, true);
+    drop(_guard);
+    mine(esplora);
     wait_for_refresh(wallet, online, None, None);
     wait_for_refresh(rcv_wallet, rcv_online, Some(&asset.asset_id), None);
 
@@ -4838,13 +4822,12 @@ fn spend_double_receive() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap()
         .txid;
     assert!(!txid_1.is_empty());
     // settle transfer
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
@@ -4879,13 +4862,12 @@ fn spend_double_receive() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap()
         .txid;
     assert!(!txid_2.is_empty());
     // settle transfer
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
@@ -4983,7 +4965,7 @@ fn spend_double_receive() {
     // settle transfer
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, Some(&asset.asset_id), None);
     // check transfer status
@@ -5057,7 +5039,7 @@ fn input_sorting() {
     // settle transfers
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -5132,7 +5114,7 @@ fn spend_witness_receive_utxo() {
     );
 
     // mine and refresh the sender wallet only (receiver transfer still WaitingConfirmations)
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, Some(&asset_a.asset_id), None);
 
     // sync DB TXOs for the receiver wallet
@@ -5214,7 +5196,7 @@ fn rgb_change_on_btc_change() {
     assert_eq!(transfer_data.status, TransferStatus::WaitingConfirmations);
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
 
@@ -5365,7 +5347,6 @@ fn min_fee_rate() {
             fee_rate,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap()
         .txid;
@@ -5426,7 +5407,6 @@ fn max_fee_exceeded_common(
             fee_rate,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!send_result.txid.is_empty());
@@ -5556,7 +5536,6 @@ fn min_relay_fee_common(
             fee_rate,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!send_result.txid.is_empty());
@@ -5695,7 +5674,6 @@ fn skip_sync() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            true,
         )
         .unwrap()
         .txid;
@@ -5746,7 +5724,6 @@ fn skip_sync() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            true,
         )
         .unwrap()
         .txid;
@@ -5777,7 +5754,7 @@ fn skip_sync() {
     // settle transfers
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, Some(&[1, 2]));
     wait_for_refresh(&mut wallet, online, None, Some(&[2, 3]));
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, Some(&[1, 2]));
     wait_for_refresh(&mut wallet, online, None, Some(&[2, 3]));
     assert!(check_test_transfer_status_sender(
@@ -5813,7 +5790,6 @@ fn skip_sync() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            true,
         )
         .unwrap()
         .txid;
@@ -5863,7 +5839,7 @@ fn skip_sync() {
     assert_eq!(transfer_data.status, TransferStatus::WaitingConfirmations);
 
     // mine and refresh skipping sync > cannot refresh ReceiveWitness transfer as a sync is needed
-    mine(false, false);
+    mine(false);
     wallet.refresh(online, None, vec![], true).unwrap();
     show_unspent_colorings(&mut wallet, "after refresh 2");
 
@@ -5877,7 +5853,15 @@ fn skip_sync() {
     assert_eq!(transfer_data.status, TransferStatus::Settled);
 
     // sync and refresh again (still skipping sync) > ReceiveWitness transfer now refreshes + new UTXO appears
-    wallet.sync(online).unwrap();
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
     wallet.refresh(online, None, vec![], true).unwrap();
     show_unspent_colorings(&mut wallet, "after refresh 3");
 
@@ -5940,7 +5924,7 @@ fn ifa_success() {
     // transfers progress to status Settled after refreshing
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
 
@@ -5994,7 +5978,7 @@ fn ifa_success() {
     show_unspent_colorings(&mut wallet, "after asset send to oneself");
     wait_for_refresh(&mut wallet, online, None, None);
     show_unspent_colorings(&mut wallet, "after asset send to oneself + refresh 1");
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet, online, None, None);
 
     // send InflationRight only
@@ -6030,7 +6014,7 @@ fn ifa_success() {
     assert_eq!(balance, expected_balance);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
     show_unspent_colorings(&mut wallet, "after InflationRights move + refresh");
@@ -6109,7 +6093,7 @@ fn test_reject_list_scenario_1() {
     let txid = test_send(&mut wallet_1, online_1, &recipient_map_1);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6160,7 +6144,7 @@ fn test_reject_list_scenario_1() {
     let _txid = test_send(&mut wallet_1, online_1, &recipient_map_3);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6172,7 +6156,7 @@ fn test_reject_list_scenario_1() {
     let _txid = test_send(&mut wallet_2, online_2, &recipient_map_2);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
 }
@@ -6208,7 +6192,7 @@ fn test_reject_list_scenario_2() {
     let txid = test_send(&mut wallet_1, online_1, &recipient_map_1);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6226,7 +6210,7 @@ fn test_reject_list_scenario_2() {
     let _txid = test_send(&mut wallet_2, online_2, &recipient_map_2);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -6277,7 +6261,7 @@ fn test_reject_list_scenario_2() {
     let _txid = test_send(&mut wallet_1, online_1, &recipient_map_4);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6289,7 +6273,7 @@ fn test_reject_list_scenario_2() {
     let _txid = test_send(&mut wallet_3, online_3, &recipient_map_3);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
 }
@@ -6325,7 +6309,7 @@ fn test_reject_list_scenario_3() {
     let txid = test_send(&mut wallet_1, online_1, &recipient_map_1);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6350,7 +6334,7 @@ fn test_reject_list_scenario_3() {
     let _txid = test_send(&mut wallet_2, online_2, &recipient_map_2);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
 }
@@ -6387,7 +6371,7 @@ fn test_reject_list_scenario_4() {
     let txid_1 = test_send(&mut wallet_1, online_1, &recipient_map_1);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6404,7 +6388,7 @@ fn test_reject_list_scenario_4() {
     let txid_2 = test_send(&mut wallet_2, online_2, &recipient_map_2);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -6421,7 +6405,7 @@ fn test_reject_list_scenario_4() {
     let _txid = test_send(&mut wallet_3, online_3, &recipient_map_3);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
 
@@ -6450,7 +6434,7 @@ fn test_reject_list_scenario_4() {
     let _txid = test_send(&mut wallet_4, online_4, &recipient_map_3);
     wait_for_refresh(&mut wallet_5, online_5, None, None);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_5, online_5, None, None);
 }
@@ -6486,7 +6470,7 @@ fn test_reject_list_scenario_5() {
     let txid = test_send(&mut wallet_1, online_1, &recipient_map_1);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6503,7 +6487,7 @@ fn test_reject_list_scenario_5() {
     let _txid = test_send(&mut wallet_1, online_1, &recipient_map_2);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6528,7 +6512,7 @@ fn test_reject_list_scenario_5() {
     let _txid = test_send(&mut wallet_3, online_3, &recipient_map_3);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_3, online_3, None, None);
     wait_for_refresh(&mut wallet_4, online_4, None, None);
 }
@@ -6545,9 +6529,7 @@ fn pending_witness_ma1_blind_receive_fail() {
     let (mut wallet, online) = get_funded_wallet!();
     // recipient wallet
     let mut rcv_wallet = get_test_wallet(true, Some(1)); // MAX_ALLOCATIONS_PER_UTXO = 1
-    let rcv_online = rcv_wallet
-        .go_online(true, ELECTRUM_URL.to_string())
-        .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
 
     // issue
     let asset = test_issue_asset_nia(&mut wallet, online, None);
@@ -6574,13 +6556,20 @@ fn pending_witness_ma1_blind_receive_fail() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!txid.is_empty());
 
     // sync recipient wallet (no refresh) to see the new UTXO but not the new allocation
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     // make sure the recipient wallet sees 1 colorable UTXO with no RGB allocations
     let unspents = test_list_unspents(&mut rcv_wallet, None, false);
@@ -6593,7 +6582,7 @@ fn pending_witness_ma1_blind_receive_fail() {
 
     // try to blind the new UTXO: it should error as it already has the max allocation number
     let result = test_blind_receive_result(&mut rcv_wallet);
-    assert!(matches!(result, Err(Error::InsufficientBitcoins { .. })))
+    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
 }
 
 #[cfg(feature = "electrum")]
@@ -6616,7 +6605,7 @@ fn pending_witness_txo() {
     //
 
     // send
-    stop_mining();
+    let _guard = stop_mining();
     let receive_data = test_witness_receive(&mut rcv_wallet);
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),
@@ -6649,7 +6638,15 @@ fn pending_witness_txo() {
     assert_eq!(rcv_pending_witness_scripts.len(), 1);
 
     // sync recipient wallet
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     // check the recipient doesn't see the TXO yet + has one pending witness
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
@@ -6693,7 +6690,15 @@ fn pending_witness_txo() {
     test_refresh_all(&mut wallet, online);
 
     // sync recipient wallet
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     // check the recipient TXO now exists and is still pending witness
     let rcv_txo = rcv_wallet
@@ -6712,7 +6717,8 @@ fn pending_witness_txo() {
     assert!(rcv_pending_witness_scripts.is_empty());
 
     // mine + refresh the recipient to move the transfer to Settled
-    mine(false, true);
+    drop(_guard);
+    mine(false);
     test_refresh_all(&mut rcv_wallet, rcv_online);
     test_refresh_all(&mut wallet, online); // so that change is spendable
     let rcv_transfer = get_test_transfer_recipient(&rcv_wallet, &receive_data.recipient_id);
@@ -6736,7 +6742,7 @@ fn pending_witness_txo() {
     let (mut rcv_wallet, rcv_online) = get_empty_wallet!();
 
     // send (donation)
-    stop_mining();
+    let _guard = stop_mining();
     let receive_data = test_witness_receive(&mut rcv_wallet);
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),
@@ -6758,7 +6764,6 @@ fn pending_witness_txo() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap();
     assert!(!txid.is_empty());
@@ -6779,7 +6784,15 @@ fn pending_witness_txo() {
     assert_eq!(rcv_pending_witness_scripts.len(), 1);
 
     // sync recipient wallet
-    rcv_wallet.sync(rcv_online).unwrap();
+    rcv_wallet
+        .sync(
+            rcv_online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
 
     // check the recipient now sees the TXO, as existent + pending witness
     let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
@@ -6821,7 +6834,8 @@ fn pending_witness_txo() {
 
     // refresh + mine to move the transfer to Settled
     test_refresh_all(&mut wallet, online);
-    mine(false, true);
+    drop(_guard);
+    mine(false);
     test_refresh_all(&mut rcv_wallet, rcv_online);
     let rcv_transfer = get_test_transfer_recipient(&rcv_wallet, &receive_data.recipient_id);
     let (rcv_transfer_data, _) = get_test_transfer_data(&rcv_wallet, &rcv_transfer);
@@ -6925,7 +6939,7 @@ fn blinded_change_failed_xfer() {
     // settle
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6961,7 +6975,7 @@ fn blinded_change_failed_xfer() {
     // settle
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -6986,7 +7000,7 @@ fn blinded_change_failed_xfer() {
     // settle
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -7091,7 +7105,7 @@ fn blinded_change_send_begin_only() {
     // settle
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -7127,7 +7141,7 @@ fn blinded_change_send_begin_only() {
     // settle
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -7152,7 +7166,7 @@ fn blinded_change_send_begin_only() {
     // settle
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -7223,7 +7237,6 @@ fn donation_recipient_nack() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .unwrap()
         .txid;
@@ -7239,7 +7252,7 @@ fn donation_recipient_nack() {
         .post_ack(&receive_data.recipient_id, false)
         .unwrap();
     // settle on sender side
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     assert!(check_test_transfer_status_sender(
         &wallet_1,
@@ -7273,7 +7286,7 @@ fn donation_recipient_nack() {
     // settle
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
 
@@ -7298,7 +7311,7 @@ fn donation_recipient_nack() {
     // settle
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_1, online_1, None, None);
     wait_for_refresh(&mut wallet_2, online_2, None, None);
 
@@ -7349,7 +7362,7 @@ fn send_end_without_send_begin() {
         .unwrap()
         .compute_txid()
         .to_string();
-    let result = wallet_2.send_end(online_2, signed_psbt, false);
+    let result = wallet_2.send_end(online_2, signed_psbt);
     assert_matches!(result, Err(Error::UnknownTransfer { txid }) if txid == psbt_txid);
 }
 
@@ -7606,7 +7619,7 @@ fn allocations() {
     // settle transfers
     test_refresh_all(&mut wallet_2, online_2);
     test_refresh_all(&mut wallet_1, online_1);
-    mine(false, false);
+    mine(false);
     test_refresh_all(&mut wallet_2, online_2);
     test_refresh_all(&mut wallet_1, online_1);
     show_unspent_colorings(&mut wallet_1, "wallet 1 after setup send");
@@ -7621,7 +7634,7 @@ fn allocations() {
     check_allocations(&wallet_2, &unspents_colorable, &amounts_all, &[], false);
 
     // send the 2 smallest allocations from wallet 2
-    stop_mining();
+    let _guard = stop_mining();
     let receive_data = test_blind_receive(&mut wallet_1);
     let recipient_map = HashMap::from([(
         asset_1.asset_id.clone(),
@@ -7676,7 +7689,8 @@ fn allocations() {
     check_unspents(&unspents_colorable, &amounts_user, &amounts_auto, true);
 
     // settle transfer
-    mine(false, true);
+    drop(_guard);
+    mine(false);
     test_refresh_all(&mut wallet_1, online_1);
     test_refresh_all(&mut wallet_2, online_2);
     // check allocation colorings (no input colorings, same change colorings)
@@ -8852,7 +8866,7 @@ fn p2wpkh_send_receive_nia() {
     // drive transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8895,7 +8909,7 @@ fn cross_type_p2tr_to_p2wpkh() {
     // drive transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -8920,7 +8934,7 @@ fn cross_type_p2tr_to_p2wpkh() {
 
     wait_for_refresh(&mut wallet, online, None, None);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet, online, None, None);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
 
@@ -8928,4 +8942,138 @@ fn cross_type_p2tr_to_p2wpkh() {
     assert_eq!(balance_sender.settled, AMOUNT - amount + amount_back);
     let balance_receiver = test_get_asset_balance(&rcv_wallet, &asset.asset_id);
     assert_eq!(balance_receiver.settled, amount - amount_back);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn unsafe_history_waits_for_safe_height() {
+    initialize();
+
+    let amount_1: u64 = 66;
+    let amount_2: u64 = 33;
+
+    // wallets
+    let (mut wallet_1, online_1) = get_funded_wallet!();
+    let (mut wallet_2, online_2) = get_funded_wallet!();
+
+    // issue
+    let asset = test_issue_asset_nia(&mut wallet_1, online_1, None);
+
+    // 1st transfer: wallet 1 > wallet 2
+    let receive_data_1 = test_blind_receive(&mut wallet_2);
+    let recipient_map_1 = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount_1),
+            recipient_id: receive_data_1.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid_1 = test_send(&mut wallet_1, online_1, &recipient_map_1);
+    assert!(!txid_1.is_empty());
+    let _guard = stop_mining_when_alone();
+    wait_for_refresh(&mut wallet_2, online_2, None, None);
+    wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
+    force_mine_no_resume_when_alone(false);
+    wait_for_refresh(&mut wallet_2, online_2, None, None);
+    wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_recipient(
+        &wallet_2,
+        &receive_data_1.recipient_id,
+        TransferStatus::Settled
+    ));
+    assert!(check_test_transfer_status_sender(
+        &wallet_1,
+        &txid_1,
+        TransferStatus::Settled
+    ));
+
+    // 2nd transfer: wallet 1 > wallet 2 with min_confirmations = 2
+    // txid_1 has only one confirmation, so transfer parks in WaitingSafeHeight
+    let receive_data_2 = wallet_2
+        .blind_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            2,
+        )
+        .unwrap();
+    let recipient_map_2 = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount_2),
+            recipient_id: receive_data_2.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid_2 = test_send(&mut wallet_1, online_1, &recipient_map_2);
+    assert!(!txid_2.is_empty());
+
+    // transfer parks in WaitingSafeHeight because it contains unsafe history
+    wait_for_refresh(
+        &mut wallet_2,
+        online_2,
+        None,
+        Some(&[receive_data_2.batch_transfer_idx]),
+    );
+    assert!(check_test_transfer_status_recipient(
+        &wallet_2,
+        &receive_data_2.recipient_id,
+        TransferStatus::WaitingSafeHeight
+    ));
+
+    // mine another block so txid_1 reaches 2 confirmations, then refresh to ACK
+    force_mine_no_resume_when_alone(false);
+    wait_for_refresh(
+        &mut wallet_2,
+        online_2,
+        None,
+        Some(&[receive_data_2.batch_transfer_idx]),
+    );
+    assert!(check_test_transfer_status_recipient(
+        &wallet_2,
+        &receive_data_2.recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    // sender sees the ACK and broadcasts txid_2
+    wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet_1,
+        &txid_2,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    // mine, sender (min_confirmations = 1) settles, recipient (min_confirmations = 2) still in WaitingConfirmations
+    force_mine_no_resume_when_alone(false);
+    wait_for_refresh(&mut wallet_1, online_1, Some(&asset.asset_id), None);
+    assert!(check_test_transfer_status_sender(
+        &wallet_1,
+        &txid_2,
+        TransferStatus::Settled
+    ));
+    assert!(!test_refresh_all(&mut wallet_2, online_2));
+    assert!(check_test_transfer_status_recipient(
+        &wallet_2,
+        &receive_data_2.recipient_id,
+        TransferStatus::WaitingConfirmations
+    ));
+
+    // mine again so txid_2 reaches 2 confirmations, recipient settles
+    force_mine_no_resume_when_alone(false);
+    wait_for_refresh(
+        &mut wallet_2,
+        online_2,
+        None,
+        Some(&[receive_data_2.batch_transfer_idx]),
+    );
+    assert!(check_test_transfer_status_recipient(
+        &wallet_2,
+        &receive_data_2.recipient_id,
+        TransferStatus::Settled
+    ));
 }

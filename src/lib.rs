@@ -210,7 +210,7 @@ use rgbstd::{
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use rgbstd::{
     TransitionType,
-    containers::{Consignment, Contract},
+    containers::Consignment,
     contract::FilterIncludeAll,
     daggy::Walker,
     indexers::AnyResolver,
@@ -221,7 +221,7 @@ use rgbstd::{
 use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
     CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
-    OS_INFLATION, TS_INFLATION, TS_TRANSFER, UniqueDigitalAsset,
+    OS_INFLATION, TS_BURN, TS_INFLATION, TS_TRANSFER, UniqueDigitalAsset,
 };
 use scrypt::{
     Params, Scrypt,

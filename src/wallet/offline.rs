@@ -8,7 +8,7 @@ const TRANSFERS_DIR: &str = "transfers";
 
 const CONSIGNMENT_RCV_FILE: &str = "rcv_compose.rgbc";
 
-const MIN_BTC_REQUIRED: u64 = 2000;
+const CONSIGNMENT_RCV_META_FILE: &str = "rcv_compose.meta.json";
 
 const ASSET_ID_PREFIX: &str = "rgb:";
 
@@ -273,18 +273,6 @@ pub trait WalletOffline: WalletBackup {
             .collect())
     }
 
-    fn detect_btc_unspendable_err(&self) -> Result<Error, Error> {
-        let available = self.get_uncolorable_btc_sum()?;
-        Ok(if available < MIN_BTC_REQUIRED {
-            Error::InsufficientBitcoins {
-                needed: MIN_BTC_REQUIRED,
-                available,
-            }
-        } else {
-            Error::InsufficientAllocationSlots
-        })
-    }
-
     fn get_utxo(
         &self,
         exclude_utxos: &[Outpoint],
@@ -329,7 +317,7 @@ pub trait WalletOffline: WalletBackup {
                 }
                 Ok(selected.clone().utxo)
             }
-            None => Err(self.detect_btc_unspendable_err()?),
+            None => Err(Error::InsufficientAllocationSlots),
         }
     }
 
@@ -1657,7 +1645,8 @@ pub trait WalletOffline: WalletBackup {
         online: Option<Online>,
         skip_sync: bool,
     ) -> Result<BtcBalance, Error> {
-        self.sync_if_requested(online, skip_sync)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::External)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::Internal)?;
         let mut vanilla = self.get_btc_balance_for_keychain(KeychainKind::Internal)?;
         let colored = self.get_btc_balance_for_keychain(KeychainKind::External)?;
 
@@ -1987,6 +1976,11 @@ pub trait WalletOffline: WalletBackup {
         )]
         online: Option<Online>,
         skip_sync: bool,
+        #[cfg_attr(
+            not(any(feature = "electrum", feature = "esplora")),
+            allow(unused_variables)
+        )]
+        keychain: KeychainKind,
     ) -> Result<(), Error> {
         if !skip_sync {
             #[cfg(not(any(feature = "electrum", feature = "esplora")))]
@@ -1998,7 +1992,19 @@ pub trait WalletOffline: WalletBackup {
                 } else {
                     return Err(Error::OnlineNeeded);
                 }
-                self.sync_db_txos(false, false)?;
+                let keychain = match keychain {
+                    KeychainKind::Internal => SyncKeychain::Vanilla {
+                        lookback: self.vanilla_sync_lookback(),
+                    },
+                    KeychainKind::External => SyncKeychain::Colored,
+                };
+                self.sync_wallet(
+                    SyncOptions {
+                        keychain,
+                        strategy: SyncStrategy::FastSync,
+                    },
+                    false,
+                )?;
             }
         }
         Ok(())
@@ -2009,7 +2015,8 @@ pub trait WalletOffline: WalletBackup {
         online: Option<Online>,
         skip_sync: bool,
     ) -> Result<Vec<Transaction>, Error> {
-        self.sync_if_requested(online, skip_sync)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::External)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::Internal)?;
 
         let mut create_utxos_txids = vec![];
         let mut drain_txids = vec![];
@@ -2076,6 +2083,16 @@ pub trait WalletOffline: WalletBackup {
             .join(CONSIGNMENT_RCV_FILE)
     }
 
+    fn get_receive_consignment_meta_path(&self, recipient_id: &str) -> PathBuf {
+        self.get_transfers_dir()
+            .join(self.normalize_recipient_id(recipient_id))
+            .join(CONSIGNMENT_RCV_META_FILE)
+    }
+
+    fn get_receive_valid_consignment_path(&self, consignment_path: &Path) -> PathBuf {
+        consignment_path.with_extension("valid.rgbc")
+    }
+
     fn send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
         let transfer_dir = self.get_transfer_dir(transfer_id);
         let asset_transfer_dir = self.get_asset_transfer_dir(transfer_dir, asset_id);
@@ -2114,10 +2131,12 @@ pub trait WalletOffline: WalletBackup {
                     RecipientTypeFull::Witness { .. } => TransferKind::ReceiveWitness,
                 }
             }
-        } else if filtered_coloring.clone().count() > 0
-            && filtered_coloring
-                .clone()
-                .any(|c| c.r#type == ColoringType::Issue)
+        } else if transfer.recipient_id.is_none() {
+            // burn is the only outgoing transfer with no recipient
+            TransferKind::Burn
+        } else if filtered_coloring
+            .clone()
+            .any(|c| c.r#type == ColoringType::Issue)
         {
             // inflation transfer is outgoing and connected to issue colorings
             TransferKind::Inflation
@@ -2153,7 +2172,7 @@ pub trait WalletOffline: WalletBackup {
         };
         let change_utxo = match kind {
             TransferKind::ReceiveBlind | TransferKind::ReceiveWitness => None,
-            TransferKind::Send | TransferKind::Inflation => {
+            TransferKind::Send | TransferKind::Inflation | TransferKind::Burn => {
                 let change_txo_idx: Vec<i32> = filtered_coloring
                     .filter(|c| c.r#type == ColoringType::Change)
                     .map(|c| c.txo_idx)
@@ -2170,10 +2189,12 @@ pub trait WalletOffline: WalletBackup {
         };
 
         let consignment_path = match (&kind, batch_transfer.status) {
-            (TransferKind::Send | TransferKind::Inflation, _) => Some(self.send_consignment_path(
-                &asset_transfer.asset_id.clone().unwrap(),
-                &batch_transfer.txid.clone().unwrap(),
-            )),
+            (TransferKind::Send | TransferKind::Inflation | TransferKind::Burn, _) => {
+                Some(self.send_consignment_path(
+                    &asset_transfer.asset_id.clone().unwrap(),
+                    &batch_transfer.txid.clone().unwrap(),
+                ))
+            }
             (
                 TransferKind::ReceiveBlind | TransferKind::ReceiveWitness,
                 TransferStatus::WaitingCounterparty,
@@ -2243,7 +2264,8 @@ pub trait WalletOffline: WalletBackup {
         settled_only: bool,
         skip_sync: bool,
     ) -> Result<Vec<Unspent>, Error> {
-        self.sync_if_requested(online, skip_sync)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::External)?;
+        self.sync_if_requested(online, skip_sync, KeychainKind::Internal)?;
 
         let db_data = self.database().get_db_data(false)?;
 
@@ -2557,6 +2579,7 @@ pub trait WalletOffline: WalletBackup {
                 let kind = match transition.transition_type {
                     TS_TRANSFER => TypeOfTransition::Transfer,
                     TS_INFLATION => TypeOfTransition::Inflate,
+                    TS_BURN => TypeOfTransition::Burn,
                     _ => {
                         return Err(Error::RgbInspection {
                             details: format!(

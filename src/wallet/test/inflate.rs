@@ -58,7 +58,7 @@ fn success() {
         }
     );
 
-    mine(false, false);
+    mine(false);
 
     assert!(test_refresh_asset(&mut wallet, online, &asset.asset_id));
     show_unspent_colorings(&mut wallet, "after inflate mine + refresh");
@@ -225,7 +225,7 @@ fn success() {
     show_unspent_colorings(&mut wallet, "after send refresh 1");
 
     // transfers progress to status Settled after tx mining + refresh
-    mine(false, false);
+    mine(false);
     std::thread::sleep(Duration::from_millis(1000)); // make sure updated_at will be at least +1s
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
@@ -281,7 +281,7 @@ fn success() {
         &asset.asset_id,
         &last_inflation_amounts,
     );
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
     show_unspent_colorings(&mut wallet, "after last inflate mine + refresh");
 
@@ -329,7 +329,7 @@ fn success() {
 
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -355,9 +355,7 @@ fn fail() {
     // inflate errors
     // - watch-only (_check_xprv)
     let mut wallet_wo = get_test_wallet(false, None);
-    let online_wo = wallet_wo
-        .go_online(false, ELECTRUM_URL.to_string())
-        .unwrap();
+    let online_wo = wallet_wo.go_online(test_go_online_options(None)).unwrap();
     let result = test_inflate_result(&mut wallet_wo, online_wo, &asset_ifa.asset_id, &[1]);
     assert_matches!(result, Err(Error::WatchOnly));
 
@@ -435,7 +433,7 @@ fn fail() {
     )
     .unwrap();
     let online_nia = wallet_nia
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(Some(ELECTRUM_URL)))
         .unwrap();
     fund_wallet(wallet_nia.get_address().unwrap());
     test_create_utxos_default(&mut wallet_nia, online_nia);
@@ -453,7 +451,7 @@ fn fail() {
     assert!(!txid.is_empty());
     wait_for_refresh(&mut wallet_nia, online_nia, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut wallet_nia, online_nia, None, None);
     wait_for_refresh(&mut wallet, online, None, None);
     let transfer_recv = get_test_transfer_recipient(&wallet_nia, &receive_data.recipient_id);
@@ -476,7 +474,7 @@ fn fail() {
     )
     .unwrap();
     let online_nia = wallet_nia
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(Some(ELECTRUM_URL)))
         .unwrap();
     let result = test_inflate_begin_result(&mut wallet_nia, online_nia, &asset_ifa.asset_id, &[1]);
     assert_matches!(result, Err(Error::UnsupportedSchema { asset_schema: _ }));
