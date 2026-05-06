@@ -132,7 +132,7 @@ pub(crate) fn get_funded_wallet_p2wpkh() -> (Wallet, Online) {
         SinglesigKeys::from_keys(&keys, None),
     )
     .unwrap();
-    let online = wallet.go_online(true, ELECTRUM_URL.to_string()).unwrap();
+    let online = wallet.go_online(test_go_online_options(None)).unwrap();
     fund_wallet(wallet.get_address().unwrap());
     test_create_utxos_default(&mut wallet, online);
     (wallet, online)
@@ -145,7 +145,7 @@ pub(crate) fn get_empty_wallet(
 ) -> (Wallet, Online) {
     let mut wallet = get_test_wallet(private_keys, None);
     let online = wallet
-        .go_online(true, indexer_url.unwrap_or(ELECTRUM_URL.to_string()))
+        .go_online(test_go_online_options(indexer_url.as_deref()))
         .unwrap();
     (wallet, online)
 }
@@ -218,7 +218,7 @@ pub(crate) fn send_sats_to_address(address: String, sats: Option<u64>) {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn fund_wallet(address: String) {
     send_to_address(address);
-    mine(false, false);
+    mine(false);
 }
 
 pub(crate) fn check_test_transfer_status_recipient(
@@ -520,7 +520,7 @@ pub(crate) fn restart_test_wallet(
 ) -> (Wallet, Online) {
     let mut wallet = Wallet::new(wallet_data, keys).expect("wallet recreate failed");
     let online = wallet
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online after recreate failed");
     (wallet, online)
 }

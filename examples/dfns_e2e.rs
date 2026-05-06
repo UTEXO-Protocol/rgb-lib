@@ -23,7 +23,10 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use rgb_lib::wallet::{DatabaseType, MpcWallet, Online, Recipient, WalletData};
+use rgb_lib::wallet::{
+    DatabaseType, MpcWallet, Online, OnlineOptions, Recipient, SyncKeychain, SyncOptions,
+    SyncStrategy, WalletData,
+};
 use rgb_lib::{AssetSchema, Assignment, BitcoinNetwork, DfnsConfig, DfnsProvider};
 
 // ---------------------------------------------------------------------------
@@ -205,7 +208,13 @@ fn open_wallet(data_dir: &str) -> MpcWallet {
 fn go_online(wallet: &mut MpcWallet) -> Online {
     let url = electrum_url();
     println!("[..] Connecting to {url}");
-    let online = wallet.go_online(true, url).expect("failed to go online");
+    let online = wallet
+        .go_online(OnlineOptions {
+            indexer_url: url,
+            skip_consistency_check: true,
+            vanilla_sync_lookback: 20,
+        })
+        .expect("failed to go online");
     println!("[OK] Online (id: {})", online.id);
     online
 }
@@ -270,7 +279,15 @@ fn cmd_check(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
     print_btc_balance(&mut wallet, &online, "DFNS");
 
     let bal = wallet.get_btc_balance(Some(online), true).expect("balance");
@@ -295,7 +312,15 @@ fn cmd_utxos(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     let num_utxos: u8 = env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2); // default 2 to conserve DFNS wallet quota
 
@@ -315,7 +340,15 @@ fn cmd_issue(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     println!("[..] Issuing NIA asset (E2E/E2E Token)...");
     match wallet.issue_asset_nia(
@@ -347,7 +380,15 @@ fn cmd_receive(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     let amount: u64 = env::args()
         .nth(2)
@@ -400,7 +441,15 @@ fn cmd_send(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     let mut recipient_map: HashMap<String, Vec<Recipient>> = HashMap::new();
     recipient_map.insert(
@@ -414,7 +463,7 @@ fn cmd_send(state: &mut E2eState) {
     );
 
     println!("[..] Sending {amount} tokens to {recipient_id}...");
-    match wallet.send(online, recipient_map, true, 1, 0, None, false) {
+    match wallet.send(online, recipient_map, true, 1, 0, None) {
         Ok(result) => {
             println!("[OK] Send succeeded!");
             println!("     Txid:  {}", result.txid);
@@ -433,7 +482,15 @@ fn cmd_refresh(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     println!("[..] Refreshing transfers...");
     match wallet.refresh(online, None, vec![], false) {
@@ -493,7 +550,15 @@ fn cmd_send_btc(state: &mut E2eState) {
 
     let mut wallet = open_wallet(&state.data_dir);
     let online = go_online(&mut wallet);
-    wallet.sync(online).expect("sync failed");
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .expect("sync failed");
 
     println!("[..] Sending {amount} sat to {address}...");
     match wallet.send_btc(online, address, amount, 1, false) {

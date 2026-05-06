@@ -61,10 +61,9 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .expect("send");
-    mine_blocks(false, 2, false);
+    mine_blocks(false, 2);
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
         || {
@@ -187,7 +186,7 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
         "backup_info should be false immediately after restore"
     );
     let online_r = wallet_r
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online restored");
     let _ = wallet_r.refresh(online_r, Some(asset_id.clone()), vec![], false);
 
@@ -341,10 +340,9 @@ fn scenario_2_2_unencrypted_restore_without_bdk_db_restores_rgb_state_only() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .expect("send");
-    mine_blocks(false, 2, false);
+    mine_blocks(false, 2);
 
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
@@ -407,7 +405,7 @@ fn scenario_2_2_unencrypted_restore_without_bdk_db_restores_rgb_state_only() {
     );
 
     let online_r = wallet_r
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online restored");
     let _ = wallet_r.refresh(online_r, Some(asset_id.clone()), vec![], false);
 

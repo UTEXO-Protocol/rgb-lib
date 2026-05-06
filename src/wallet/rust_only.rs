@@ -536,7 +536,7 @@ impl Wallet {
         let received_rgb_assignments =
             self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
 
-        let _status = runtime.accept_transfer(valid_consignment, &resolver)?;
+        runtime.accept_transfer(valid_consignment, &resolver)?;
 
         info!(self.logger(), "Accept transfer completed");
         Ok((
@@ -690,7 +690,7 @@ impl Wallet {
         skip_sync: bool,
     ) -> Result<Vec<LocalOutput>, Error> {
         info!(self.logger(), "Listing unspents vanilla...");
-        self.sync_if_requested(Some(online), skip_sync)?;
+        self.sync_if_requested(Some(online), skip_sync, KeychainKind::Internal)?;
 
         let unspents = self.internal_unspents();
 

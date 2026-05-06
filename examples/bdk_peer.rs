@@ -14,8 +14,8 @@ use std::fs;
 use std::path::Path;
 
 use rgb_lib::wallet::{
-    DatabaseType, Online, Recipient, RgbWalletOpsOffline, RgbWalletOpsOnline, SinglesigKeys,
-    Wallet, WalletData,
+    DatabaseType, Online, OnlineOptions, Recipient, RgbWalletOpsOffline, RgbWalletOpsOnline,
+    SinglesigKeys, Wallet, WalletData,
 };
 use rgb_lib::{AssetSchema, Assignment, BitcoinNetwork, generate_keys};
 
@@ -147,7 +147,13 @@ fn open_wallet(state: &PeerState) -> Wallet {
 fn go_online(wallet: &mut Wallet) -> Online {
     let url = electrum_url();
     println!("[..] Connecting to {url}");
-    let online = wallet.go_online(true, url).expect("failed to go online");
+    let online = wallet
+        .go_online(OnlineOptions {
+            indexer_url: url,
+            skip_consistency_check: true,
+            vanilla_sync_lookback: 20,
+        })
+        .expect("failed to go online");
     println!("[OK] Online (id: {})", online.id);
     online
 }
@@ -312,7 +318,7 @@ fn cmd_send(state: &mut PeerState) {
     );
 
     println!("[..] Sending {amount} tokens to {recipient_id}...");
-    match wallet.send(online, recipient_map, true, 1, 0, None, false) {
+    match wallet.send(online, recipient_map, true, 1, 0, None) {
         Ok(result) => {
             println!("[OK] Sent! Txid: {}", result.txid);
         }

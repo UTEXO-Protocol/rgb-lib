@@ -350,7 +350,7 @@ fn re_instantiate_wallet() {
     // take transfers from WaitingCounterparty to Settled
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
-    mine(false, false);
+    mine(false);
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
 
@@ -359,7 +359,7 @@ fn re_instantiate_wallet() {
 
     // re-instantiate wallet
     let mut wallet = Wallet::new(wallet_data.clone(), keys.clone()).unwrap();
-    let _online = wallet.go_online(true, ELECTRUM_URL.to_string()).unwrap();
+    let _online = wallet.go_online(test_go_online_options(None)).unwrap();
 
     // check wallet asset
     check_test_wallet_data(&mut wallet, &asset, None, 1, amount);
@@ -371,7 +371,7 @@ fn re_instantiate_wallet() {
     let mut keys_bad = keys.clone();
     keys_bad.mnemonic = None;
     let mut wallet = Wallet::new(wallet_data.clone(), keys_bad).unwrap();
-    let _online = wallet.go_online(true, ELECTRUM_URL.to_string()).unwrap();
+    let _online = wallet.go_online(test_go_online_options(None)).unwrap();
 }
 
 #[cfg(feature = "electrum")]
@@ -397,7 +397,7 @@ fn watch_only_success() {
     )
     .unwrap();
     let online_watch = wallet_watch
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .unwrap();
 
     // signer wallet
@@ -421,7 +421,7 @@ fn watch_only_success() {
 
     // fund wallet
     fund_wallet(address_watch);
-    mine(false, false);
+    mine(false);
     let unspents = test_list_unspents(&mut wallet_watch, Some(online_watch), false);
     assert_eq!(unspents.len(), 1);
 
@@ -437,7 +437,7 @@ fn watch_only_success() {
     .unwrap();
     let signed_psbt = wallet_sign.sign_psbt(unsigned_psbt, None).unwrap();
     wallet_watch
-        .create_utxos_end(online_watch, signed_psbt, false)
+        .create_utxos_end(online_watch, signed_psbt)
         .unwrap();
     let unspents = test_list_unspents(&mut wallet_watch, Some(online_watch), false);
     assert_eq!(unspents.len(), UTXO_NUM as usize + 1);
@@ -510,10 +510,7 @@ fn get_descriptors_success() {
     // get descriptors from keys
     let keys = wallet.get_keys();
     let bitcoin_network = wallet.bitcoin_network();
-    let descriptors = keys
-        .build_descriptors(&bitcoin_network, &BdkNetwork::from(bitcoin_network))
-        .unwrap()
-        .0;
+    let descriptors = keys.build_descriptors(&bitcoin_network).unwrap().0;
 
     // get descriptors from wallet
     let wlt_descriptors = wallet.get_descriptors();
@@ -543,9 +540,7 @@ fn supported_schemas() {
         SinglesigKeys::from_keys(&keys, None),
     )
     .unwrap();
-    let online_nia = wallet_nia
-        .go_online(true, ELECTRUM_URL.to_string())
-        .unwrap();
+    let online_nia = wallet_nia.go_online(test_go_online_options(None)).unwrap();
     fund_wallet(wallet_nia.get_address().unwrap());
     test_create_utxos_default(&mut wallet_nia, online_nia);
 
@@ -576,7 +571,7 @@ fn supported_schemas() {
     )
     .unwrap();
     let rcv_online_uda = rcv_wallet_uda
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .unwrap();
     fund_wallet(rcv_wallet_uda.get_address().unwrap());
     test_create_utxos_default(&mut rcv_wallet_uda, rcv_online_uda);
@@ -620,9 +615,7 @@ fn supported_schemas() {
         SinglesigKeys::from_keys(&keys, None),
     )
     .unwrap();
-    let online_cfa = wallet_cfa
-        .go_online(true, ELECTRUM_URL.to_string())
-        .unwrap();
+    let online_cfa = wallet_cfa.go_online(test_go_online_options(None)).unwrap();
 
     // send asset unsupported by the sender
     let receive_data = test_blind_receive(&mut rcv_wallet_uda);

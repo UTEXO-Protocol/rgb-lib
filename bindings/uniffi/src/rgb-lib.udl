@@ -105,6 +105,7 @@ interface RgbLibError {
   Network(string details);
   NoConsignment();
   NoCosignersSupplied();
+  NoBurnAmount();
   NoInflationAmounts();
   NoIssuanceAmounts();
   NoKeysSupplied();
@@ -127,6 +128,7 @@ interface RgbLibError {
   UnknownRgbSchema(string schema_id);
   UnknownTransfer(string txid);
   UnsupportedBackupVersion(string version);
+  UnsupportedBurn(AssetSchema asset_schema);
   UnsupportedInflation(AssetSchema asset_schema);
   UnsupportedLayer1(string layer_1);
   UnsupportedSchema(AssetSchema asset_schema);
@@ -302,6 +304,24 @@ enum WitnessVersion {
   "Taproot",
 };
 
+[Enum]
+interface SyncKeychain {
+  Colored();
+  Vanilla(u32 lookback);
+};
+
+[Remote]
+enum SyncStrategy {
+  "FullScan",
+  "FullSync",
+  "FastSync",
+};
+
+dictionary SyncOptions {
+  SyncKeychain keychain;
+  SyncStrategy strategy;
+};
+
 interface Address {
   [Throws=RgbLibError]
   constructor(string address_string, BitcoinNetwork bitcoin_network);
@@ -416,6 +436,19 @@ dictionary Online {
 };
 
 [Remote]
+dictionary OnlineOptions {
+  string indexer_url;
+  boolean skip_consistency_check;
+  u32 vanilla_sync_lookback;
+};
+
+[Remote]
+dictionary MultisigOnlineOptions {
+  string hub_url;
+  string hub_token;
+};
+
+[Remote]
 dictionary Outpoint {
   string txid;
   u32 vout;
@@ -479,11 +512,13 @@ enum TransferKind {
   "ReceiveWitness",
   "Send",
   "Inflation",
+  "Burn",
 };
 
 [Remote]
 enum TransferStatus {
   "WaitingCounterparty",
+  "WaitingSafeHeight",
   "WaitingConfirmations",
   "Settled",
   "Failed",
@@ -592,6 +627,20 @@ dictionary MultisigVotingStatus {
 };
 
 [Remote]
+dictionary BurnDetails {
+  string fascia_path;
+  u8 min_confirmations;
+  u64 entropy;
+};
+
+[Remote]
+dictionary BurnBeginResult {
+  string psbt;
+  i32? batch_transfer_idx;
+  BurnDetails details;
+};
+
+[Remote]
 dictionary InflateDetails {
   string fascia_path;
   u8 min_confirmations;
@@ -638,6 +687,10 @@ interface Operation {
   InflationPending(InflateDetails details, MultisigVotingStatus status);
   InflationCompleted(string txid, InflateDetails details, MultisigVotingStatus status);
   InflationDiscarded(InflateDetails details, MultisigVotingStatus status);
+  BurnToReview(string psbt, BurnDetails details, MultisigVotingStatus status);
+  BurnPending(BurnDetails details, MultisigVotingStatus status);
+  BurnCompleted(string txid, BurnDetails details, MultisigVotingStatus status);
+  BurnDiscarded(BurnDetails details, MultisigVotingStatus status);
   IssuanceCompleted(string asset_id);
   BlindReceiveCompleted(ReceiveData details);
   WitnessReceiveCompleted(ReceiveData details);
@@ -708,6 +761,7 @@ dictionary RgbOperationInfo {
 enum TypeOfTransition {
   "Inflate",
   "Transfer",
+  "Burn",
 };
 
 [Remote]
@@ -843,7 +897,7 @@ interface Wallet {
     boolean skip_sync, boolean dry_run);
 
   [Throws=RgbLibError]
-  u8 create_utxos_end(Online online, string signed_psbt, boolean skip_sync);
+  u8 create_utxos_end(Online online, string signed_psbt);
 
   [Throws=RgbLibError]
   boolean delete_transfers(i32? batch_transfer_idx, boolean no_asset_only);
@@ -887,7 +941,20 @@ interface Wallet {
   f64 get_fee_estimation(Online online, u16 blocks);
 
   [Throws=RgbLibError]
-  Online go_online(boolean skip_consistency_check, string indexer_url);
+  Online go_online(OnlineOptions online_options);
+
+  [Throws=RgbLibError]
+  OperationResult burn(
+    Online online, string asset_id, u64 amount, u64 fee_rate,
+    u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  BurnBeginResult burn_begin(
+    Online online, string asset_id, u64 amount, u64 fee_rate,
+    u8 min_confirmations, boolean dry_run);
+
+  [Throws=RgbLibError]
+  OperationResult burn_end(Online online, string signed_psbt);
 
   [Throws=RgbLibError]
   OperationResult inflate(
@@ -943,7 +1010,7 @@ interface Wallet {
   OperationResult send(
     Online online, record<DOMString, sequence<Recipient>> recipient_map,
     boolean donation, u64 fee_rate, u8 min_confirmations,
-    u64? expiration_timestamp, boolean skip_sync);
+    u64? expiration_timestamp);
 
   [Throws=RgbLibError]
   SendBeginResult send_begin(
@@ -952,7 +1019,7 @@ interface Wallet {
     u64? expiration_timestamp, boolean dry_run);
 
   [Throws=RgbLibError]
-  OperationResult send_end(Online online, string signed_psbt, boolean skip_sync);
+  OperationResult send_end(Online online, string signed_psbt);
 
   [Throws=RgbLibError]
   string send_btc(
@@ -964,10 +1031,10 @@ interface Wallet {
     boolean dry_run);
 
   [Throws=RgbLibError]
-  string send_btc_end(Online online, string signed_psbt, boolean skip_sync);
+  string send_btc_end(Online online, string signed_psbt);
 
   [Throws=RgbLibError]
-  void sync(Online online);
+  void sync(Online online, SyncOptions options);
 
   [Throws=RgbLibError]
   void configure_vss_backup(VssBackupConfig config);
@@ -1042,11 +1109,16 @@ interface MultisigWallet {
   f64 get_fee_estimation(Online online, u16 blocks);
 
   [Throws=RgbLibError]
-  Online go_online(boolean skip_consistency_check, string indexer_url,
-  string hub_url, string hub_token);
+  Online go_online(OnlineOptions online_options,
+    MultisigOnlineOptions multisig_online_options);
 
   [Throws=RgbLibError]
   HubInfo hub_info(Online online);
+
+  [Throws=RgbLibError]
+  InitOperationResult burn_init(
+    Online online, string asset_id, u64 amount, u64 fee_rate,
+    u8 min_confirmations);
 
   [Throws=RgbLibError]
   InitOperationResult inflate_init(
@@ -1100,7 +1172,7 @@ interface MultisigWallet {
     Online online, string address, u64 amount, u64 fee_rate, boolean skip_sync);
 
   [Throws=RgbLibError]
-  void sync(Online online);
+  void sync(Online online, SyncOptions options);
 
   [Throws=RgbLibError]
   string get_address(Online online);

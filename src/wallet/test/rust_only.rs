@@ -41,7 +41,7 @@ fn success() {
             address.assume_checked().script_pubkey(),
             BdkAmount::from_sat(amt_sat),
         )
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
     let mut psbt_copy = psbt.clone();
     assert!(
@@ -180,7 +180,7 @@ fn list_unspents_vanilla_success() {
     assert!(bak_info_after.is_none());
     assert_eq!(unspent_list.len(), 0);
 
-    stop_mining();
+    let _guard = stop_mining();
 
     send_to_address(test_get_address(&mut wallet));
 
@@ -190,7 +190,8 @@ fn list_unspents_vanilla_success() {
     let unspent_list = test_list_unspents_vanilla(&mut wallet, online, Some(0));
     assert_eq!(unspent_list.len(), 1);
 
-    mine(false, true);
+    drop(_guard);
+    mine(false);
 
     // one unspent, 1 confirmation
     let unspent_list = test_list_unspents_vanilla(&mut wallet, online, None);
@@ -201,7 +202,7 @@ fn list_unspents_vanilla_success() {
     test_create_utxos_default(&mut wallet, online);
 
     // one unspent (change), colored unspents not listed
-    mine(false, false);
+    mine(false);
     let unspent_list = test_list_unspents_vanilla(&mut wallet, online, None);
     assert_eq!(unspent_list.len(), 1);
 }
@@ -223,7 +224,17 @@ fn list_unspents_vanilla_skip_sync() {
     assert_eq!(unspents.len(), 0);
 
     // 1 unspent after manually syncing
-    wallet.sync(online).unwrap();
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Vanilla {
+                    lookback: INDEXER_SYNC_LOOKBACK as u32,
+                },
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
     let unspents = wallet
         .list_unspents_vanilla(online, MIN_CONFIRMATIONS, true)
         .unwrap();
@@ -385,7 +396,7 @@ fn color_psbt_uda() {
     tx_builder
         .drain_wallet()
         .drain_to(p2wpkh_addr.script_pubkey())
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
     assert!(
         !psbt
@@ -501,7 +512,7 @@ fn color_psbt_fail() {
             address.assume_checked().script_pubkey(),
             BdkAmount::from_sat(amt_sat),
         )
-        .fee_rate(FeeRate::from_sat_per_vb_unchecked(FEE_RATE));
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
 
     // prepare coloring data

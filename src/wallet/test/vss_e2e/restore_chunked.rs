@@ -63,10 +63,9 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .expect("send");
-    mine_blocks(false, 2, false);
+    mine_blocks(false, 2);
 
     let expected_settled = issued_supply - send_amount;
     let ok = wait_for_function(
@@ -170,7 +169,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
         "backup_info should be false immediately after restore"
     );
     let online_r = wallet_r
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online restored");
     let _ = wallet_r.refresh(online_r, Some(asset_id.clone()), vec![], false);
 

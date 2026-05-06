@@ -161,7 +161,7 @@ fn up_to_allocation_checks() {
         assert!(matches!(result, Err(Error::AllocationsAlreadyAvailable)));
 
         // - settled
-        mine(false, false);
+        mine(false);
         wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
         wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
         // UTXO 1 now spent, UTXO 2 (RGB+BTC change) has at least 1 free allocation, UTXO 3 is empty
@@ -281,22 +281,40 @@ fn skip_sync() {
     );
 
     // sync so the bitcoin UTXO becomes visible
-    wallet.sync(online).unwrap();
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Vanilla {
+                    lookback: INDEXER_SYNC_LOOKBACK as u32,
+                },
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
     let unspents = test_list_unspents(&mut wallet, None, false);
     assert_eq!(unspents.len(), 1);
 
-    // create UTXOs skipping sync (returns 0 created UTXOs)
+    // create UTXOs skipping sync
     let num_utxos_created = wallet
         .create_utxos(online, true, None, None, FEE_RATE, true)
         .unwrap();
-    assert_eq!(num_utxos_created, 0);
+    assert_eq!(num_utxos_created, UTXO_NUM);
 
-    // created UTXOs not yet visible
+    // created UTXOs already visible
     let unspents = test_list_unspents(&mut wallet, None, false);
-    assert_eq!(unspents.len(), 1);
+    assert_eq!(unspents.len(), (UTXO_NUM + 1) as usize);
 
-    // created UTXOs become visible after syncing
-    wallet.sync(online).unwrap();
+    // created UTXOs still consistent after syncing
+    wallet
+        .sync(
+            online,
+            SyncOptions {
+                keychain: SyncKeychain::Colored,
+                strategy: SyncStrategy::FastSync,
+            },
+        )
+        .unwrap();
     let unspents = test_list_unspents(&mut wallet, None, false);
     assert_eq!(unspents.len(), (UTXO_NUM + 1) as usize);
 }

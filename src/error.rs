@@ -459,6 +459,10 @@ pub enum Error {
         details: String,
     },
 
+    /// Cannot burn an asset with zero amount
+    #[error("Burn request with zero amount")]
+    NoBurnAmount,
+
     /// No consignment found
     #[error("No consignment found")]
     NoConsignment,
@@ -579,7 +583,14 @@ pub enum Error {
         version: String,
     },
 
-    /// The schema doesn't support inflation
+    /// The schema doesn't support burn transitions
+    #[error("Burn not supported")]
+    UnsupportedBurn {
+        /// Asset schema
+        asset_schema: AssetSchema,
+    },
+
+    /// The schema doesn't support inflate transitions
     #[error("Inflation not supported")]
     UnsupportedInflation {
         /// Asset schema

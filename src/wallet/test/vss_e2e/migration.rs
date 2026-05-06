@@ -58,10 +58,9 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .expect("send");
-    mine_blocks(false, 2, false);
+    mine_blocks(false, 2);
 
     let expected_settled_a = issued_supply - send_amount1;
     let ok = wait_for_function(
@@ -104,7 +103,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
     );
 
     let online_b = wallet_b
-        .go_online(true, ELECTRUM_URL.to_string())
+        .go_online(test_go_online_options(None))
         .expect("go_online");
     let _ = wallet_b.refresh(online_b, Some(asset1_id.clone()), vec![], false);
     let bal1_b = wallet_b
@@ -159,10 +158,9 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
-            false,
         )
         .expect("send asset2");
-    mine_blocks(false, 2, false);
+    mine_blocks(false, 2);
 
     let expected_asset2_settled = issued2 - send_amount2;
     let ok2 = wait_for_function(

@@ -22,14 +22,24 @@ fn success_common(wallet: &mut Wallet, online: Online, esplora: bool) {
                 break;
             }
         }
-        wallet.sync(online).unwrap();
+        wallet
+            .sync(
+                online,
+                SyncOptions {
+                    keychain: SyncKeychain::Vanilla {
+                        lookback: INDEXER_SYNC_LOOKBACK as u32,
+                    },
+                    strategy: SyncStrategy::FastSync,
+                },
+            )
+            .unwrap();
     }
 
     for _ in 0..100 {
         for _ in 0..15 {
             random_send_btc(wallet, online);
         }
-        mine(esplora, false);
+        mine(esplora);
         for _ in 0..3 {
             random_send_btc(wallet, online);
         }
@@ -73,7 +83,7 @@ fn success_esplora() {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 fn fail_common(wallet: &Wallet, online: Online, esplora: bool) {
     for _ in 0..100 {
-        mine_blocks(esplora, 100, false);
+        mine_blocks(esplora, 100);
         if let Err(e) = wallet.get_fee_estimation(online, 5) {
             assert!(matches!(e, Error::CannotEstimateFees));
             return;

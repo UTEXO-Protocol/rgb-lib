@@ -16,8 +16,8 @@ use rgb_lib::{
     keys::WitnessVersion,
     utils::BitcoinNetwork,
     wallet::{
-        Invoice, Online, Recipient, RefreshFilter, RgbWalletOpsOffline, RgbWalletOpsOnline,
-        SinglesigKeys, Wallet, WalletData,
+        Invoice, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline,
+        RgbWalletOpsOnline, SinglesigKeys, SyncOptions, Wallet, WalletData,
     },
 };
 
@@ -49,13 +49,6 @@ pub struct CResultString {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn free_online(obj: COpaqueStruct) {
-    unsafe {
-        let _ = Box::from_raw(obj.ptr as *mut Online);
-    }
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn free_wallet(obj: COpaqueStruct) {
     unsafe {
         let _ = Box::from_raw(obj.ptr as *mut Wallet);
@@ -84,6 +77,57 @@ pub extern "C" fn rgblib_backup_info(wallet: &COpaqueStruct) -> CResultString {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_burn(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    asset_id: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+) -> CResultString {
+    burn(
+        wallet,
+        online,
+        asset_id,
+        amount,
+        fee_rate,
+        min_confirmations,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_burn_begin(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    asset_id: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+    dry_run: bool,
+) -> CResultString {
+    burn_begin(
+        wallet,
+        online,
+        asset_id,
+        amount,
+        fee_rate,
+        min_confirmations,
+        dry_run,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_burn_end(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    burn_end(wallet, online, signed_psbt).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_blind_receive(
     wallet: &COpaqueStruct,
     asset_id_opt: *const c_char,
@@ -106,7 +150,7 @@ pub extern "C" fn rgblib_blind_receive(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_create_utxos(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     up_to: bool,
     num_opt: *const c_char,
     size_opt: *const c_char,
@@ -122,7 +166,7 @@ pub extern "C" fn rgblib_create_utxos(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_create_utxos_begin(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     up_to: bool,
     num_opt: *const c_char,
     size_opt: *const c_char,
@@ -139,11 +183,10 @@ pub extern "C" fn rgblib_create_utxos_begin(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_create_utxos_end(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     signed_psbt: *const c_char,
-    skip_sync: bool,
 ) -> CResultString {
-    create_utxos_end(wallet, online, signed_psbt, skip_sync).into()
+    create_utxos_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]
@@ -178,7 +221,7 @@ pub extern "C" fn rgblib_drain_to_end(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_fail_transfers(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     batch_transfer_idx_opt: *const c_char,
     no_asset_only: bool,
     skip_sync: bool,
@@ -243,7 +286,7 @@ pub extern "C" fn rgblib_get_asset_metadata(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_get_btc_balance(
     wallet: &COpaqueStruct,
-    online: *const COpaqueStruct,
+    online: *const c_char,
     skip_sync: bool,
 ) -> CResultString {
     get_btc_balance(wallet, online, skip_sync).into()
@@ -252,7 +295,7 @@ pub extern "C" fn rgblib_get_btc_balance(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_get_fee_estimation(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     blocks: *const c_char,
 ) -> CResultString {
     get_fee_estimation(wallet, online, blocks).into()
@@ -261,16 +304,15 @@ pub extern "C" fn rgblib_get_fee_estimation(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_go_online(
     wallet: &COpaqueStruct,
-    skip_consistency_check: bool,
-    electrum_url: *const c_char,
-) -> CResult {
-    go_online(wallet, skip_consistency_check, electrum_url).into()
+    online_options: *const c_char,
+) -> CResultString {
+    go_online(wallet, online_options).into()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_inflate(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     asset_id: *const c_char,
     inflation_amounts: *const c_char,
     fee_rate: *const c_char,
@@ -396,7 +438,7 @@ pub extern "C" fn rgblib_list_assets(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_list_transactions(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     skip_sync: bool,
 ) -> CResultString {
     list_transactions(wallet, online, skip_sync).into()
@@ -413,7 +455,7 @@ pub extern "C" fn rgblib_list_transfers(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_list_unspents(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     settled_only: bool,
     skip_sync: bool,
 ) -> CResultString {
@@ -428,7 +470,7 @@ pub extern "C" fn rgblib_new_wallet(wallet_data: *const c_char, keys: *const c_c
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_refresh(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     asset_id_opt: *const c_char,
     filter: *const c_char,
     skip_sync: bool,
@@ -457,13 +499,12 @@ pub extern "C" fn rgblib_restore_keys(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     recipient_map: *const c_char,
     donation: bool,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
     expiration_timestamp_opt: *const c_char,
-    skip_sync: bool,
 ) -> CResultString {
     send(
         wallet,
@@ -473,7 +514,6 @@ pub extern "C" fn rgblib_send(
         fee_rate,
         min_confirmations,
         expiration_timestamp_opt,
-        skip_sync,
     )
     .into()
 }
@@ -481,7 +521,7 @@ pub extern "C" fn rgblib_send(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_begin(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     recipient_map: *const c_char,
     donation: bool,
     fee_rate: *const c_char,
@@ -505,7 +545,7 @@ pub extern "C" fn rgblib_send_begin(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_btc(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     address: *const c_char,
     amount: *const c_char,
     fee_rate: *const c_char,
@@ -535,19 +575,17 @@ pub extern "C" fn rgblib_send_btc_end(
     wallet: &COpaqueStruct,
     online: &COpaqueStruct,
     signed_psbt: *const c_char,
-    skip_sync: bool,
 ) -> CResultString {
-    send_btc_end(wallet, online, signed_psbt, skip_sync).into()
+    send_btc_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_end(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     signed_psbt: *const c_char,
-    skip_sync: bool,
 ) -> CResultString {
-    send_end(wallet, online, signed_psbt, skip_sync).into()
+    send_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]
@@ -559,8 +597,12 @@ pub extern "C" fn rgblib_sign_psbt(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rgblib_sync(wallet: &COpaqueStruct, online: &COpaqueStruct) -> CResultString {
-    sync(wallet, online).into()
+pub extern "C" fn rgblib_sync(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    options: *const c_char,
+) -> CResultString {
+    sync(wallet, online, options).into()
 }
 
 #[unsafe(no_mangle)]
