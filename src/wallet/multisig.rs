@@ -2313,6 +2313,15 @@ impl MultisigWallet {
     ) -> Result<super::vss::VssBackupInfo, Error> {
         WalletBackup::vss_backup_info(self, client).await
     }
+
+    /// Returns the configured VSS backup client, if any.
+    ///
+    /// This is the client constructed by [`configure_vss_backup`](Self::configure_vss_backup);
+    /// callers can reuse it for manual backup operations instead of building a
+    /// second client with the same configuration.
+    pub fn vss_client(&self) -> Option<Arc<super::vss::VssBackupClient>> {
+        WalletCore::vss_client(self).clone()
+    }
 }
 
 #[cfg(test)]
