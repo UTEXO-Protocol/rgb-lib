@@ -91,9 +91,15 @@ pub struct VssEncryptionMetadata {
     pub version: u8,
 }
 
+impl Default for VssEncryptionMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VssEncryptionMetadata {
     /// Create new encryption metadata with random salt and nonce
-    fn new() -> Self {
+    pub fn new() -> Self {
         let salt: [u8; BACKUP_SALT_LENGTH] = rand::random();
         let nonce: [u8; BACKUP_NONCE_LENGTH] = rand::random();
 
@@ -256,7 +262,7 @@ impl VssBackupClient {
         // Encrypt or sanitize data
         let (upload_data, encryption_metadata) = if self.encryption_enabled {
             let metadata = VssEncryptionMetadata::new();
-            let encrypted = encrypt_data(&data, &self.signing_key, &metadata)?;
+            let encrypted = encrypt_data(&data, &self.signing_key, &metadata, None)?;
             (encrypted, Some(metadata))
         } else {
             // Sanitize for plaintext: remove fingerprint from paths, exclude bdk_db
@@ -482,7 +488,7 @@ impl VssBackupClient {
         // Decrypt if the backup was encrypted
         if manifest.encrypted {
             let metadata = self.get_encryption_metadata().await?;
-            decrypt_data(&raw_data, &self.signing_key, &metadata)
+            decrypt_data(&raw_data, &self.signing_key, &metadata, None)
         } else {
             Ok(raw_data)
         }
@@ -723,13 +729,28 @@ impl VssBackupClient {
     }
 }
 
-/// HKDF info string for domain separation
+/// Default HKDF info string used by rgb-lib's wallet backup encryption.
+///
+/// Downstream callers that re-use [`derive_encryption_key`] / [`encrypt_data`] /
+/// [`decrypt_data`] for a different purpose (e.g. encrypting LDK KVStore
+/// values rather than wallet zips) should pass their own domain-separation tag
+/// via the `info` parameter so that the derived keys differ even when the
+/// signing key and salt happen to match.
 const HKDF_INFO: &[u8] = b"rgb-lib-vss-backup-encryption-v1";
 
-/// Derive encryption key from signing key using HKDF-SHA256
-fn derive_encryption_key(
+/// Derive an encryption key from a signing key using HKDF-SHA256.
+///
+/// When `info` is `None`, rgb-lib's default domain-separation tag
+/// (`b"rgb-lib-vss-backup-encryption-v1"`) is used — that's the right choice
+/// when the caller is encrypting data that will round-trip through rgb-lib's
+/// own backup helpers. Pass `Some(tag)` to supply a custom HKDF info string
+/// when encrypting unrelated data (e.g. LDK channel-state values) so that the
+/// derived key is distinct from rgb-lib's wallet-backup key for the same
+/// signing key and metadata.
+pub fn derive_encryption_key(
     signing_key: &SecretKey,
     metadata: &VssEncryptionMetadata,
+    info: Option<&[u8]>,
 ) -> Result<Key, Error> {
     let salt_bytes = hex::decode(&metadata.salt).map_err(|e| Error::Internal {
         details: format!("Invalid salt hex: {e}"),
@@ -738,7 +759,7 @@ fn derive_encryption_key(
     let hk = Hkdf::<Sha256>::new(Some(&salt_bytes), &signing_key.secret_bytes());
 
     let mut key_bytes = [0u8; BACKUP_KEY_LENGTH];
-    hk.expand(HKDF_INFO, &mut key_bytes)
+    hk.expand(info.unwrap_or(HKDF_INFO), &mut key_bytes)
         .map_err(|e| Error::Internal {
             details: format!("HKDF expansion failed: {e}"),
         })?;
@@ -746,13 +767,18 @@ fn derive_encryption_key(
     Ok(Key::clone_from_slice(&key_bytes))
 }
 
-/// Encrypt data using XChaCha20-Poly1305
-fn encrypt_data(
+/// Encrypt data using XChaCha20-Poly1305 with a key derived from `signing_key`
+/// via HKDF-SHA256 (see [`derive_encryption_key`] for the `info` parameter).
+///
+/// The same `signing_key`, `metadata`, and `info` must be passed to
+/// [`decrypt_data`] for the round-trip to succeed.
+pub fn encrypt_data(
     data: &[u8],
     signing_key: &SecretKey,
     metadata: &VssEncryptionMetadata,
+    info: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
-    let key = derive_encryption_key(signing_key, metadata)?;
+    let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
     let nonce = metadata.nonce_bytes()?;
     let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
@@ -788,13 +814,19 @@ fn encrypt_data(
     Ok(encrypted)
 }
 
-/// Decrypt data using XChaCha20-Poly1305
-fn decrypt_data(
+/// Decrypt data using XChaCha20-Poly1305 with a key derived from `signing_key`
+/// via HKDF-SHA256 (see [`derive_encryption_key`] for the `info` parameter).
+///
+/// The `signing_key`, `metadata`, and `info` must match what was passed to
+/// [`encrypt_data`]; otherwise the AEAD authentication tag check fails and an
+/// `Error::VssError` is returned.
+pub fn decrypt_data(
     encrypted: &[u8],
     signing_key: &SecretKey,
     metadata: &VssEncryptionMetadata,
+    info: Option<&[u8]>,
 ) -> Result<Vec<u8>, Error> {
-    let key = derive_encryption_key(signing_key, metadata)?;
+    let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
     let nonce = metadata.nonce_bytes()?;
     let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
@@ -1185,11 +1217,11 @@ mod tests {
         let metadata = VssEncryptionMetadata::new();
 
         // Encrypt
-        let encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
+        let encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
         assert_ne!(encrypted, original_data);
 
         // Decrypt
-        let decrypted = decrypt_data(&encrypted, &key, &metadata).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key, &metadata, None).unwrap();
         assert_eq!(decrypted, original_data);
     }
 
@@ -1201,8 +1233,8 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &metadata).unwrap();
+        let encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key, &metadata, None).unwrap();
 
         assert_eq!(decrypted, original_data);
     }
@@ -1215,8 +1247,8 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let encrypted = encrypt_data(&original_data, &correct_key, &metadata).unwrap();
-        let result = decrypt_data(&encrypted, &wrong_key, &metadata);
+        let encrypted = encrypt_data(&original_data, &correct_key, &metadata, None).unwrap();
+        let result = decrypt_data(&encrypted, &wrong_key, &metadata, None);
 
         assert!(result.is_err());
     }
@@ -1228,8 +1260,8 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &metadata).unwrap();
+        let encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key, &metadata, None).unwrap();
 
         assert_eq!(decrypted, original_data);
     }
@@ -1244,8 +1276,8 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &metadata).unwrap();
+        let encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key, &metadata, None).unwrap();
 
         assert_eq!(decrypted, original_data);
     }
@@ -1260,8 +1292,8 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
-        let decrypted = decrypt_data(&encrypted, &key, &metadata).unwrap();
+        let encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
+        let decrypted = decrypt_data(&encrypted, &key, &metadata, None).unwrap();
 
         assert_eq!(decrypted, original_data);
     }
@@ -1273,7 +1305,7 @@ mod tests {
 
         let metadata = VssEncryptionMetadata::new();
 
-        let mut encrypted = encrypt_data(&original_data, &key, &metadata).unwrap();
+        let mut encrypted = encrypt_data(&original_data, &key, &metadata, None).unwrap();
 
         // Corrupt the encrypted data
         if !encrypted.is_empty() {
@@ -1281,7 +1313,7 @@ mod tests {
             encrypted[mid] ^= 0xFF;
         }
 
-        let result = decrypt_data(&encrypted, &key, &metadata);
+        let result = decrypt_data(&encrypted, &key, &metadata, None);
         assert!(result.is_err());
     }
 
@@ -1291,8 +1323,8 @@ mod tests {
         let metadata1 = VssEncryptionMetadata::new();
         let metadata2 = VssEncryptionMetadata::new();
 
-        let derived1 = derive_encryption_key(&key, &metadata1).unwrap();
-        let derived2 = derive_encryption_key(&key, &metadata2).unwrap();
+        let derived1 = derive_encryption_key(&key, &metadata1, None).unwrap();
+        let derived2 = derive_encryption_key(&key, &metadata2, None).unwrap();
 
         // Different random salts should produce different derived keys
         assert_ne!(derived1, derived2);
