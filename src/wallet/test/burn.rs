@@ -579,7 +579,7 @@ fn fail() {
     // burn_end input params
     let address = test_get_address(&mut wallet);
     let unsigned_psbt = wallet
-        .send_btc_begin(online, address, 1000, FEE_RATE, false, true)
+        .send_btc_begin(online, address, 1000, FEE_RATE, false, true, None)
         .unwrap();
     let signed_psbt = wallet.sign_psbt(unsigned_psbt, None).unwrap();
     // - check online is correct

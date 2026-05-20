@@ -61,6 +61,7 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     mine_blocks(false, 2);
@@ -339,6 +340,7 @@ fn scenario_2_2_unencrypted_restore_without_bdk_db_restores_rgb_state_only() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .expect("send");

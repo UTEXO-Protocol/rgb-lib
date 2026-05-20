@@ -1419,6 +1419,7 @@ impl Wallet {
             fee_rate,
             min_confirmations,
             expiration_timestamp,
+            None,
         )
     }
 
@@ -1440,6 +1441,7 @@ impl Wallet {
             min_confirmations,
             expiration_timestamp,
             dry_run,
+            None,
         )
     }
 
@@ -1460,7 +1462,7 @@ impl Wallet {
         skip_sync: bool,
     ) -> Result<String, RgbLibError> {
         self._get_wallet()
-            .send_btc(online, address, amount, fee_rate, skip_sync)
+            .send_btc(online, address, amount, fee_rate, skip_sync, None)
     }
 
     fn send_btc_begin(
@@ -1473,7 +1475,7 @@ impl Wallet {
         dry_run: bool,
     ) -> Result<String, RgbLibError> {
         self._get_wallet()
-            .send_btc_begin(online, address, amount, fee_rate, skip_sync, dry_run)
+            .send_btc_begin(online, address, amount, fee_rate, skip_sync, dry_run, None)
     }
 
     fn send_btc_end(&self, online: Online, signed_psbt: String) -> Result<String, RgbLibError> {

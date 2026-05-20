@@ -803,6 +803,7 @@ pub(crate) fn send(
         fee_rate,
         min_confirmations,
         expiration_timestamp,
+        None,
     )?;
     Ok(serde_json::to_string(&res)?)
 }
@@ -833,6 +834,7 @@ pub(crate) fn send_begin(
         min_confirmations,
         expiration_timestamp,
         dry_run,
+        None,
     )?;
     Ok(serde_json::to_string(&res)?)
 }
@@ -850,7 +852,7 @@ pub(crate) fn send_btc(
     let address = ptr_to_string(address);
     let amount = ptr_to_num(amount)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.send_btc(online, address, amount, fee_rate, skip_sync)?;
+    let res = wallet.send_btc(online, address, amount, fee_rate, skip_sync, None)?;
     Ok(res)
 }
 
@@ -869,7 +871,8 @@ pub(crate) fn send_btc_begin(
     let address = ptr_to_string(address);
     let amount = ptr_to_num(amount)?;
     let fee_rate = ptr_to_num(fee_rate)?;
-    let res = wallet.send_btc_begin(*online, address, amount, fee_rate, skip_sync, dry_run)?;
+    let res =
+        wallet.send_btc_begin(*online, address, amount, fee_rate, skip_sync, dry_run, None)?;
     Ok(res)
 }
 

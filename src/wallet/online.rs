@@ -1909,6 +1909,7 @@ pub trait WalletOnline: WalletOffline {
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
+        lock_time: Option<u32>,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         let change_addr = self.get_new_address()?.script_pubkey();
         let mut builder = self.bdk_wallet_mut().build_tx();
@@ -1919,6 +1920,17 @@ pub trait WalletOnline: WalletOffline {
             .manually_selected_only()
             .fee_rate(fee_rate)
             .ordering(bdk_wallet::tx_builder::TxOrdering::Untouched);
+        // When the caller pins a locktime (e.g. 0 for an LN funding tx that must
+        // be final), honor it; otherwise keep BDK's anti-fee-sniping default.
+        if let Some(height) = lock_time {
+            builder.nlocktime(
+                bdk_wallet::bitcoin::locktime::absolute::LockTime::from_height(height).map_err(
+                    |e| Error::Internal {
+                        details: e.to_string(),
+                    },
+                )?,
+            );
+        }
         for (script_buf, amount_sat) in witness_recipients {
             builder.add_recipient(script_buf.clone(), BdkAmount::from_sat(*amount_sat));
         }
@@ -1960,9 +1972,15 @@ pub trait WalletOnline: WalletOffline {
         all_inputs: &mut HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
+        lock_time: Option<u32>,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
-            break match self.prepare_psbt(all_inputs.clone(), witness_recipients, fee_rate) {
+            break match self.prepare_psbt(
+                all_inputs.clone(),
+                witness_recipients,
+                fee_rate,
+                lock_time,
+            ) {
                 Ok(res) => res,
                 Err(Error::InsufficientBitcoins { .. }) => {
                     let used_txos: Vec<Outpoint> =
@@ -2917,6 +2935,7 @@ pub trait WalletOnline: WalletOffline {
         runtime: &mut RgbRuntime,
         rejected: &mut HashSet<Opout>,
         dry_run: bool,
+        lock_time: Option<u32>,
     ) -> Result<PrepareTransferPsbtResult, Error> {
         // prepare BDK PSBT
         let mut all_inputs: HashSet<BdkOutPoint> = transfer_info_map
@@ -2933,6 +2952,7 @@ pub trait WalletOnline: WalletOffline {
             &mut all_inputs,
             witness_recipients,
             fee_rate_checked,
+            lock_time,
         )?;
         psbt.unsigned_tx.output[0].script_pubkey = ScriptBuf::new_op_return([]);
 
@@ -3002,6 +3022,7 @@ pub trait WalletOnline: WalletOffline {
         min_confirmations: u8,
         expiration_timestamp: Option<i64>,
         dry_run: bool,
+        lock_time: Option<u32>,
     ) -> Result<BeginOperationData, Error> {
         if recipient_map.is_empty() || recipient_map.values().any(|v| v.is_empty()) {
             return Err(Error::InvalidRecipientMap);
@@ -3185,6 +3206,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut runtime,
                 &mut rejected,
                 dry_run,
+                lock_time,
             )? {
                 PrepareTransferPsbtResult::Retry => continue,
                 PrepareTransferPsbtResult::Success(begin_operation_data) => {
@@ -3271,6 +3293,7 @@ pub trait WalletOnline: WalletOffline {
         fee_rate: u64,
         skip_sync: bool,
         dry_run: bool,
+        lock_time: Option<u32>,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -3303,6 +3326,17 @@ pub trait WalletOnline: WalletOffline {
             .unspendable(unspendable)
             .add_recipient(script_pubkey, BdkAmount::from_sat(amount))
             .fee_rate(fee_rate_checked);
+        // When the caller pins a locktime (e.g. 0 for an LN funding tx that must
+        // be final), honor it; otherwise keep BDK's anti-fee-sniping default.
+        if let Some(height) = lock_time {
+            tx_builder.nlocktime(
+                bdk_wallet::bitcoin::locktime::absolute::LockTime::from_height(height).map_err(
+                    |e| Error::Internal {
+                        details: e.to_string(),
+                    },
+                )?,
+            );
+        }
         if let Some(script) = change_script {
             tx_builder.drain_to(script);
         }
@@ -3448,6 +3482,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut runtime,
                 &mut rejected,
                 dry_run,
+                None,
             )? {
                 PrepareTransferPsbtResult::Retry => {
                     unreachable!("inflate transition has no retry logic")
@@ -3594,6 +3629,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut runtime,
                 &mut rejected,
                 dry_run,
+                None,
             )? {
                 PrepareTransferPsbtResult::Retry => {
                     unreachable!("burn transition has no retry logic")

@@ -318,7 +318,7 @@ fn cmd_send(state: &mut PeerState) {
     );
 
     println!("[..] Sending {amount} tokens to {recipient_id}...");
-    match wallet.send(online, recipient_map, true, 1, 0, None) {
+    match wallet.send(online, recipient_map, true, 1, 0, None, None) {
         Ok(result) => {
             println!("[OK] Sent! Txid: {}", result.txid);
         }

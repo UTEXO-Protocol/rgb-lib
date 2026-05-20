@@ -104,7 +104,7 @@ fn send_btc_change_reuses_address() {
     let mut rcv_wallet = get_test_wallet(false, None);
     let rcv_addr = rcv_wallet.get_address().unwrap();
     wallet
-        .send_btc(online, rcv_addr, 1000, FEE_RATE, false)
+        .send_btc(online, rcv_addr, 1000, FEE_RATE, false, None)
         .unwrap();
     mine(false);
 

@@ -9,7 +9,7 @@ fn success_common(wallet: &mut Wallet, online: Online, esplora: bool) {
         loop {
             let addr = test_get_address(wallet).to_string();
             if wallet
-                .send_btc(online, addr, amount, fee_rate, true)
+                .send_btc(online, addr, amount, fee_rate, true, None)
                 .is_err()
             {
                 attempts -= 1;
