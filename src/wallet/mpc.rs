@@ -250,6 +250,9 @@ impl WalletOnline for MpcWallet {
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
+        // MPC PSBTs are built manually with a final (zero) locktime, so they are
+        // always valid as LN funding txs; the caller-pinned locktime is not needed.
+        _lock_time: Option<u32>,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         // Get vanilla UTXOs for funding
         let vanilla_utxos = self.query_vanilla_utxos()?;
@@ -461,6 +464,9 @@ impl WalletOnline for MpcWallet {
         fee_rate: u64,
         skip_sync: bool,
         _dry_run: bool,
+        // MPC PSBTs are built manually with a final (zero) locktime, so they are
+        // always valid as LN funding txs; the caller-pinned locktime is not needed.
+        _lock_time: Option<u32>,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -905,6 +911,7 @@ impl MpcWallet {
             min_confirmations,
             expiration_timestamp.map(|t| t as i64),
             true,
+            None,
         )?;
         begin_op_data.psbt = self.mpc_sign_psbt(begin_op_data.psbt)?;
         let res = self.send_end_impl(&begin_op_data.psbt)?;
@@ -932,6 +939,7 @@ impl MpcWallet {
             min_confirmations,
             expiration_timestamp.map(|t| t as i64),
             dry_run,
+            None,
         )?;
         info!(self.logger(), "Send (begin) completed");
         Ok(SendBeginResult {
@@ -975,7 +983,7 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC...");
         self.check_online(online)?;
-        let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, true)?;
+        let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, true, None)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let res = self.send_btc_end_impl(&signed)?;
         info!(self.logger(), "Send BTC completed");
@@ -994,7 +1002,7 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
-        let res = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, dry_run)?;
+        let res = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, dry_run, None)?;
         info!(self.logger(), "Send BTC (begin) completed");
         Ok(res.to_string())
     }

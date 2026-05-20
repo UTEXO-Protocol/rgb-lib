@@ -140,6 +140,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     let v4 = rt
@@ -261,6 +262,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .expect("send");

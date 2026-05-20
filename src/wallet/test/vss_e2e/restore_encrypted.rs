@@ -63,6 +63,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     assert!(!op.txid.is_empty(), "expected txid after send");

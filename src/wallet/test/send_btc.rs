@@ -126,6 +126,7 @@ fn fail() {
         0,
         false,
         true,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_LOW));
 
@@ -137,6 +138,7 @@ fn fail() {
         u64::MAX,
         false,
         true,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_OVER));
 }
@@ -166,6 +168,7 @@ fn skip_sync() {
             amount,
             FEE_RATE,
             true,
+            None,
         )
         .unwrap();
     assert!(!txid_1.is_empty());
@@ -178,6 +181,7 @@ fn skip_sync() {
             amount,
             FEE_RATE,
             true,
+            None,
         )
         .unwrap();
     assert!(!txid_2.is_empty());
@@ -219,6 +223,7 @@ fn begin_reservation_interactions() {
             FEE_RATE,
             false,
             false,
+            None,
         )
         .unwrap();
     let unsigned_psbt = Psbt::from_str(&unsigned_psbt_str).unwrap();
@@ -295,6 +300,7 @@ fn begin_reservation_interactions() {
             FEE_RATE,
             false,
             true,
+            None,
         )
         .unwrap();
     let unsigned_psbt = Psbt::from_str(&unsigned_psbt_str).unwrap();
@@ -361,6 +367,7 @@ fn two_concurrent_begins_pick_disjoint_inputs() {
             FEE_RATE,
             true,
             false,
+            None,
         )
         .unwrap();
     let psbt_1 = Psbt::from_str(&psbt_1_str).unwrap();
@@ -379,6 +386,7 @@ fn two_concurrent_begins_pick_disjoint_inputs() {
             FEE_RATE,
             true,
             false,
+            None,
         )
         .unwrap();
     let psbt_2 = Psbt::from_str(&psbt_2_str).unwrap();
@@ -429,7 +437,7 @@ fn send_btc_end_twice() {
     // prepare PSBT
     let address = test_get_address(&mut wallet);
     let unsigned_psbt = wallet
-        .send_btc_begin(online, address, 1000, FEE_RATE, false, false)
+        .send_btc_begin(online, address, 1000, FEE_RATE, false, false, None)
         .unwrap();
     let signed_psbt = wallet.sign_psbt(unsigned_psbt, None).unwrap();
 

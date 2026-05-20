@@ -17,6 +17,7 @@ fn success() {
             FEE_RATE,
             false,
             false,
+            None,
         )
         .unwrap();
     let unsigned_psbt = Psbt::from_str(&unsigned_psbt_str).unwrap();
@@ -50,6 +51,7 @@ fn success() {
             FEE_RATE,
             true,
             false,
+            None,
         )
         .unwrap();
     let unsigned_psbt_2 = Psbt::from_str(&unsigned_psbt_2_str).unwrap();

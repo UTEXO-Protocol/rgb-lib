@@ -475,6 +475,7 @@ fn batch_fail() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap();
 

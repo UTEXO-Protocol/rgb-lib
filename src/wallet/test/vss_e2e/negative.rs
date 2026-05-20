@@ -152,6 +152,7 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     mine_blocks(false, 2);

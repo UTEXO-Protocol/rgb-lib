@@ -379,6 +379,7 @@ fn begin_reservation_interactions() {
             FEE_RATE,
             false,
             false,
+            None,
         )
         .unwrap();
     let reserved_set: HashSet<(String, u32)> = wallet

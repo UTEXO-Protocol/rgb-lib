@@ -649,6 +649,7 @@ pub(crate) fn test_send_result(
         FEE_RATE,
         MIN_CONFIRMATIONS,
         Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
+        None,
     )
 }
 
@@ -666,6 +667,7 @@ pub(crate) fn test_send_begin_result(
         MIN_CONFIRMATIONS,
         None,
         false,
+        None,
     )
 }
 
@@ -686,5 +688,5 @@ pub(crate) fn test_send_btc_result(
     address: &str,
     amount: u64,
 ) -> Result<String, Error> {
-    wallet.send_btc(online, address.to_string(), amount, FEE_RATE, false)
+    wallet.send_btc(online, address.to_string(), amount, FEE_RATE, false, None)
 }
