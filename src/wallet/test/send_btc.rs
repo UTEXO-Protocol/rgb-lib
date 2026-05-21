@@ -446,7 +446,15 @@ fn begin_end() {
     let bak_info_before = party.db_backup_info();
     let _psbt = party
         .wallet
-        .send_btc_begin(party.online, address.clone(), 1000, FEE_RATE, false, true, None)
+        .send_btc_begin(
+            party.online,
+            address.clone(),
+            1000,
+            FEE_RATE,
+            false,
+            true,
+            None,
+        )
         .unwrap();
     let bak_info_after = party.db_backup_info();
     assert_eq!(

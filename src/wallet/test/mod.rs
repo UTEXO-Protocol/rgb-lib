@@ -370,9 +370,9 @@ mod rust_only;
 mod send;
 mod send_btc;
 mod sign_psbt;
+mod sync;
 #[cfg(feature = "vss")]
 mod vss;
 #[cfg(feature = "vss")]
 mod vss_e2e;
-mod sync;
 mod witness_receive;

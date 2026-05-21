@@ -259,7 +259,6 @@ impl Wallet {
         info!(self.logger(), "Getting address...");
         let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
 
-
         let txn = self.database().begin_transaction()?;
         self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
@@ -1013,7 +1012,9 @@ impl Wallet {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run, lock_time)?;
+        let res = self.send_btc_begin_impl(
+            &txn, address, amount, fee_rate, skip_sync, dry_run, lock_time,
+        )?;
         if !dry_run {
             self.update_backup_info_with_op_idx(&txn, false, None)?;
         }

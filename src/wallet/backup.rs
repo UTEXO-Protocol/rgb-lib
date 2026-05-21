@@ -346,17 +346,17 @@ pub trait WalletBackup: WalletCore {
                 Ok(version) => {
                     info!(logger, "VSS auto-backup completed, version: {}", version);
                     // Update backup timestamp on success
-                    if let Ok(txn) = database.begin_transaction() {
-                        if let Ok(Some(backup_info)) = txn.get_backup_info() {
-                            let mut backup_info: DbBackupInfoActMod = backup_info.into();
-                            backup_info.last_backup_timestamp = sea_orm::ActiveValue::Set(
-                                time::OffsetDateTime::now_utc()
-                                    .unix_timestamp_nanos()
-                                    .to_string(),
-                            );
-                            let _ = txn.update_backup_info(&mut backup_info);
-                            let _ = txn.commit();
-                        }
+                    if let Ok(txn) = database.begin_transaction()
+                        && let Ok(Some(backup_info)) = txn.get_backup_info()
+                    {
+                        let mut backup_info: DbBackupInfoActMod = backup_info.into();
+                        backup_info.last_backup_timestamp = sea_orm::ActiveValue::Set(
+                            time::OffsetDateTime::now_utc()
+                                .unix_timestamp_nanos()
+                                .to_string(),
+                        );
+                        let _ = txn.update_backup_info(&mut backup_info);
+                        let _ = txn.commit();
                     }
                 }
                 Err(e) => {

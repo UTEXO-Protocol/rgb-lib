@@ -344,7 +344,7 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
-        self.update_backup_info(false)?;
+        self.update_backup_info_with_op_idx(txn, false, None)?;
         self.trigger_auto_backup();
 
         Ok(num_utxos_created)
@@ -538,7 +538,7 @@ pub trait WalletOnline: WalletOffline {
         }
 
         if transfers_changed {
-            self.update_backup_info(false)?;
+            self.update_backup_info_with_op_idx(txn, false, None)?;
             self.trigger_auto_backup();
         }
 
@@ -1051,7 +1051,9 @@ pub trait WalletOnline: WalletOffline {
                     "Proxy already NACKed consignment for {recipient_id}, failing transfer"
                 );
                 updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-                return Ok(Some(txn.update_batch_transfer(&mut updated_batch_transfer)?));
+                return Ok(Some(
+                    txn.update_batch_transfer(&mut updated_batch_transfer)?,
+                ));
             }
 
             // write consignment
@@ -1803,7 +1805,7 @@ pub trait WalletOnline: WalletOffline {
         }
 
         if refresh_result.transfers_changed() {
-            self.update_backup_info(false)?;
+            self.update_backup_info_with_op_idx(txn, false, None)?;
             self.trigger_auto_backup();
         }
 
@@ -3354,7 +3356,7 @@ pub trait WalletOnline: WalletOffline {
             )?
         };
 
-        self.update_backup_info(false)?;
+        self.update_backup_info_with_op_idx(txn, false, None)?;
         self.trigger_auto_backup();
 
         Ok(OperationResult {
@@ -3607,7 +3609,7 @@ pub trait WalletOnline: WalletOffline {
             ActiveValue::Set(Some(updated_known_circulating_supply.to_string()));
         txn.update_asset(&mut updated_asset)?;
 
-        self.update_backup_info(false)?;
+        self.update_backup_info_with_op_idx(txn, false, None)?;
         self.trigger_auto_backup();
 
         Ok(OperationResult {

@@ -1415,8 +1415,14 @@ impl SinglesigParty {
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn send_btc_result(&mut self, address: &str, amount: u64) -> Result<String, Error> {
-        self.wallet
-            .send_btc(self.online, address.to_string(), amount, FEE_RATE, false, None)
+        self.wallet.send_btc(
+            self.online,
+            address.to_string(),
+            amount,
+            FEE_RATE,
+            false,
+            None,
+        )
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1497,142 +1503,6 @@ pub(crate) fn test_go_online_result(
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_inflate(
-    wallet: &mut Wallet,
-    online: Online,
-    asset_id: &str,
-    inflation_amounts: &[u64],
-) -> OperationResult {
-    test_inflate_result(wallet, online, asset_id, inflation_amounts).unwrap()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_inflate_result(
-    wallet: &mut Wallet,
-    online: Online,
-    asset_id: &str,
-    inflation_amounts: &[u64],
-) -> Result<OperationResult, Error> {
-    wallet.inflate(
-        online,
-        asset_id.to_string(),
-        inflation_amounts.to_vec(),
-        FEE_RATE,
-        MIN_CONFIRMATIONS,
-    )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_inflate_begin(
-    wallet: &mut Wallet,
-    online: Online,
-    asset_id: &str,
-    inflation_amounts: &[u64],
-) -> String {
-    test_inflate_begin_result(wallet, online, asset_id, inflation_amounts)
-        .unwrap()
-        .psbt
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_inflate_begin_result(
-    wallet: &mut Wallet,
-    online: Online,
-    asset_id: &str,
-    inflation_amounts: &[u64],
-) -> Result<InflateBeginResult, Error> {
-    wallet.inflate_begin(
-        online,
-        asset_id.to_string(),
-        inflation_amounts.to_vec(),
-        FEE_RATE,
-        MIN_CONFIRMATIONS,
-        true,
-    )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_inflate_end_result(
-    wallet: &mut Wallet,
-    online: Online,
-    signed_psbt: &str,
-) -> Result<OperationResult, Error> {
-    wallet.inflate_end(online, signed_psbt.to_string())
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_uda(
-    wallet: &mut Wallet,
-    online: Online,
-    details: Option<&str>,
-    media_file_path: Option<&str>,
-    attachments_file_paths: Vec<&str>,
-) -> AssetUDA {
-    test_issue_asset_uda_result(
-        wallet,
-        online,
-        details,
-        media_file_path,
-        attachments_file_paths,
-    )
-    .unwrap()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_uda_result(
-    wallet: &mut Wallet,
-    online: Online,
-    details: Option<&str>,
-    media_file_path: Option<&str>,
-    attachments_file_paths: Vec<&str>,
-) -> Result<AssetUDA, Error> {
-    test_fail_transfers_all(wallet, online);
-    wallet.issue_asset_uda(
-        TICKER.to_string(),
-        NAME.to_string(),
-        details.map(|d| d.to_string()),
-        PRECISION,
-        media_file_path.map(|m| m.to_string()),
-        attachments_file_paths
-            .iter()
-            .map(|a| a.to_string())
-            .collect(),
-    )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_cfa(
-    wallet: &mut Wallet,
-    online: Online,
-    amounts: Option<&[u64]>,
-    file_path: Option<String>,
-) -> AssetCFA {
-    test_issue_asset_cfa_result(wallet, online, amounts, file_path).unwrap()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_cfa_result(
-    wallet: &mut Wallet,
-    online: Online,
-    amounts: Option<&[u64]>,
-    file_path: Option<String>,
-) -> Result<AssetCFA, Error> {
-    test_fail_transfers_all(wallet, online);
-    let amounts = if let Some(a) = amounts {
-        a.to_vec()
-    } else {
-        vec![AMOUNT]
-    };
-    wallet.issue_asset_cfa(
-        NAME.to_string(),
-        Some(DETAILS.to_string()),
-        PRECISION,
-        amounts,
-        file_path,
-    )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_issue_asset_nia(
     wallet: &mut Wallet,
     online: Online,
@@ -1654,47 +1524,6 @@ pub(crate) fn test_issue_asset_nia_result(
         vec![AMOUNT]
     };
     wallet.issue_asset_nia(TICKER.to_string(), NAME.to_string(), PRECISION, amounts)
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_ifa(
-    wallet: &mut Wallet,
-    online: Online,
-    amounts: Option<&[u64]>,
-    inflation_amounts: Option<&[u64]>,
-    reject_list_url: Option<String>,
-) -> AssetIFA {
-    test_issue_asset_ifa_result(wallet, online, amounts, inflation_amounts, reject_list_url)
-        .unwrap()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_issue_asset_ifa_result(
-    wallet: &mut Wallet,
-    online: Online,
-    amounts: Option<&[u64]>,
-    inflation_amounts: Option<&[u64]>,
-    reject_list_url: Option<String>,
-) -> Result<AssetIFA, Error> {
-    test_fail_transfers_all(wallet, online);
-    let amounts = if let Some(a) = amounts {
-        a.to_vec()
-    } else {
-        vec![AMOUNT]
-    };
-    let inflation_amounts = if let Some(a) = inflation_amounts {
-        a.to_vec()
-    } else {
-        vec![AMOUNT_INFLATION]
-    };
-    wallet.issue_asset_ifa(
-        TICKER.to_string(),
-        NAME.to_string(),
-        PRECISION,
-        amounts,
-        inflation_amounts,
-        reject_list_url,
-    )
 }
 
 pub(crate) fn test_list_assets(wallet: &Wallet, filter_asset_schemas: &[AssetSchema]) -> Assets {
@@ -1914,9 +1743,7 @@ pub(crate) fn test_send_btc_result(
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_fail_transfers_all(wallet: &mut Wallet, online: Online) {
-    wallet
-        .fail_transfers(online, None, false, false)
-        .unwrap();
+    wallet.fail_transfers(online, None, false, false).unwrap();
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1937,12 +1764,7 @@ fn wait_for_refresh_raw_wallet(
         target_set = t_ids.iter().copied().collect();
     }
     let check = || {
-        let result = wallet.refresh(
-            online,
-            asset_id.map(|a| a.to_string()),
-            vec![],
-            false,
-        );
+        let result = wallet.refresh(online, asset_id.map(|a| a.to_string()), vec![], false);
         if let Ok(refresh_res) = result {
             let mut non_fatal_error = false;
             refresh_res.iter().for_each(|(i, rt)| {

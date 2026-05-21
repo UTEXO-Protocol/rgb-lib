@@ -115,9 +115,9 @@ impl WalletOffline for MpcWallet {
         };
 
         if self.wallet_data().reuse_addresses {
-            let last = self.database().with_txn(|txn| {
-                txn.get_last_mpc_address(keychain_u8)
-            })?;
+            let last = self
+                .database()
+                .with_txn(|txn| txn.get_last_mpc_address(keychain_u8))?;
             if let Some(last) = last {
                 return parse_address_str(&last.address, self.bitcoin_network());
             }
@@ -228,11 +228,7 @@ impl WalletOnline for MpcWallet {
         Ok(())
     }
 
-    fn broadcast_psbt(
-        &mut self,
-        txn: &DbTxn,
-        signed_psbt: &Psbt,
-    ) -> Result<BdkTransaction, Error> {
+    fn broadcast_psbt(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<BdkTransaction, Error> {
         let tx = self.broadcast_tx(
             signed_psbt
                 .clone()
@@ -271,9 +267,9 @@ impl WalletOnline for MpcWallet {
         let vanilla_utxos = self.query_vanilla_utxos()?;
 
         // Collect the required colored inputs (already selected by RGB logic)
-        let colored_addrs = self.database().with_txn(|txn| {
-            txn.get_mpc_addresses_by_keychain(0)
-        })?;
+        let colored_addrs = self
+            .database()
+            .with_txn(|txn| txn.get_mpc_addresses_by_keychain(0))?;
         let mut selected_inputs: Vec<(OutPoint, TxOut)> = Vec::new();
 
         for addr in &colored_addrs {
@@ -672,7 +668,9 @@ impl MpcWallet {
     /// Returns (outpoint, txout, signing_key_id) tuples.
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn query_vanilla_utxos(&self) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
-        let addrs = self.database().with_txn(|txn| txn.get_mpc_addresses_by_keychain(1))?;
+        let addrs = self
+            .database()
+            .with_txn(|txn| txn.get_mpc_addresses_by_keychain(1))?;
         let mut all_utxos = Vec::new();
         for addr in &addrs {
             let script = ScriptBuf::from_hex(&addr.script_pubkey).map_err(|e| Error::Internal {
@@ -904,7 +902,8 @@ impl MpcWallet {
         info!(self.logger(), "Creating UTXOs...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let psbt = self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, true)?;
+        let psbt =
+            self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let res = self.create_utxos_end_impl(&txn, &signed)?;
         self.update_backup_info_with_op_idx(&txn, false, None)?;
@@ -927,7 +926,8 @@ impl MpcWallet {
         info!(self.logger(), "Creating UTXOs (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, dry_run)?;
+        let res =
+            self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, dry_run)?;
         if !dry_run {
             self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
@@ -1054,7 +1054,8 @@ impl MpcWallet {
         info!(self.logger(), "Sending BTC...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let psbt = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, None)?;
+        let psbt =
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, None)?;
         let signed = self.mpc_sign_psbt(psbt)?;
         let res = self.send_btc_end_impl(&txn, &signed)?;
         self.update_backup_info_with_op_idx(&txn, false, None)?;
@@ -1076,7 +1077,8 @@ impl MpcWallet {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run, None)?;
+        let res =
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run, None)?;
         if !dry_run {
             self.update_backup_info_with_op_idx(&txn, false, None)?;
         }

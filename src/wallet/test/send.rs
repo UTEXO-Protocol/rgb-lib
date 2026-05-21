@@ -7745,9 +7745,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
     ));
     wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
 
-    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint)
-        .unwrap()
-        .unwrap();
+    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint).unwrap().unwrap();
     assert!(!rcv_txo.pending_witness);
 }
 
@@ -7874,9 +7872,7 @@ fn offline_receiver_witness_restart_donation_true() {
     ));
     wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
 
-    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint)
-        .unwrap()
-        .unwrap();
+    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint).unwrap().unwrap();
     assert!(rcv_txo.exists);
     assert!(!rcv_txo.pending_witness);
 }

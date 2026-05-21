@@ -1233,7 +1233,7 @@ pub trait WalletOffline: WalletBackup {
         }
 
         if transfers_changed {
-            self.update_backup_info(false)?;
+            self.update_backup_info_with_op_idx(txn, false, None)?;
             self.trigger_auto_backup();
         }
 
