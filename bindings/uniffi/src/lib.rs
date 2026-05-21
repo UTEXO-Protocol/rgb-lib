@@ -20,9 +20,8 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, Error as RgbLibError, TransferStatus,
-    TransportType,
+    TransportType, WalletTransactionType,
     bdk_wallet::bitcoin::secp256k1::SecretKey,
-    WalletTransactionType,
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{

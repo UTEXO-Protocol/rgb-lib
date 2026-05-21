@@ -278,16 +278,6 @@ pub(crate) fn get_test_asset_transfer(wallet: &Wallet, batch_transfer_idx: i32) 
     user_driven_transfer
 }
 
-pub(crate) fn get_test_colorings(wallet: &Wallet, asset_transfer_idx: i32) -> Vec<DbColoring> {
-    let txn = wallet.database().begin_transaction().unwrap();
-    let colorings = txn.iter_colorings().unwrap();
-    txn.commit().unwrap();
-    colorings
-        .into_iter()
-        .filter(|c| c.asset_transfer_idx == asset_transfer_idx)
-        .collect()
-}
-
 pub(crate) fn get_test_transfer_recipient(wallet: &Wallet, recipient_id: &str) -> DbTransfer {
     let txn = wallet.database().begin_transaction().unwrap();
     let all_transfers = txn.iter_transfers().unwrap();
@@ -312,61 +302,6 @@ pub(crate) fn get_test_transfer_sender(
     let transfer = transfers.next().unwrap();
     assert!(transfers.next().is_none());
     (transfer, asset_transfer, batch_transfer)
-}
-
-pub(crate) fn get_test_transfers_sender(
-    wallet: &Wallet,
-    txid: &str,
-) -> (
-    HashMap<String, Vec<DbTransfer>>,
-    Vec<DbAssetTransfer>,
-    DbBatchTransfer,
-) {
-    let batch_transfers = get_test_batch_transfers(wallet, txid);
-    assert_eq!(batch_transfers.len(), 1);
-    let batch_transfer = batch_transfers.into_iter().next().unwrap();
-    let asset_transfers = get_test_asset_transfers(wallet, batch_transfer.idx);
-    let mut transfers: HashMap<String, Vec<DbTransfer>> = HashMap::new();
-    for asset_transfer in &asset_transfers {
-        let asset_id = asset_transfer.asset_id.clone().unwrap();
-        let transfers_for_asset = get_test_transfers(wallet, asset_transfer.idx);
-        transfers.insert(asset_id, transfers_for_asset.collect());
-    }
-    (transfers, asset_transfers, batch_transfer)
-}
-
-pub(crate) fn get_test_transfer_data(
-    wallet: &Wallet,
-    transfer: &DbTransfer,
-) -> (TransferData, DbAssetTransfer) {
-    let db_data = test_get_db_data(wallet, false);
-    let (asset_transfer, batch_transfer) =
-        transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
-    let transfer_data = wallet
-        .get_transfer_data(
-            transfer,
-            &asset_transfer,
-            &batch_transfer,
-            &db_data.txos,
-            &db_data.colorings,
-        )
-        .unwrap();
-    (transfer_data, asset_transfer)
-}
-
-pub(crate) fn get_test_transfer_related(
-    wallet: &Wallet,
-    transfer: &DbTransfer,
-) -> (DbAssetTransfer, DbBatchTransfer) {
-    let db_data = test_get_db_data(wallet, false);
-    transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn list_test_unspents(wallet: &mut Wallet, msg: &str) -> Vec<Unspent> {
-    let unspents = test_list_unspents(wallet, None, false);
-    print_unspents(&unspents, msg);
-    unspents
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -444,28 +379,6 @@ pub(crate) fn restart_test_wallet(
         .go_online(test_go_online_options(None))
         .expect("go_online after recreate failed");
     (wallet, online)
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn wait_for_btc_balance(
-    wallet: &mut Wallet,
-    online: Online,
-    expected_balance: &BtcBalance,
-) {
-    println!("waiting for BTC balance");
-    let mut current_balance = test_get_btc_balance(wallet, online);
-    let check = || {
-        current_balance = test_get_btc_balance(wallet, online);
-        if &current_balance == expected_balance {
-            return true;
-        }
-        false
-    };
-    if !wait_for_function(check, 10, 500) {
-        println!("current balance: {current_balance:?}");
-        println!("expected balance: {expected_balance:?}");
-        panic!("BTC balance is not becoming the expected one");
-    }
 }
 
 pub(crate) fn wait_for_function<F>(mut func: F, timeout_secs: u8, interval_ms: u16) -> bool

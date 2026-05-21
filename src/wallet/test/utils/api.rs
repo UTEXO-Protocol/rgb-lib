@@ -1526,18 +1526,6 @@ pub(crate) fn test_issue_asset_nia_result(
     wallet.issue_asset_nia(TICKER.to_string(), NAME.to_string(), PRECISION, amounts)
 }
 
-pub(crate) fn test_list_assets(wallet: &Wallet, filter_asset_schemas: &[AssetSchema]) -> Assets {
-    wallet.list_assets(filter_asset_schemas.to_vec()).unwrap()
-}
-
-pub(crate) fn test_list_transactions(
-    wallet: &mut impl RgbWalletOpsOffline,
-    online: Option<Online>,
-) -> Vec<Transaction> {
-    let skip_sync = online.is_none();
-    wallet.list_transactions(online, skip_sync).unwrap()
-}
-
 pub(crate) fn test_list_transfers(
     wallet: &impl RgbWalletOpsOffline,
     asset_id: Option<&str>,
@@ -1585,13 +1573,6 @@ pub(crate) fn test_refresh_all(wallet: &mut Wallet, online: Online) -> bool {
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_refresh_asset(wallet: &mut Wallet, online: Online, asset_id: &str) -> bool {
-    test_refresh_result(wallet, online, Some(asset_id), &[])
-        .unwrap()
-        .transfers_changed()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_refresh_result(
     wallet: &mut impl RgbWalletOpsOnline,
     online: Online,
@@ -1604,53 +1585,6 @@ pub(crate) fn test_refresh_result(
         filter.to_vec(),
         false,
     )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_save_new_asset(
-    wallet: &mut Wallet,
-    online: Online,
-    rcv_wallet: &mut Wallet,
-    asset_id: &String,
-    assignment: Assignment,
-) {
-    let receive_data = test_witness_receive(rcv_wallet);
-    let recipient_map = HashMap::from([(
-        asset_id.to_owned(),
-        vec![Recipient {
-            assignment,
-            recipient_id: receive_data.recipient_id.clone(),
-            witness_data: Some(WitnessData {
-                amount_sat: 1000,
-                blinding: None,
-            }),
-            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
-        }],
-    )]);
-    let txid = test_send(wallet, online, &recipient_map);
-    assert!(!txid.is_empty());
-
-    let consignment_path = wallet.get_send_consignment_path(asset_id, &txid);
-    let consignment = RgbTransfer::load_file(consignment_path).unwrap();
-
-    let contract = consignment.clone().into_contract();
-    let asset_schema: AssetSchema = consignment.schema_id().try_into().unwrap();
-    let validation_config = ValidationConfig {
-        chain_net: rcv_wallet.chain_net(),
-        trusted_typesystem: asset_schema.types(),
-        ..Default::default()
-    };
-    let mut runtime = rcv_wallet.rgb_runtime().unwrap();
-    let valid_contract = contract
-        .clone()
-        .validate(&DumbResolver, &validation_config)
-        .unwrap();
-    runtime
-        .import_contract(valid_contract, rcv_wallet.blockchain_resolver())
-        .unwrap();
-    drop(runtime);
-
-    rcv_wallet.save_new_asset(consignment, txid).unwrap();
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1699,44 +1633,6 @@ pub(crate) fn test_send_result(
         Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
         None,
     )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_send_begin_result(
-    wallet: &mut Wallet,
-    online: Online,
-    recipient_map: &HashMap<String, Vec<Recipient>>,
-) -> Result<SendBeginResult, Error> {
-    wallet.send_begin(
-        online,
-        recipient_map.clone(),
-        false,
-        FEE_RATE,
-        MIN_CONFIRMATIONS,
-        None,
-        false,
-        None,
-    )
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_send_btc(
-    wallet: &mut Wallet,
-    online: Online,
-    address: &str,
-    amount: u64,
-) -> String {
-    test_send_btc_result(wallet, online, address, amount).unwrap()
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_send_btc_result(
-    wallet: &mut Wallet,
-    online: Online,
-    address: &str,
-    amount: u64,
-) -> Result<String, Error> {
-    wallet.send_btc(online, address.to_string(), amount, FEE_RATE, false, None)
 }
 
 // Legacy free-function helpers used by older integration tests (e.g. offline_receiver_* in send.rs).
@@ -1941,11 +1837,6 @@ pub(crate) fn test_create_utxos(
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_create_utxos_default(wallet: &mut Wallet, online: Online) {
     test_create_utxos(wallet, online, false, None, None, FEE_RATE, None);
-}
-
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) fn test_get_btc_balance(wallet: &mut Wallet, online: Online) -> BtcBalance {
-    wallet.get_btc_balance(Some(online), false).unwrap()
 }
 
 pub(crate) fn test_blind_receive_result(wallet: &mut Wallet) -> Result<ReceiveData, Error> {
