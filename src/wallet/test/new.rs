@@ -146,25 +146,27 @@ fn mainnet_esplora_success() {
 
     let bitcoin_network = BitcoinNetwork::Mainnet;
     let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
-    let mut wallet = Wallet::new(
-        WalletData {
-            data_dir: get_test_data_dir_string(),
-            bitcoin_network,
-            database_type: DatabaseType::Sqlite,
-            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-            supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
-            reuse_addresses: false,
-        },
-        SinglesigKeys::from_keys(&keys, None),
-    )
-    .unwrap();
+    let mut party = offline_party!(
+        Wallet::new(
+            WalletData {
+                data_dir: get_test_data_dir_string(),
+                bitcoin_network,
+                database_type: DatabaseType::Sqlite,
+                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+                supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+                reuse_addresses: false,
+            },
+            SinglesigKeys::from_keys(&keys, None),
+        )
+        .unwrap()
+    );
 
-    check_wallet(&wallet, bitcoin_network, None);
+    check_wallet(&party, bitcoin_network, None);
     // UTEXO Mainnet Esplora (Hetzner)
     let indexer_url = "https://esplora-mainnet.utexo.com";
-    test_go_online(&mut wallet, false, Some(indexer_url));
-    assert!(!wallet.watch_only());
-    assert_eq!(wallet.get_wallet_data().bitcoin_network, bitcoin_network);
+    party.go_online(false, Some(indexer_url));
+    assert!(!party.wallet.watch_only());
+    assert_eq!(party.get_wallet_data().bitcoin_network, bitcoin_network);
 }
 
 #[cfg(feature = "electrum")]
@@ -216,6 +218,7 @@ fn mainnet_success_esplora() {
                 max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
                 // IFA not supported on mainnet
                 supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+                reuse_addresses: false,
             },
             SinglesigKeys::from_keys(&keys, None),
         )

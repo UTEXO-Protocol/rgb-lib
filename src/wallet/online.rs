@@ -941,10 +941,7 @@ pub trait WalletOnline: WalletOffline {
                             "Pre-existing NACK found when trying to ACK, failing transfer"
                         );
                         updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-                        return Ok(Some(
-                            self.database()
-                                .update_batch_transfer(updated_batch_transfer)?,
-                        ));
+                        return Ok(Some(txn.update_batch_transfer(updated_batch_transfer)?));
                     }
                     error!(self.logger(), "Proxy error posting ACK: {}", err.message);
                     return Err(Error::Proxy {
@@ -1054,10 +1051,7 @@ pub trait WalletOnline: WalletOffline {
                     "Proxy already NACKed consignment for {recipient_id}, failing transfer"
                 );
                 updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
-                return Ok(Some(
-                    self.database()
-                        .update_batch_transfer(&mut updated_batch_transfer)?,
-                ));
+                return Ok(Some(txn.update_batch_transfer(&mut updated_batch_transfer)?));
             }
 
             // write consignment
@@ -3788,7 +3782,7 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
         let outcome =
             self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
         if outcome.transfers_changed {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Fail transfers completed");
@@ -3847,7 +3841,7 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
         }
         let res = self.refresh_impl(&txn, asset_id, filter, skip_sync)?;
         if res.transfers_changed() {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Refresh completed");

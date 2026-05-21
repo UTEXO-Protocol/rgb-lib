@@ -236,10 +236,10 @@ pub(crate) fn compare_test_directories(src: &Path, dst: &Path, skip: &[&str]) {
 }
 
 pub(crate) fn get_test_batch_transfers(wallet: &Wallet, txid: &str) -> Vec<DbBatchTransfer> {
-    wallet
-        .database()
-        .iter_batch_transfers()
-        .unwrap()
+    let txn = wallet.database().begin_transaction().unwrap();
+    let batch_transfers = txn.iter_batch_transfers().unwrap();
+    txn.commit().unwrap();
+    batch_transfers
         .into_iter()
         .filter(|b| b.txid == Some(txid.to_string()))
         .collect()
@@ -249,10 +249,10 @@ pub(crate) fn get_test_asset_transfers(
     wallet: &Wallet,
     batch_transfer_idx: i32,
 ) -> Vec<DbAssetTransfer> {
-    wallet
-        .database()
-        .iter_asset_transfers()
-        .unwrap()
+    let txn = wallet.database().begin_transaction().unwrap();
+    let asset_transfers = txn.iter_asset_transfers().unwrap();
+    txn.commit().unwrap();
+    asset_transfers
         .into_iter()
         .filter(|at| at.batch_transfer_idx == batch_transfer_idx)
         .collect()
@@ -262,10 +262,10 @@ pub(crate) fn get_test_transfers(
     wallet: &Wallet,
     asset_transfer_idx: i32,
 ) -> impl Iterator<Item = DbTransfer> {
-    wallet
-        .database()
-        .iter_transfers()
-        .unwrap()
+    let txn = wallet.database().begin_transaction().unwrap();
+    let transfers = txn.iter_transfers().unwrap();
+    txn.commit().unwrap();
+    transfers
         .into_iter()
         .filter(move |t| t.asset_transfer_idx == asset_transfer_idx)
 }
@@ -279,20 +279,20 @@ pub(crate) fn get_test_asset_transfer(wallet: &Wallet, batch_transfer_idx: i32) 
 }
 
 pub(crate) fn get_test_colorings(wallet: &Wallet, asset_transfer_idx: i32) -> Vec<DbColoring> {
-    wallet
-        .database()
-        .iter_colorings()
-        .unwrap()
+    let txn = wallet.database().begin_transaction().unwrap();
+    let colorings = txn.iter_colorings().unwrap();
+    txn.commit().unwrap();
+    colorings
         .into_iter()
         .filter(|c| c.asset_transfer_idx == asset_transfer_idx)
         .collect()
 }
 
 pub(crate) fn get_test_transfer_recipient(wallet: &Wallet, recipient_id: &str) -> DbTransfer {
-    let mut transfers = wallet
-        .database()
-        .iter_transfers()
-        .unwrap()
+    let txn = wallet.database().begin_transaction().unwrap();
+    let all_transfers = txn.iter_transfers().unwrap();
+    txn.commit().unwrap();
+    let mut transfers = all_transfers
         .into_iter()
         .filter(|t| t.recipient_id == Some(recipient_id.to_string()) && t.incoming);
     let transfer = transfers.next().unwrap();
@@ -339,10 +339,9 @@ pub(crate) fn get_test_transfer_data(
     wallet: &Wallet,
     transfer: &DbTransfer,
 ) -> (TransferData, DbAssetTransfer) {
-    let db_data = wallet.database().get_db_data(false).unwrap();
-    let (asset_transfer, batch_transfer) = transfer
-        .related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
-        .unwrap();
+    let db_data = test_get_db_data(wallet, false);
+    let (asset_transfer, batch_transfer) =
+        transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
     let transfer_data = wallet
         .get_transfer_data(
             transfer,
@@ -359,10 +358,8 @@ pub(crate) fn get_test_transfer_related(
     wallet: &Wallet,
     transfer: &DbTransfer,
 ) -> (DbAssetTransfer, DbBatchTransfer) {
-    let db_data = wallet.database().get_db_data(false).unwrap();
-    transfer
-        .related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
-        .unwrap()
+    let db_data = test_get_db_data(wallet, false);
+    transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]

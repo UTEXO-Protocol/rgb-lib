@@ -1387,6 +1387,7 @@ impl SinglesigParty {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
+            None,
         )
     }
 
@@ -1403,6 +1404,7 @@ impl SinglesigParty {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
     }
 
@@ -1414,7 +1416,7 @@ impl SinglesigParty {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn send_btc_result(&mut self, address: &str, amount: u64) -> Result<String, Error> {
         self.wallet
-            .send_btc(self.online, address.to_string(), amount, FEE_RATE, false)
+            .send_btc(self.online, address.to_string(), amount, FEE_RATE, false, None)
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1453,6 +1455,7 @@ impl SinglesigParty {
                 fee_rate,
                 MIN_CONFIRMATIONS,
                 expiration_timestamp,
+                None,
             )
             .unwrap()
     }
@@ -1905,4 +1908,261 @@ pub(crate) fn test_send_btc_result(
     amount: u64,
 ) -> Result<String, Error> {
     wallet.send_btc(online, address.to_string(), amount, FEE_RATE, false, None)
+}
+
+// Legacy free-function helpers used by older integration tests (e.g. offline_receiver_* in send.rs).
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_fail_transfers_all(wallet: &mut Wallet, online: Online) {
+    wallet
+        .fail_transfers(online, None, false, false)
+        .unwrap();
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn wait_for_refresh_raw_wallet(
+    wallet: &mut Wallet,
+    online: Online,
+    asset_id: Option<&str>,
+    transfer_ids: Option<&[i32]>,
+) {
+    println!(
+        "waiting for refresh ({})",
+        wallet.get_wallet_data().data_dir
+    );
+    let mut seen = HashSet::new();
+    let mut target_set = HashSet::new();
+    if let Some(t_ids) = transfer_ids {
+        assert!(!t_ids.is_empty());
+        target_set = t_ids.iter().copied().collect();
+    }
+    let check = || {
+        let result = wallet.refresh(
+            online,
+            asset_id.map(|a| a.to_string()),
+            vec![],
+            false,
+        );
+        if let Ok(refresh_res) = result {
+            let mut non_fatal_error = false;
+            refresh_res.iter().for_each(|(i, rt)| {
+                if let Some(ref e) = rt.failure {
+                    eprintln!("refresh of {i} failure: {e} ({e:?})");
+                    match e {
+                        Error::Internal { details } => {
+                            println!("refresh of {i} internal error: {e}, details: {details}");
+                            non_fatal_error = true;
+                        }
+                        Error::InvalidTxid => {
+                            println!("refresh of {i} invalid TXID: {e}");
+                            non_fatal_error = true;
+                        }
+                        Error::Network { details } => {
+                            println!("refresh of {i} network error: {e}, details: {details}");
+                            non_fatal_error = true;
+                        }
+                        _ => panic!("refresh of {i} fatal error: {e}"),
+                    }
+                }
+            });
+            if non_fatal_error {
+                return false;
+            }
+            if transfer_ids.is_some() {
+                for (id, rt) in refresh_res {
+                    if rt.updated_status.is_some() && target_set.contains(&id) {
+                        seen.insert(id);
+                    }
+                }
+                if seen == target_set {
+                    return true;
+                }
+            } else if refresh_res.transfers_changed() {
+                return true;
+            }
+        } else {
+            eprintln!("refresh error: {result:?}");
+            return false;
+        };
+        false
+    };
+    if !wait_for_function(check, 10, 500) {
+        panic!("transfer(s) are not refreshing");
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn wait_for_refresh(
+    wallet: &mut Wallet,
+    online: Online,
+    asset_id: Option<&str>,
+    transfer_ids: Option<&[i32]>,
+) {
+    wait_for_refresh_raw_wallet(wallet, online, asset_id, transfer_ids);
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn check_test_transfer_status_sender(
+    wallet: &Wallet,
+    txid: &str,
+    expected_status: TransferStatus,
+) -> bool {
+    let batch_transfers = get_test_batch_transfers(wallet, txid);
+    assert_eq!(batch_transfers.len(), 1);
+    let batch_transfer = &batch_transfers[0];
+    println!(
+        "send with txid {} is in status {:?}",
+        txid, &batch_transfer.status
+    );
+    batch_transfer.status == expected_status
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn check_test_transfer_status_recipient(
+    wallet: &Wallet,
+    recipient_id: &str,
+    expected_status: TransferStatus,
+) -> bool {
+    let transfer = get_test_transfer_recipient(wallet, recipient_id);
+    let db_data = test_get_db_data(wallet, false);
+    let (asset_transfer, batch_transfer) =
+        transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
+    let transfer_data = wallet
+        .get_transfer_data(
+            &transfer,
+            &asset_transfer,
+            &batch_transfer,
+            &db_data.txos,
+            &db_data.colorings,
+        )
+        .unwrap();
+    println!(
+        "receive with recipient_id {} is in status {:?}",
+        recipient_id, &transfer_data.status
+    );
+    transfer_data.status == expected_status
+}
+
+pub(crate) fn test_get_asset_balance(wallet: &Wallet, asset_id: &str) -> Balance {
+    wallet.get_asset_balance(asset_id.to_string()).unwrap()
+}
+
+pub(crate) fn test_get_asset_balance_result(
+    wallet: &Wallet,
+    asset_id: &str,
+) -> Result<Balance, Error> {
+    wallet.get_asset_balance(asset_id.to_string())
+}
+
+pub(crate) fn test_blind_receive(wallet: &mut Wallet) -> ReceiveData {
+    wallet
+        .blind_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap()
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_witness_receive(wallet: &mut Wallet) -> ReceiveData {
+    wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap()
+}
+
+pub(crate) fn test_get_address(wallet: &mut Wallet) -> String {
+    wallet.get_address().unwrap()
+}
+
+pub(crate) fn test_get_wallet_dir(wallet: &Wallet) -> std::path::PathBuf {
+    wallet.get_wallet_dir()
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_create_utxos(
+    wallet: &mut Wallet,
+    online: Online,
+    up_to: bool,
+    num: Option<u8>,
+    size: Option<u32>,
+    fee_rate: u64,
+    expected: Option<u8>,
+) {
+    let unspents = wallet.list_unspents(Some(online), false, false).unwrap();
+    let colorable_before = unspents.iter().filter(|u| u.utxo.colorable).count();
+    let expected = expected.unwrap_or(num.unwrap_or(UTXO_NUM));
+    wallet
+        .create_utxos(online, up_to, num, size, fee_rate, false)
+        .unwrap();
+    let check = || {
+        let unspents = wallet.list_unspents(Some(online), false, false).unwrap();
+        let colorable = unspents.iter().filter(|u| u.utxo.colorable).count();
+        (colorable - colorable_before) == expected as usize
+    };
+    if !wait_for_function(check, 10, 500) {
+        panic!(
+            "created utxo number ({}) didn't match the expected one ({expected})",
+            num.unwrap_or(UTXO_NUM)
+        );
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_create_utxos_default(wallet: &mut Wallet, online: Online) {
+    test_create_utxos(wallet, online, false, None, None, FEE_RATE, None);
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_get_btc_balance(wallet: &mut Wallet, online: Online) -> BtcBalance {
+    wallet.get_btc_balance(Some(online), false).unwrap()
+}
+
+pub(crate) fn test_blind_receive_result(wallet: &mut Wallet) -> Result<ReceiveData, Error> {
+    wallet.blind_receive(
+        None,
+        Assignment::Any,
+        Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+        TRANSPORT_ENDPOINTS.clone(),
+        MIN_CONFIRMATIONS,
+    )
+}
+
+pub(crate) fn test_get_db_data(wallet: &Wallet, empty_transfers: bool) -> DbData {
+    let txn = wallet.database().begin_transaction().unwrap();
+    let data = txn.get_db_data(empty_transfers).unwrap();
+    txn.commit().unwrap();
+    data
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn test_iter_pending_witness_scripts(
+    wallet: &Wallet,
+) -> Result<Vec<DbPendingWitnessScript>, Error> {
+    let txn = wallet.database().begin_transaction()?;
+    let r = txn.iter_pending_witness_scripts()?;
+    txn.commit()?;
+    Ok(r)
+}
+
+pub(crate) fn test_iter_txos(wallet: &Wallet) -> Result<Vec<DbTxo>, Error> {
+    let txn = wallet.database().begin_transaction()?;
+    let r = txn.iter_txos()?;
+    txn.commit()?;
+    Ok(r)
+}
+
+pub(crate) fn test_get_txo(wallet: &Wallet, outpoint: &Outpoint) -> Result<Option<DbTxo>, Error> {
+    let txn = wallet.database().begin_transaction()?;
+    let r = txn.get_txo(outpoint)?;
+    txn.commit()?;
+    Ok(r)
 }

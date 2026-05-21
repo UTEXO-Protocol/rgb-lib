@@ -672,7 +672,7 @@ impl Wallet {
             Some(valid_transfer),
         )?;
 
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
 

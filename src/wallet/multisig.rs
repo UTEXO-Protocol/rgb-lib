@@ -352,7 +352,7 @@ impl RgbWalletOpsOnline for MultisigWallet {
         let outcome =
             self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
         if outcome.transfers_changed {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Fail transfers completed");
@@ -1206,7 +1206,7 @@ impl MultisigWallet {
         self.check_is_cosigner()?;
         let address = self.get_new_addresses(KeychainKind::Internal, 1)?;
         let txn = self.database().begin_transaction()?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Get address completed");
@@ -1535,7 +1535,7 @@ impl MultisigWallet {
         let batch_transfer_idx =
             self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
 
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
 
         self.mark_operation_as_processed(&txn, response.operation_idx)?;
@@ -1757,7 +1757,7 @@ impl MultisigWallet {
         };
 
         self.import_and_save_contract(txn, &issue_data, &mut runtime)?;
-        self.update_backup_info(txn, false)?;
+        self.update_backup_info_with_op_idx(txn, false, None)?;
         self.trigger_auto_backup();
 
         Ok(asset_id)
@@ -1916,7 +1916,7 @@ impl MultisigWallet {
         }
 
         let txn = self.database().begin_transaction()?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
 
         txn.commit()?;
@@ -2008,7 +2008,7 @@ impl MultisigWallet {
                 H::reconstruct_transfer_directory(self, &txid, files)?;
                 let txn = self.database().begin_transaction()?;
                 let txid = H::finalize_and_execute(&txn, self, &combined_psbt)?;
-                self.update_backup_info(&txn, false)?;
+                self.update_backup_info_with_op_idx(&txn, false, None)?;
                 self.mark_operation_as_processed(&txn, op.operation_idx)?;
                 txn.commit()?;
                 let status = Self::build_voting_status(op, op.my_response)?;
@@ -2136,7 +2136,7 @@ impl MultisigWallet {
         let operation = self.process_operation(&operation_response)?;
 
         let txn = self.database().begin_transaction()?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Responding to operation...");
@@ -2236,7 +2236,7 @@ impl MultisigWallet {
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
-        let psbt = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true)?;
+        let psbt = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, None)?;
         let res = self.post_operation(OperationType::SendBtc, PostData::Psbt(psbt))?;
         self.trigger_auto_backup();
         txn.commit()?;

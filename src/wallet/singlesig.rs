@@ -261,7 +261,7 @@ impl Wallet {
 
 
         let txn = self.database().begin_transaction()?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
 
         txn.commit()?;
@@ -338,7 +338,7 @@ impl Wallet {
             return Err(Error::CannotAbortPendingVanillaTx);
         }
         txn.del_wallet_transaction(wt.idx)?; // relies on cascade to delete reserved txos
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Abort pending vanilla TX completed");
         Ok(())
@@ -374,7 +374,7 @@ impl Wallet {
         let txn = self.database().begin_transaction()?;
         let issue_data = self.create_nia_contract(&txn, ticker, name, precision, amounts)?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Issue asset NIA completed");
         Ok(res)
@@ -409,7 +409,7 @@ impl Wallet {
             attachments_file_paths,
         )?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Issue asset UDA completed");
         self.trigger_auto_backup();
@@ -440,7 +440,7 @@ impl Wallet {
         let issue_data =
             self.create_cfa_contract(&txn, name, details, precision, amounts, file_path)?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Issue asset CFA completed");
         Ok(res)
@@ -478,7 +478,7 @@ impl Wallet {
             reject_list_url,
         )?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Issue asset IFA completed");
         Ok(res)
@@ -531,7 +531,7 @@ impl Wallet {
         )?;
         let batch_transfer_idx =
             self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Blind receive completed");
@@ -590,7 +590,7 @@ impl Wallet {
         )?;
         let batch_transfer_idx =
             self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Witness receive completed");
@@ -641,7 +641,7 @@ impl Wallet {
             self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, true)?;
         self.sign_psbt_impl(&mut psbt, None)?;
         let res = self.create_utxos_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Create UTXOs completed");
@@ -691,7 +691,7 @@ impl Wallet {
         let res =
             self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, dry_run)?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Create UTXOs (begin) completed");
@@ -712,7 +712,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let res = self.create_utxos_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Create UTXOs (end) completed");
         Ok(res)
@@ -747,7 +747,7 @@ impl Wallet {
         let mut psbt = self.drain_to_begin_impl(&txn, address, fee_rate, true)?;
         self.sign_psbt_impl(&mut psbt, None)?;
         let tx = self.drain_to_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Drain completed");
@@ -783,7 +783,7 @@ impl Wallet {
         let txn = self.database().begin_transaction()?;
         let psbt = self.drain_to_begin_impl(&txn, address, fee_rate, dry_run)?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Drain (begin) completed");
@@ -804,7 +804,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let tx = self.drain_to_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Drain (end) completed");
@@ -843,7 +843,7 @@ impl Wallet {
         )?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.send_end_impl(&txn, &begin_op_data.psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Send completed");
@@ -912,7 +912,7 @@ impl Wallet {
             lock_time,
         )?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Send (begin) completed");
@@ -951,7 +951,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let res = self.send_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Send (end) completed");
@@ -978,10 +978,10 @@ impl Wallet {
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let mut psbt =
-            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true)?;
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, lock_time)?;
         self.sign_psbt_impl(&mut psbt, None)?;
         let res = self.send_btc_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Send BTC completed");
         Ok(res)
@@ -1013,9 +1013,9 @@ impl Wallet {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run)?;
+        let res = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run, lock_time)?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Send BTC (begin) completed");
@@ -1036,7 +1036,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let res = self.send_btc_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Send BTC (end) completed");
         Ok(res)
@@ -1073,7 +1073,7 @@ impl Wallet {
         )?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.inflate_end_impl(&txn, &begin_op_data.psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Inflate completed");
@@ -1127,7 +1127,7 @@ impl Wallet {
             dry_run,
         )?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         self.trigger_auto_backup();
         txn.commit()?;
@@ -1166,7 +1166,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let res = self.inflate_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         self.trigger_auto_backup();
         txn.commit()?;
         info!(self.logger(), "Inflate (end) completed");
@@ -1195,7 +1195,7 @@ impl Wallet {
             self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, true)?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.burn_end_impl(&txn, &begin_op_data.psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Burn completed");
         Ok(res)
@@ -1233,7 +1233,7 @@ impl Wallet {
         let begin_operation_data =
             self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, dry_run)?;
         if !dry_run {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Burn (begin) completed");
@@ -1270,7 +1270,7 @@ impl Wallet {
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
         let res = self.burn_end_impl(&txn, &psbt)?;
-        self.update_backup_info(&txn, false)?;
+        self.update_backup_info_with_op_idx(&txn, false, None)?;
         txn.commit()?;
         info!(self.logger(), "Burn (end) completed");
         Ok(res)

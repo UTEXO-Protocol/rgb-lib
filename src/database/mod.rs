@@ -904,8 +904,8 @@ impl DbTxn {
     pub(crate) fn set_mpc_address(
         &self,
         addr: mpc_address::ActiveModel,
-    ) -> Result<i32, InternalError> {
-        let res = block_on(MpcAddress::insert(addr).exec(self.get_connection()))?;
+    ) -> Result<i32, Error> {
+        let res = block_on(MpcAddress::insert(addr).exec(self.inner()))?;
         Ok(res.last_insert_id)
     }
 
@@ -913,11 +913,11 @@ impl DbTxn {
     pub(crate) fn get_mpc_addresses_by_keychain(
         &self,
         keychain: u8,
-    ) -> Result<Vec<mpc_address::Model>, InternalError> {
+    ) -> Result<Vec<mpc_address::Model>, Error> {
         Ok(block_on(
             mpc_address::Entity::find()
                 .filter(mpc_address::Column::Keychain.eq(keychain))
-                .all(self.get_connection()),
+                .all(self.inner()),
         )?)
     }
 
@@ -929,9 +929,8 @@ impl DbTxn {
         block_on(
             mpc_address::Entity::find()
                 .filter(mpc_address::Column::ScriptPubkey.eq(script_hex))
-                .one(self.get_connection()),
-        )
-        .map_err(InternalError::from)?
+                .one(self.inner()),
+        )?
         .ok_or(Error::Internal {
             details: format!("MPC address not found for script {script_hex}"),
         })
@@ -941,24 +940,38 @@ impl DbTxn {
     pub(crate) fn get_last_mpc_address(
         &self,
         keychain: u8,
-    ) -> Result<Option<mpc_address::Model>, InternalError> {
+    ) -> Result<Option<mpc_address::Model>, Error> {
         Ok(block_on(
             mpc_address::Entity::find()
                 .filter(mpc_address::Column::Keychain.eq(keychain))
                 .order_by_desc(mpc_address::Column::DerivationIndex)
-                .one(self.get_connection()),
+                .one(self.inner()),
         )?)
     }
 
     #[cfg(feature = "mpc")]
-    pub(crate) fn get_next_mpc_derivation_index(&self, keychain: u8) -> Result<u32, InternalError> {
+    pub(crate) fn get_next_mpc_derivation_index(&self, keychain: u8) -> Result<u32, Error> {
         let max_idx = block_on(
             mpc_address::Entity::find()
                 .filter(mpc_address::Column::Keychain.eq(keychain))
                 .order_by_desc(mpc_address::Column::DerivationIndex)
-                .one(self.get_connection()),
+                .one(self.inner()),
         )?;
         Ok(max_idx.map(|a| a.derivation_index + 1).unwrap_or(0))
+    }
+}
+
+#[cfg(feature = "mpc")]
+impl RgbLibDatabase {
+    /// Run a read/write closure inside a single DB transaction.
+    pub(crate) fn with_txn<F, T>(&self, f: F) -> Result<T, Error>
+    where
+        F: FnOnce(&DbTxn) -> Result<T, Error>,
+    {
+        let txn = self.begin_transaction()?;
+        let out = f(&txn)?;
+        txn.commit()?;
+        Ok(out)
     }
 }
 

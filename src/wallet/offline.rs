@@ -2791,7 +2791,7 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         let txn = self.database().begin_transaction()?;
         let changed = self.delete_transfers_impl(&txn, batch_transfer_idx, no_asset_only)?;
         if changed {
-            self.update_backup_info(&txn, false)?;
+            self.update_backup_info_with_op_idx(&txn, false, None)?;
         }
         txn.commit()?;
         info!(self.logger(), "Delete transfer completed");

@@ -266,7 +266,7 @@ fn success() {
     )]);
     let unspents = party.list_unspents(false);
     let unspents_color_count_before = unspents.iter().filter(|u| u.utxo.colorable).count();
-    let txid = party.send(online, recipient_map, false, 7, MIN_CONFIRMATIONS, None, None).txid;
+    let txid = party.send(recipient_map, 7, None).txid;
     assert!(!txid.is_empty());
     let (transfer, _, _) = party.get_test_transfer_sender(&txid);
     let tte_data = party.db_transfer_transport_endpoints_data(transfer.idx);
@@ -7674,10 +7674,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         TransferStatus::WaitingCounterparty
     ));
 
-    let pws_before = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_before = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert_eq!(pws_before.len(), 1);
 
     let rcv_wallet_data = rcv_wallet.wallet_data().clone();
@@ -7691,10 +7688,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         &recipient_id,
         TransferStatus::WaitingCounterparty
     ));
-    let pws_after_restart = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_after_restart = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert_eq!(pws_after_restart.len(), 1);
 
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
@@ -7705,10 +7699,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
     ));
     wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &waiting_balance);
 
-    let pws_after_rcv_refresh = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_after_rcv_refresh = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert_eq!(pws_after_rcv_refresh.len(), 1);
 
     wait_for_refresh(&mut wallet, online, Some(&asset.asset_id), None);
@@ -7728,7 +7719,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         )
         .unwrap();
 
-    let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
+    let rcv_txos = test_iter_txos(&rcv_wallet).unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
         rcv_txos.into_iter().filter(|t| t.txid == txid).collect();
     assert_eq!(rcv_witness_txos.len(), 1);
@@ -7740,10 +7731,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
         vout: rcv_txo.vout,
     };
 
-    let pws_after_broadcast = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_after_broadcast = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert!(pws_after_broadcast.is_empty());
 
     mine(false);
@@ -7757,9 +7745,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
     ));
     wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
 
-    let rcv_txo = rcv_wallet
-        .database()
-        .get_txo(&rcv_outpoint)
+    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint)
         .unwrap()
         .unwrap();
     assert!(!rcv_txo.pending_witness);
@@ -7822,10 +7808,7 @@ fn offline_receiver_witness_restart_donation_true() {
         &recipient_id,
         TransferStatus::WaitingCounterparty
     ));
-    let pws_before = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_before = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert_eq!(pws_before.len(), 1);
 
     let rcv_wallet_data = rcv_wallet.wallet_data().clone();
@@ -7850,7 +7833,7 @@ fn offline_receiver_witness_restart_donation_true() {
         )
         .unwrap();
 
-    let rcv_txos = rcv_wallet.database().iter_txos().unwrap();
+    let rcv_txos = test_iter_txos(&rcv_wallet).unwrap();
     let rcv_witness_txos: Vec<database::entities::txo::Model> =
         rcv_txos.into_iter().filter(|t| t.txid == txid).collect();
     assert_eq!(rcv_witness_txos.len(), 1);
@@ -7862,10 +7845,7 @@ fn offline_receiver_witness_restart_donation_true() {
         vout: rcv_txo.vout,
     };
 
-    let pws_after_sync = rcv_wallet
-        .database()
-        .iter_pending_witness_scripts()
-        .unwrap();
+    let pws_after_sync = test_iter_pending_witness_scripts(&rcv_wallet).unwrap();
     assert!(pws_after_sync.is_empty());
 
     wait_for_refresh(&mut rcv_wallet, rcv_online, None, None);
@@ -7894,9 +7874,7 @@ fn offline_receiver_witness_restart_donation_true() {
     ));
     wait_for_asset_balance(&rcv_wallet, &asset.asset_id, &settled_balance);
 
-    let rcv_txo = rcv_wallet
-        .database()
-        .get_txo(&rcv_outpoint)
+    let rcv_txo = test_get_txo(&rcv_wallet, &rcv_outpoint)
         .unwrap()
         .unwrap();
     assert!(rcv_txo.exists);
@@ -8791,6 +8769,7 @@ fn begin_end() {
             MIN_CONFIRMATIONS,
             None,
             true,
+            None,
         )
         .unwrap();
     let bak_info_after = party.db_backup_info();
@@ -8811,6 +8790,7 @@ fn begin_end() {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let bak_info_after = party.db_backup_info();

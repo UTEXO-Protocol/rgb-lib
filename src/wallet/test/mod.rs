@@ -193,6 +193,38 @@ macro_rules! get_funded_party {
     };
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+macro_rules! get_empty_wallet {
+    ($i: expr) => {
+        get_empty_wallet(true, Some($i))
+    };
+    () => {
+        get_empty_wallet(true, None)
+    };
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+macro_rules! get_funded_noutxo_wallet {
+    ($i: expr) => {
+        get_funded_noutxo_wallet(true, Some($i))
+    };
+    () => {
+        get_funded_noutxo_wallet(true, None)
+    };
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+macro_rules! get_funded_wallet {
+    ($i: expr) => {{
+        let party = get_funded_party(true, Some($i));
+        (party.wallet, party.online)
+    }};
+    () => {{
+        let party = get_funded_party(true, None);
+        (party.wallet, party.online)
+    }};
+}
+
 pub fn mock_asset_terms<W: WalletOffline + ?Sized>(
     wallet: &W,
     text: RicardianContract,

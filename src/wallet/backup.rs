@@ -82,7 +82,7 @@ pub trait WalletBackup: WalletCore {
         scrypt_params: Option<ScryptParams>,
     ) -> Result<(), Error> {
         let txn = self.database().begin_transaction()?;
-        let prev_backup_info = self.update_backup_info(&txn, true)?;
+        let prev_backup_info = self.update_backup_info_with_op_idx(&txn, true, None)?;
         txn.commit()?;
         match self.backup_raw(backup_path, password, scrypt_params) {
             Ok(()) => Ok(()),
@@ -346,14 +346,17 @@ pub trait WalletBackup: WalletCore {
                 Ok(version) => {
                     info!(logger, "VSS auto-backup completed, version: {}", version);
                     // Update backup timestamp on success
-                    if let Some(backup_info) = database.get_backup_info().ok().flatten() {
-                        let mut backup_info: DbBackupInfoActMod = backup_info.into();
-                        backup_info.last_backup_timestamp = sea_orm::ActiveValue::Set(
-                            time::OffsetDateTime::now_utc()
-                                .unix_timestamp_nanos()
-                                .to_string(),
-                        );
-                        let _ = database.update_backup_info(&mut backup_info);
+                    if let Ok(txn) = database.begin_transaction() {
+                        if let Ok(Some(backup_info)) = txn.get_backup_info() {
+                            let mut backup_info: DbBackupInfoActMod = backup_info.into();
+                            backup_info.last_backup_timestamp = sea_orm::ActiveValue::Set(
+                                time::OffsetDateTime::now_utc()
+                                    .unix_timestamp_nanos()
+                                    .to_string(),
+                            );
+                            let _ = txn.update_backup_info(&mut backup_info);
+                            let _ = txn.commit();
+                        }
                     }
                 }
                 Err(e) => {
@@ -385,7 +388,9 @@ pub trait WalletBackup: WalletCore {
     ) -> Result<super::vss::VssBackupInfo, Error> {
         let server_version = client.get_backup_version().await?;
         let backup_exists = server_version.is_some();
-        let backup_required = self.get_backup_info()?;
+        let txn = self.database().begin_transaction()?;
+        let backup_required = self.get_backup_info(&txn)?;
+        txn.commit()?;
 
         Ok(super::vss::VssBackupInfo {
             backup_exists,
@@ -399,7 +404,10 @@ pub trait WalletBackup: WalletCore {
     fn trigger_auto_backup(&self) {}
 
     fn update_backup_info(&self, doing_backup: bool) -> Result<Option<DbBackupInfo>, Error> {
-        self.update_backup_info_with_op_idx(doing_backup, None)
+        let txn = self.database().begin_transaction()?;
+        let res = self.update_backup_info_with_op_idx(&txn, doing_backup, None)?;
+        txn.commit()?;
+        Ok(res)
     }
 }
 
