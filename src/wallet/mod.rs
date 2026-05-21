@@ -63,9 +63,10 @@ pub use core::{SyncKeychain, SyncOptions, SyncStrategy};
 pub(crate) use indexer::Indexer;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) use objects::{
-    AssetInfo, AssetSpend, BeginOperationData, BtcChange, LocalRecipient, LocalRecipientData,
-    LocalWitnessData, OnlineData, PrepareRgbPsbtResult, PrepareTransferPsbtResult,
-    ReceivedConsignmentMeta, RefreshResultTrait,
+    AssetInfo, AssetSpend, BeginOperationData, BtcChange, FailTransfersOutcome, LocalRecipient,
+    LocalRecipientData, LocalWitnessData, OnlineData, PrepareRgbPsbtResult,
+    PrepareTransferPsbtResult, ReceivedConsignmentMeta, RefreshResultTrait,
+    TryFailBatchTransferOutcome,
 };
 pub(crate) use objects::{
     InfoAssetTransfer, InfoBatchTransfer, IssueData, IssuedAssetDetails, LocalAssetData,
@@ -82,6 +83,7 @@ use super::*;
 
 pub(crate) const CONSIGNMENT_FILE: &str = "consignment_out";
 pub(crate) const FASCIA_FILE: &str = "fascia";
+pub(crate) const UNSIGNED_PSBT_FILE: &str = "unsigned.psbt";
 
 pub(crate) const SCHEMA_ID_NIA: &str =
     "rgb:sch:RWhwUfTMpuP2Zfx1~j4nswCANGeJrYOqDcKelaMV4zU#remote-digital-pegasus";

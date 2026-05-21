@@ -662,7 +662,9 @@ impl Wallet {
             .expect("valid consignment");
         let valid_contract = valid_transfer.clone().into_valid_contract();
 
+        let txn = self.database().begin_transaction()?;
         self.save_new_asset_internal(
+            &txn,
             &runtime,
             contract_id,
             asset_schema,
@@ -670,8 +672,9 @@ impl Wallet {
             Some(valid_transfer),
         )?;
 
-        self.update_backup_info(false)?;
+        self.update_backup_info(&txn, false)?;
         self.trigger_auto_backup();
+        txn.commit()?;
 
         info!(self.logger(), "Save new asset completed");
         Ok(())
@@ -690,7 +693,9 @@ impl Wallet {
         skip_sync: bool,
     ) -> Result<Vec<LocalOutput>, Error> {
         info!(self.logger(), "Listing unspents vanilla...");
-        self.sync_if_requested(Some(online), skip_sync, KeychainKind::Internal)?;
+        let txn = self.database().begin_transaction()?;
+        self.sync_if_requested(&txn, Some(online), skip_sync, KeychainKind::Internal)?;
+        txn.commit()?;
 
         let unspents = self.internal_unspents();
 
