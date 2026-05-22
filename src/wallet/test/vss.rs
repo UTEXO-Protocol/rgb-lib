@@ -818,7 +818,9 @@ fn vss_backup_failure_preserves_backup_required() {
     let wallet = get_test_wallet(true, None);
 
     // Simulate a state-changing operation so backup is required
-    wallet.update_backup_info(false).unwrap();
+    let txn = wallet.database().begin_transaction().unwrap();
+    wallet.update_backup_info(&txn, false).unwrap();
+    txn.commit().unwrap();
     assert!(
         wallet.backup_info().unwrap(),
         "backup should be required after a state change"

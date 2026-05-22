@@ -166,7 +166,7 @@ pub struct Balance {
 /// balances.
 /// The spendable balances include the settled balance and also the untrusted and trusted pending
 /// balances.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct BtcBalance {
     /// Funds that will never hold RGB assets
@@ -415,6 +415,7 @@ pub struct AssetNIA {
 
 impl AssetNIA {
     pub(crate) fn get_asset_details(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         transfers: Option<Vec<DbTransfer>>,
@@ -428,14 +429,14 @@ impl AssetNIA {
             let medias = if let Some(m) = medias {
                 m
             } else {
-                wallet.database().iter_media()?
+                txn.iter_media()?
             };
             medias
                 .iter()
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
-        let balance = wallet.database().get_asset_balance(
+        let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
             asset_transfers,
@@ -487,6 +488,7 @@ pub struct AssetUDA {
 
 impl AssetUDA {
     pub(crate) fn get_asset_details(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         token: Option<TokenLight>,
@@ -501,14 +503,14 @@ impl AssetUDA {
             let medias = if let Some(m) = medias {
                 m
             } else {
-                wallet.database().iter_media()?
+                txn.iter_media()?
             };
             medias
                 .iter()
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
-        let balance = wallet.database().get_asset_balance(
+        let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
             asset_transfers,
@@ -557,6 +559,7 @@ pub struct AssetCFA {
 
 impl AssetCFA {
     pub(crate) fn get_asset_details(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         transfers: Option<Vec<DbTransfer>>,
@@ -570,14 +573,14 @@ impl AssetCFA {
             let medias = if let Some(m) = medias {
                 m
             } else {
-                wallet.database().iter_media()?
+                txn.iter_media()?
             };
             medias
                 .iter()
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
-        let balance = wallet.database().get_asset_balance(
+        let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
             asset_transfers,
@@ -634,6 +637,7 @@ pub struct AssetIFA {
 
 impl AssetIFA {
     pub(crate) fn get_asset_details(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         transfers: Option<Vec<DbTransfer>>,
@@ -647,14 +651,14 @@ impl AssetIFA {
             let medias = if let Some(m) = medias {
                 m
             } else {
-                wallet.database().iter_media()?
+                txn.iter_media()?
             };
             medias
                 .iter()
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
-        let balance = wallet.database().get_asset_balance(
+        let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
             asset_transfers,
@@ -704,6 +708,7 @@ pub struct Assets {
 
 pub(crate) trait IssuedAssetDetails: Sized {
     fn from_issuance(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         issue_data: &IssueData,
@@ -712,21 +717,24 @@ pub(crate) trait IssuedAssetDetails: Sized {
 
 impl IssuedAssetDetails for AssetNIA {
     fn from_issuance(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         _issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(wallet, asset, None, None, None, None, None, None)
+        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
     }
 }
 
 impl IssuedAssetDetails for AssetUDA {
     fn from_issuance(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         issue_data: &IssueData,
     ) -> Result<Self, Error> {
         Self::get_asset_details(
+            txn,
             wallet,
             asset,
             issue_data.asset_data.token.clone().map(|t| t.into()),
@@ -742,21 +750,23 @@ impl IssuedAssetDetails for AssetUDA {
 
 impl IssuedAssetDetails for AssetCFA {
     fn from_issuance(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         _issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(wallet, asset, None, None, None, None, None, None)
+        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
     }
 }
 
 impl IssuedAssetDetails for AssetIFA {
     fn from_issuance(
+        txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
         _issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(wallet, asset, None, None, None, None, None, None)
+        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
     }
 }
 
@@ -1213,6 +1223,7 @@ pub struct TransferData {
     pub(crate) updated_at: i64,
     pub(crate) expiration_timestamp: Option<i64>,
     pub(crate) consignment_path: Option<String>,
+    pub(crate) psbt_path: Option<String>,
 }
 
 /// An RGB transfer.
@@ -1251,6 +1262,8 @@ pub struct Transfer {
     pub invoice_string: Option<String>,
     /// Consignment path
     pub consignment_path: Option<String>,
+    /// Path of the unsigned PSBT produced by the `_begin` step, when available
+    pub psbt_path: Option<String>,
 }
 
 impl DbTransfer {
@@ -1276,6 +1289,7 @@ impl DbTransfer {
             transport_endpoints,
             invoice_string: self.invoice_string.clone(),
             consignment_path: td.consignment_path,
+            psbt_path: td.psbt_path,
         }
     }
 }
@@ -1907,4 +1921,16 @@ pub enum PrepareTransferPsbtResult {
 pub struct ReceivedConsignmentMeta {
     pub txid: String,
     pub vout: Option<u32>,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub enum TryFailBatchTransferOutcome {
+    Failed,
+    Refreshed,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub struct FailTransfersOutcome {
+    pub transfers_changed: bool,
+    pub cannot_fail: bool,
 }

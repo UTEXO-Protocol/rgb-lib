@@ -3,15 +3,13 @@ use super::*;
 #[test]
 #[parallel]
 fn success() {
-    let mut wallet = get_test_wallet(false, None);
-    let bak_info_before = wallet.database().get_backup_info().unwrap();
+    let mut party = offline_party!(get_test_wallet(false, None));
+    let bak_info_before = party.db_backup_info_opt();
     assert!(bak_info_before.is_none());
-    let address = test_get_address(&mut wallet);
-    let bak_info_after = wallet.database().get_backup_info().unwrap();
-    assert!(bak_info_after.is_some());
+    let address = party.get_address();
+    let bak_info_after = party.db_backup_info();
     assert!(
         bak_info_after
-            .unwrap()
             .last_operation_timestamp
             .parse::<i128>()
             .unwrap()
