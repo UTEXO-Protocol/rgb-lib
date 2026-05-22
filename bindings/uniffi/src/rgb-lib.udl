@@ -1061,6 +1061,7 @@ interface Wallet {
 
   [Throws=RgbLibError]
   VssBackupInfo vss_backup_info(VssBackupClient client);
+  [Throws=RgbLibError]
   sequence<PendingVanillaTx> list_pending_vanilla_txs();
 
   [Throws=RgbLibError]
