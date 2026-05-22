@@ -2248,6 +2248,7 @@ fn batch_donation_success() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap()
         .txid;
@@ -2716,6 +2717,7 @@ fn fail() {
         MIN_CONFIRMATIONS,
         None,
         false,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_LOW));
 
@@ -2728,6 +2730,7 @@ fn fail() {
         MIN_CONFIRMATIONS,
         None,
         false,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidFeeRate { details: m }) if m == FEE_MSG_OVER));
 
@@ -4398,6 +4401,7 @@ fn min_confirmations_common(
             FEE_RATE,
             min_confirmations,
             None,
+            None,
         )
         .unwrap()
         .txid;
@@ -4484,6 +4488,7 @@ fn min_confirmations_common(
             false,
             FEE_RATE,
             min_confirmations,
+            None,
             None,
         )
         .unwrap()
@@ -4622,6 +4627,7 @@ fn spend_double_receive() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap()
         .txid;
@@ -4662,6 +4668,7 @@ fn spend_double_receive() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap()
@@ -5129,6 +5136,7 @@ fn min_fee_rate() {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let psbt = Psbt::from_str(&res.psbt).unwrap();
@@ -5145,6 +5153,7 @@ fn min_fee_rate() {
             false,
             fee_rate,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap()
@@ -5196,6 +5205,7 @@ fn max_fee_exceeded_common(
             false,
             fee_rate,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap();
@@ -5293,6 +5303,7 @@ fn min_relay_fee_common(
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let psbt = Psbt::from_str(&res.psbt).unwrap();
@@ -5311,6 +5322,7 @@ fn min_relay_fee_common(
             false,
             fee_rate,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap();
@@ -5437,6 +5449,7 @@ fn skip_sync() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap()
         .txid;
@@ -5487,6 +5500,7 @@ fn skip_sync() {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap()
@@ -5546,6 +5560,7 @@ fn skip_sync() {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap()
@@ -6316,6 +6331,7 @@ fn pending_witness_ma1_blind_receive_fail() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap();
     assert!(!txid.is_empty());
@@ -6507,6 +6523,7 @@ fn pending_witness_txo() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap();
@@ -6922,6 +6939,7 @@ fn donation_recipient_nack() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .unwrap()
@@ -7553,43 +7571,40 @@ fn offline_receiver_blind_restart_waiting_counterparty() {
     let txid = party.send_retry(&recipient_map);
     assert!(!txid.is_empty());
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     let mut rcv_party = restart_party(rcv_party);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingConfirmations
+        )
+    );
     rcv_party.wait_for_asset_balance(&asset.asset_id, &waiting_balance);
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     mine(false);
     rcv_party.wait_for_refresh_raw(None, None);
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Settled
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
     rcv_party.wait_for_asset_balance(&asset.asset_id, &settled_balance);
 }
 
@@ -7635,42 +7650,42 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
     let txid = party.send_retry(&recipient_map);
     assert!(!txid.is_empty());
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     let pws_before = rcv_party.db_pending_witness_scripts();
     assert_eq!(pws_before.len(), 1);
 
     let mut rcv_party = restart_party(rcv_party);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
     let pws_after_restart = rcv_party.db_pending_witness_scripts();
     assert_eq!(pws_after_restart.len(), 1);
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingConfirmations
+        )
+    );
     rcv_party.wait_for_asset_balance(&asset.asset_id, &waiting_balance);
 
     let pws_after_rcv_refresh = rcv_party.db_pending_witness_scripts();
     assert_eq!(pws_after_rcv_refresh.len(), 1);
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     rcv_party.sync(SyncOptions {
         keychain: SyncKeychain::Colored,
@@ -7696,10 +7711,7 @@ fn offline_receiver_witness_restart_waiting_counterparty() {
     rcv_party.wait_for_refresh_raw(None, None);
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Settled
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
     rcv_party.wait_for_asset_balance(&asset.asset_id, &settled_balance);
 
     let rcv_txo = rcv_party.db_txo(&rcv_outpoint).unwrap();
@@ -7754,23 +7766,28 @@ fn offline_receiver_witness_restart_donation_true() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap();
     assert!(!txid.is_empty());
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
     let pws_before = rcv_party.db_pending_witness_scripts();
     assert_eq!(pws_before.len(), 1);
 
     let mut rcv_party = restart_party(rcv_party);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     rcv_party.sync(SyncOptions {
         keychain: SyncKeychain::Colored,
@@ -7793,26 +7810,22 @@ fn offline_receiver_witness_restart_donation_true() {
     assert!(pws_after_sync.is_empty());
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingConfirmations
+        )
+    );
     rcv_party.wait_for_asset_balance(&asset.asset_id, &waiting_balance);
 
     party.refresh_all();
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     mine(false);
     rcv_party.wait_for_refresh_raw(None, None);
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Settled
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
     rcv_party.wait_for_asset_balance(&asset.asset_id, &settled_balance);
 
     let rcv_txo = rcv_party.db_txo(&rcv_outpoint).unwrap();
@@ -7865,47 +7878,45 @@ fn offline_receiver_blind_restart_donation_true() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap();
     assert!(!txid.is_empty());
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     let mut rcv_party = restart_party(rcv_party);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingConfirmations
+        )
+    );
     rcv_party.wait_for_asset_balance(&asset.asset_id, &waiting_balance);
 
     party.refresh_all();
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     mine(false);
     rcv_party.wait_for_refresh_raw(None, None);
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Settled
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
     rcv_party.wait_for_asset_balance(&asset.asset_id, &settled_balance);
 }
 
@@ -7943,14 +7954,13 @@ fn offline_receiver_nack_sender_failed_no_asset_materialized_on_receiver() {
 
     // This is intentionally a sender-side NACK invariant test.
     // The receiver never refreshes after the manual NACK, so the asset must not materialize there.
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
 
     ProxyClient::new(PROXY_URL)
         .unwrap()
@@ -7958,14 +7968,13 @@ fn offline_receiver_nack_sender_failed_no_asset_materialized_on_receiver() {
         .unwrap();
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::Failed
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8005,14 +8014,13 @@ fn offline_receiver_nack_receiver_fails_after_sender_failure() {
     let txid = party.send_retry(&recipient_map);
     assert!(!txid.is_empty());
 
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
 
     ProxyClient::new(PROXY_URL)
         .unwrap()
@@ -8020,20 +8028,16 @@ fn offline_receiver_nack_receiver_fails_after_sender_failure() {
         .unwrap();
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::Failed
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Failed
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8041,17 +8045,11 @@ fn offline_receiver_nack_receiver_fails_after_sender_failure() {
     }
 
     party.refresh_all();
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::Failed
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
 
     mine(false);
     rcv_party.refresh_all();
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Failed
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8097,16 +8095,10 @@ fn offline_receiver_nack_receiver_fails_before_broadcast() {
         .unwrap();
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::Failed
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Failed
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8154,18 +8146,18 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .unwrap();
     assert!(!txid.is_empty());
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
+    assert!(
+        rcv_party.check_test_transfer_status_recipient(
+            &recipient_id,
+            TransferStatus::WaitingCounterparty
+        )
+    );
 
     ProxyClient::new(PROXY_URL)
         .unwrap()
@@ -8173,16 +8165,10 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
         .unwrap();
 
     party.refresh_all();
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     rcv_party.wait_for_refresh_raw(None, None);
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Failed
-    ));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8193,14 +8179,8 @@ fn offline_receiver_nack_donation_true_receiver_fails_after_broadcast() {
     rcv_party.refresh_all();
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::Settled
-    ));
-    assert!(rcv_party.check_test_transfer_status_recipient(
-        &recipient_id,
-        TransferStatus::Failed
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Settled));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
     match rcv_party.get_asset_balance_result(&asset.asset_id) {
         Ok(balance) => assert_eq!(balance, zero_balance),
         Err(Error::AssetNotFound { .. }) => {}
@@ -8340,10 +8320,7 @@ fn offline_receiver_mixed_blind_witness_batch_donation_false() {
     let txid = party.send_retry(&recipient_map);
     assert!(!txid.is_empty());
 
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
     assert!(blind_party.check_test_transfer_status_recipient(
         &blind_receive_data.recipient_id,
         TransferStatus::WaitingCounterparty
@@ -8359,10 +8336,7 @@ fn offline_receiver_mixed_blind_witness_batch_donation_false() {
         TransferStatus::WaitingConfirmations
     ));
     blind_party.wait_for_asset_balance(&asset.asset_id, &blind_waiting_balance);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingCounterparty
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingCounterparty));
 
     witness_party.wait_for_refresh_raw(None, None);
     assert!(witness_party.check_test_transfer_status_recipient(
@@ -8372,10 +8346,7 @@ fn offline_receiver_mixed_blind_witness_batch_donation_false() {
     witness_party.wait_for_asset_balance(&asset.asset_id, &witness_waiting_balance);
 
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);
-    assert!(party.check_test_transfer_status_sender(
-        &txid,
-        TransferStatus::WaitingConfirmations
-    ));
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
     mine(false);
     blind_party.wait_for_refresh_raw(None, None);
@@ -8655,6 +8626,7 @@ fn begin_end() {
             MIN_CONFIRMATIONS,
             None,
             true,
+            None,
         )
         .unwrap();
     let bak_info_after = party.db_backup_info();
@@ -8675,6 +8647,7 @@ fn begin_end() {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let bak_info_after = party.db_backup_info();

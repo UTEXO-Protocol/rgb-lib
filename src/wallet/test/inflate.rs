@@ -488,7 +488,7 @@ fn fail() {
     let address = party.get_address();
     let unsigned_psbt = party
         .wallet
-        .send_btc_begin(party.online, address, 1000, FEE_RATE, false, true)
+        .send_btc_begin(party.online, address, 1000, FEE_RATE, false, true, None)
         .unwrap();
     let signed_psbt = party.wallet.sign_psbt(unsigned_psbt, None).unwrap();
     // - check online is correct

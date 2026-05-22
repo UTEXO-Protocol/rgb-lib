@@ -2236,7 +2236,8 @@ impl MultisigWallet {
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
-        let psbt = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true)?;
+        let psbt =
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, None)?;
         let res = self.post_operation(OperationType::SendBtc, PostData::Psbt(psbt))?;
         txn.commit()?;
         self.trigger_auto_backup();
@@ -2288,6 +2289,7 @@ impl MultisigWallet {
             min_confirmations,
             expiration_timestamp.map(|t| t as i64),
             true,
+            None,
         )?;
         let res = self.post_operation(
             OperationType::SendRgb,

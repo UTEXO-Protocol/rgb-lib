@@ -25,6 +25,7 @@ fn success() {
             FEE_RATE,
             false,
             false,
+            None,
         )
         .unwrap();
     let send_psbt = Psbt::from_str(&send_psbt_str).unwrap();

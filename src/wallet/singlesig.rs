@@ -824,6 +824,7 @@ impl Wallet {
         fee_rate: u64,
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
+        lock_time: Option<u32>,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending to: {:?}...", recipient_map);
         self.check_xprv()?;
@@ -837,6 +838,7 @@ impl Wallet {
             min_confirmations,
             expiration_timestamp.map(|t| t as i64),
             true,
+            lock_time,
         )?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.send_end_impl(&txn, &begin_op_data.psbt)?;
@@ -893,6 +895,7 @@ impl Wallet {
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
         dry_run: bool,
+        lock_time: Option<u32>,
     ) -> Result<SendBeginResult, Error> {
         info!(self.logger(), "Sending (begin) to: {:?}...", recipient_map);
         self.check_online(online)?;
@@ -905,6 +908,7 @@ impl Wallet {
             min_confirmations,
             expiration_timestamp.map(|t| t as i64),
             dry_run,
+            lock_time,
         )?;
         if !dry_run {
             self.update_backup_info(&txn, false)?;
@@ -969,13 +973,14 @@ impl Wallet {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
+        lock_time: Option<u32>,
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC...");
         self.check_xprv()?;
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let mut psbt =
-            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true)?;
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, lock_time)?;
         self.sign_psbt_impl(&mut psbt, None)?;
         let res = self.send_btc_end_impl(&txn, &psbt)?;
         self.update_backup_info(&txn, false)?;
@@ -1005,11 +1010,14 @@ impl Wallet {
         fee_rate: u64,
         skip_sync: bool,
         dry_run: bool,
+        lock_time: Option<u32>,
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run)?;
+        let res = self.send_btc_begin_impl(
+            &txn, address, amount, fee_rate, skip_sync, dry_run, lock_time,
+        )?;
         if !dry_run {
             self.update_backup_info(&txn, false)?;
         }

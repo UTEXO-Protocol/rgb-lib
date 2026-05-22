@@ -1387,6 +1387,7 @@ impl SinglesigParty {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
+            None,
         )
     }
 
@@ -1403,6 +1404,7 @@ impl SinglesigParty {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
     }
 
@@ -1413,8 +1415,14 @@ impl SinglesigParty {
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn send_btc_result(&mut self, address: &str, amount: u64) -> Result<String, Error> {
-        self.wallet
-            .send_btc(self.online, address.to_string(), amount, FEE_RATE, false)
+        self.wallet.send_btc(
+            self.online,
+            address.to_string(),
+            amount,
+            FEE_RATE,
+            false,
+            None,
+        )
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1453,6 +1461,7 @@ impl SinglesigParty {
                 fee_rate,
                 MIN_CONFIRMATIONS,
                 expiration_timestamp,
+                None,
             )
             .unwrap()
     }

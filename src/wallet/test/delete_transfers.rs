@@ -102,6 +102,7 @@ fn success() {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let batch_transfer_idx = send_result.batch_transfer_idx.unwrap();
@@ -141,6 +142,7 @@ fn success() {
             MIN_CONFIRMATIONS,
             None,
             false,
+            None,
         )
         .unwrap();
     let batch_transfer_idx = send_result.batch_transfer_idx.unwrap();

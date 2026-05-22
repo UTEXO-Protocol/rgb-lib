@@ -10,7 +10,7 @@ fn success_common(party: &mut SinglesigParty, esplora: bool) {
             let addr = party.get_address().to_string();
             if party
                 .wallet
-                .send_btc(party.online, addr, amount, fee_rate, true)
+                .send_btc(party.online, addr, amount, fee_rate, true, None)
                 .is_err()
             {
                 attempts -= 1;

@@ -901,10 +901,7 @@ impl DbTxn {
     }
 
     #[cfg(feature = "mpc")]
-    pub(crate) fn set_mpc_address(
-        &self,
-        addr: mpc_address::ActiveModel,
-    ) -> Result<i32, Error> {
+    pub(crate) fn set_mpc_address(&self, addr: mpc_address::ActiveModel) -> Result<i32, Error> {
         let res = block_on(MpcAddress::insert(addr).exec(self.inner()))?;
         Ok(res.last_insert_id)
     }

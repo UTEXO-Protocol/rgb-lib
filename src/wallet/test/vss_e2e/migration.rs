@@ -58,6 +58,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     mine_blocks(false, 2);
@@ -157,6 +158,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
+            None,
             None,
         )
         .expect("send asset2");

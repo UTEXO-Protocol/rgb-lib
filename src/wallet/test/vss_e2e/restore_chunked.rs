@@ -63,6 +63,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
             FEE_RATE,
             MIN_CONFIRMATIONS,
             None,
+            None,
         )
         .expect("send");
     mine_blocks(false, 2);

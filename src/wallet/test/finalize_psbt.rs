@@ -9,7 +9,7 @@ fn success() {
     let address = party.get_address();
     let unsigned_psbt_str = party
         .wallet
-        .send_btc_begin(party.online, address, AMOUNT, FEE_RATE, false, true)
+        .send_btc_begin(party.online, address, AMOUNT, FEE_RATE, false, true, None)
         .unwrap();
     let signed_psbt = party
         .wallet
@@ -31,7 +31,7 @@ fn fail() {
     let address = party.get_address();
     let unsigned_psbt_str = party
         .wallet
-        .send_btc_begin(party.online, address, AMOUNT, FEE_RATE, false, true)
+        .send_btc_begin(party.online, address, AMOUNT, FEE_RATE, false, true, None)
         .unwrap();
     let wallet_2 = get_test_wallet(true, None);
     let result = wallet_2.finalize_psbt(unsigned_psbt_str, None);
