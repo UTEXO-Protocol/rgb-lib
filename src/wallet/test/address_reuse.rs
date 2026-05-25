@@ -97,7 +97,9 @@ fn send_btc_change_reuses_address() {
 
     // fund and create utxos
     fund_wallet(pinned_addr.clone());
-    test_create_utxos_default(&mut wallet, online);
+    wallet
+        .create_utxos(online, false, None, None, FEE_RATE, false)
+        .unwrap();
     mine(false);
 
     // send BTC to a separate wallet (generates change)
@@ -114,7 +116,9 @@ fn send_btc_change_reuses_address() {
         .peek_address(KeychainKind::Internal, 0)
         .address
         .script_pubkey();
-    let vanilla_unspents = test_list_unspents_vanilla(&mut wallet, online, None);
+    let vanilla_unspents = wallet
+        .list_unspents_vanilla(online, MIN_CONFIRMATIONS, false)
+        .unwrap();
     assert!(!vanilla_unspents.is_empty());
     for unspent in &vanilla_unspents {
         assert_eq!(

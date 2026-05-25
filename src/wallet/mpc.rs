@@ -39,23 +39,23 @@ impl WalletCore for MpcWallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn sync_bdk_and_db_txos(
         &mut self,
+        txn: &DbTxn,
         _options: SyncOptions,
         _include_spent: bool,
     ) -> Result<(), Error> {
         debug!(self.logger(), "MPC: Syncing TXOs from indexer...");
 
         // Get colored (External) MPC addresses and query indexer for their UTXOs
-        let colored_addrs = self.database().get_mpc_addresses_by_keychain(0)?;
+        let colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
 
-        let db_txos = self.database().iter_txos()?;
+        let db_txos = txn.iter_txos()?;
         let db_outpoints: HashSet<String> = db_txos
             .into_iter()
             .filter(|t| t.exists && !t.spent)
             .map(|u| u.outpoint().to_string())
             .collect();
 
-        let pending_witness_scripts: Vec<String> = self
-            .database()
+        let pending_witness_scripts: Vec<String> = txn
             .iter_pending_witness_scripts()?
             .into_iter()
             .map(|s| s.script)
@@ -87,11 +87,11 @@ impl WalletCore for MpcWallet {
                     let script_hex = txout.script_pubkey.to_hex_string();
                     if pending_witness_scripts.contains(&script_hex) {
                         new_db_utxo.pending_witness = ActiveValue::Set(true);
-                        self.database().del_pending_witness_script(script_hex)?;
+                        txn.del_pending_witness_script(script_hex)?;
                     }
                 }
 
-                self.database().set_txo(new_db_utxo)?;
+                txn.set_txo(new_db_utxo)?;
             }
         }
 
@@ -114,13 +114,15 @@ impl WalletOffline for MpcWallet {
             KeychainKind::Internal => 1u8,
         };
 
+        let txn = self.database().begin_transaction()?;
+
         if self.wallet_data().reuse_addresses
-            && let Some(last) = self.database().get_last_mpc_address(keychain_u8)?
+            && let Some(last) = txn.get_last_mpc_address(keychain_u8)?
         {
             return parse_address_str(&last.address, self.bitcoin_network());
         }
 
-        let index = self.database().get_next_mpc_derivation_index(keychain_u8)?;
+        let index = txn.get_next_mpc_derivation_index(keychain_u8)?;
 
         let addr_info: MpcAddressInfo =
             self.provider
@@ -135,7 +137,8 @@ impl WalletOffline for MpcWallet {
             derivation_index: ActiveValue::Set(index),
             ..Default::default()
         };
-        self.database().set_mpc_address(db_addr)?;
+        txn.set_mpc_address(db_addr)?;
+        txn.commit()?;
 
         let address = parse_address_str(&addr_info.address, self.bitcoin_network())?;
         Ok(address)
@@ -164,11 +167,12 @@ impl WalletOffline for MpcWallet {
 
     fn get_btc_balance_impl(
         &mut self,
+        txn: &DbTxn,
         online: Option<Online>,
         skip_sync: bool,
     ) -> Result<BtcBalance, Error> {
-        self.sync_if_requested(online, skip_sync, KeychainKind::External)?;
-        self.sync_if_requested(online, skip_sync, KeychainKind::Internal)?;
+        self.sync_if_requested(txn, online, skip_sync, KeychainKind::External)?;
+        self.sync_if_requested(txn, online, skip_sync, KeychainKind::Internal)?;
 
         #[cfg(any(feature = "electrum", feature = "esplora"))]
         {
@@ -178,7 +182,7 @@ impl WalletOffline for MpcWallet {
                 .map(|(_, txout, _)| txout.value.to_sat())
                 .sum();
 
-            let colored_addrs = self.database().get_mpc_addresses_by_keychain(0)?;
+            let colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
             let mut colored_total: u64 = 0;
             for addr in &colored_addrs {
                 let script =
@@ -214,12 +218,12 @@ impl WalletOffline for MpcWallet {
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl WalletOnline for MpcWallet {
-    fn wallet_specific_consistency_checks(&mut self) -> Result<(), Error> {
+    fn wallet_specific_consistency_checks(&mut self, _txn: &DbTxn) -> Result<(), Error> {
         // MPC wallets don't have BDK UTXOs to cross-check
         Ok(())
     }
 
-    fn broadcast_psbt(&mut self, signed_psbt: &Psbt) -> Result<BdkTransaction, Error> {
+    fn broadcast_psbt(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<BdkTransaction, Error> {
         let tx = self.broadcast_tx(
             signed_psbt
                 .clone()
@@ -231,13 +235,13 @@ impl WalletOnline for MpcWallet {
         for input in &tx.input {
             let txid = input.previous_output.txid.to_string();
             let vout = input.previous_output.vout;
-            if let Some(db_txo) = self.database().get_txo(&Outpoint {
+            if let Some(db_txo) = txn.get_txo(&Outpoint {
                 txid: txid.clone(),
                 vout,
             })? {
                 let mut db_txo: DbTxoActMod = db_txo.into();
                 db_txo.spent = ActiveValue::Set(true);
-                self.database().update_txo(db_txo)?;
+                txn.update_txo(db_txo)?;
             }
             // Vanilla UTXOs not in txo table — skip silently
         }
@@ -258,7 +262,9 @@ impl WalletOnline for MpcWallet {
         let vanilla_utxos = self.query_vanilla_utxos()?;
 
         // Collect the required colored inputs (already selected by RGB logic)
-        let colored_addrs = self.database().get_mpc_addresses_by_keychain(0)?;
+        let txn = self.database().begin_transaction()?;
+        let colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
+        txn.commit()?;
         let mut selected_inputs: Vec<(OutPoint, TxOut)> = Vec::new();
 
         for addr in &colored_addrs {
@@ -353,6 +359,7 @@ impl WalletOnline for MpcWallet {
 
     fn create_utxos_begin_impl(
         &mut self,
+        txn: &DbTxn,
         up_to: bool,
         num: Option<u8>,
         size: Option<u32>,
@@ -364,6 +371,7 @@ impl WalletOnline for MpcWallet {
 
         if !skip_sync {
             self.sync_bdk_and_db_txos(
+                txn,
                 SyncOptions {
                     keychain: SyncKeychain::Colored,
                     strategy: SyncStrategy::FastSync,
@@ -372,10 +380,8 @@ impl WalletOnline for MpcWallet {
             )?;
         }
 
-        let unspent_txos = self.database().get_unspent_txos(vec![])?;
-        let unspents = self
-            .database()
-            .get_rgb_allocations(unspent_txos, None, None, None, None)?;
+        let unspent_txos = txn.get_unspent_txos(vec![])?;
+        let unspents = txn.get_rgb_allocations(unspent_txos, None, None, None, None)?;
 
         let mut utxos_to_create = num.unwrap_or(UTXO_NUM);
         if up_to {
@@ -459,6 +465,7 @@ impl WalletOnline for MpcWallet {
 
     fn send_btc_begin_impl(
         &mut self,
+        txn: &DbTxn,
         address: String,
         amount: u64,
         fee_rate: u64,
@@ -472,6 +479,7 @@ impl WalletOnline for MpcWallet {
 
         if !skip_sync {
             self.sync_bdk_and_db_txos(
+                txn,
                 SyncOptions {
                     keychain: SyncKeychain::Colored,
                     strategy: SyncStrategy::FastSync,
@@ -483,7 +491,7 @@ impl WalletOnline for MpcWallet {
         let script_pubkey = self.get_script_pubkey(&address)?;
 
         // Get vanilla UTXOs, excluding colored ones
-        let unspendable = self.get_unspendable_bdk_outpoints()?;
+        let unspendable = self.get_unspendable_bdk_outpoints(txn)?;
         let unspendable_set: HashSet<OutPoint> = unspendable.into_iter().collect();
 
         let vanilla_utxos = self.query_vanilla_utxos()?;
@@ -516,6 +524,7 @@ impl WalletOnline for MpcWallet {
 
     fn drain_to_begin_impl(
         &mut self,
+        txn: &DbTxn,
         address: String,
         fee_rate: u64,
         _dry_run: bool,
@@ -523,6 +532,7 @@ impl WalletOnline for MpcWallet {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
         self.sync_bdk_and_db_txos(
+            txn,
             SyncOptions {
                 keychain: SyncKeychain::Colored,
                 strategy: SyncStrategy::FastSync,
@@ -540,7 +550,7 @@ impl WalletOnline for MpcWallet {
             .collect();
 
         // Filter out colored UTXOs
-        let unspendable = self.get_unspendable_bdk_outpoints()?;
+        let unspendable = self.get_unspendable_bdk_outpoints(txn)?;
         let unspendable_set: HashSet<OutPoint> = unspendable.into_iter().collect();
         all_inputs.retain(|(op, _)| !unspendable_set.contains(op));
 
@@ -653,7 +663,9 @@ impl MpcWallet {
     /// Returns (outpoint, txout, signing_key_id) tuples.
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn query_vanilla_utxos(&self) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
-        let addrs = self.database().get_mpc_addresses_by_keychain(1)?;
+        let txn = self.database().begin_transaction()?;
+        let addrs = txn.get_mpc_addresses_by_keychain(1)?;
+        txn.commit()?;
         let mut all_utxos = Vec::new();
         for addr in &addrs {
             let script = ScriptBuf::from_hex(&addr.script_pubkey).map_err(|e| Error::Internal {
@@ -671,10 +683,11 @@ impl MpcWallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_signing_key_ids_for_psbt(&self, psbt: &Psbt) -> Result<Vec<String>, Error> {
         let mut key_ids = Vec::new();
+        let txn = self.database().begin_transaction()?;
         for input in &psbt.inputs {
             if let Some(witness_utxo) = &input.witness_utxo {
                 let script_hex = witness_utxo.script_pubkey.to_hex_string();
-                let addr = self.database().get_mpc_address_by_script(&script_hex)?;
+                let addr = txn.get_mpc_address_by_script(&script_hex)?;
                 key_ids.push(addr.signing_key_id);
             } else {
                 return Err(Error::Internal {
@@ -682,6 +695,7 @@ impl MpcWallet {
                 });
             }
         }
+        txn.commit()?;
         Ok(key_ids)
     }
 
@@ -714,11 +728,12 @@ impl MpcWallet {
 
     fn finalize_offline_issuance<T: IssuedAssetDetails>(
         &self,
+        txn: &DbTxn,
         issue_data: &IssueData,
     ) -> Result<T, Error> {
         let mut runtime = self.rgb_runtime()?;
-        let asset = self.import_and_save_contract(issue_data, &mut runtime)?;
-        T::from_issuance(self, &asset, issue_data)
+        let asset = self.import_and_save_contract(txn, issue_data, &mut runtime)?;
+        T::from_issuance(txn, self, &asset, issue_data)
     }
 
     /// Issue a new RGB NIA asset.
@@ -729,9 +744,15 @@ impl MpcWallet {
         precision: u8,
         amounts: Vec<u64>,
     ) -> Result<AssetNIA, Error> {
-        self.issue_asset_nia_with_impl(ticker, name, precision, amounts, |issue_data| {
-            self.finalize_offline_issuance(&issue_data)
-        })
+        info!(self.logger(), "Issuing NIA...");
+        let txn = self.database().begin_transaction()?;
+        let issue_data = self.create_nia_contract(&txn, ticker, name, precision, amounts)?;
+        let res = self.finalize_offline_issuance(&txn, &issue_data)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Issue asset NIA completed");
+        Ok(res)
     }
 
     /// Create a blind receive.
@@ -745,7 +766,9 @@ impl MpcWallet {
     ) -> Result<ReceiveData, Error> {
         info!(self.logger(), "Receiving via blinded UTXO...");
 
+        let txn = self.database().begin_transaction()?;
         let receive_data_internal = self.create_receive_data(
+            &txn,
             asset_id,
             assignment,
             expiration_timestamp.map(|t| t as i64),
@@ -754,7 +777,10 @@ impl MpcWallet {
         )?;
 
         let batch_transfer_idx =
-            self.store_receive_transfer(&receive_data_internal, min_confirmations)?;
+            self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
 
         info!(self.logger(), "Blind receive completed");
         Ok(ReceiveData {
@@ -767,12 +793,12 @@ impl MpcWallet {
 
     /// List known RGB assets.
     pub fn list_assets(&self, filter_asset_schemas: Vec<AssetSchema>) -> Result<Assets, Error> {
-        self.list_assets_impl(filter_asset_schemas)
+        RgbWalletOpsOffline::list_assets(self, filter_asset_schemas)
     }
 
     /// Get asset balance.
     pub fn get_asset_balance(&self, asset_id: String) -> Result<Balance, Error> {
-        self.get_asset_balance_impl(asset_id)
+        RgbWalletOpsOffline::get_asset_balance(self, asset_id)
     }
 
     /// Get BTC balance.
@@ -802,7 +828,10 @@ impl MpcWallet {
     /// Sync the wallet.
     pub fn sync(&mut self, online: Online, options: SyncOptions) -> Result<(), Error> {
         info!(self.logger(), "Syncing...");
-        self.sync_impl(online, options)?;
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        self.sync_impl(&txn, options)?;
+        txn.commit()?;
         info!(self.logger(), "Sync completed");
         Ok(())
     }
@@ -827,7 +856,8 @@ impl MpcWallet {
             KeychainKind::External => 0u8,
             KeychainKind::Internal => 1u8,
         };
-        let index = self.database().get_next_mpc_derivation_index(keychain_u8)?;
+        let txn = self.database().begin_transaction()?;
+        let index = txn.get_next_mpc_derivation_index(keychain_u8)?;
         let addr_info: MpcAddressInfo =
             self.provider
                 .create_address(self.bitcoin_network(), keychain, index)?;
@@ -840,7 +870,8 @@ impl MpcWallet {
             derivation_index: ActiveValue::Set(index),
             ..Default::default()
         };
-        self.database().set_mpc_address(db_addr)?;
+        txn.set_mpc_address(db_addr)?;
+        txn.commit()?;
 
         Ok(addr_info.address)
     }
@@ -857,9 +888,14 @@ impl MpcWallet {
     ) -> Result<u8, Error> {
         info!(self.logger(), "Creating UTXOs...");
         self.check_online(online)?;
-        let psbt = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync, true)?;
+        let txn = self.database().begin_transaction()?;
+        let psbt =
+            self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
-        let res = self.create_utxos_end_impl(&signed)?;
+        let res = self.create_utxos_end_impl(&txn, &signed)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Create UTXOs completed");
         Ok(res)
     }
@@ -877,7 +913,13 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Creating UTXOs (begin)...");
         self.check_online(online)?;
-        let res = self.create_utxos_begin_impl(up_to, num, size, fee_rate, skip_sync, dry_run)?;
+        let txn = self.database().begin_transaction()?;
+        let res =
+            self.create_utxos_begin_impl(&txn, up_to, num, size, fee_rate, skip_sync, dry_run)?;
+        if !dry_run {
+            self.update_backup_info(&txn, false)?;
+        }
+        txn.commit()?;
         info!(self.logger(), "Create UTXOs (begin) completed");
         Ok(res.to_string())
     }
@@ -887,7 +929,10 @@ impl MpcWallet {
         info!(self.logger(), "Creating UTXOs (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.create_utxos_end_impl(&psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.create_utxos_end_impl(&txn, &psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
         info!(self.logger(), "Create UTXOs (end) completed");
         Ok(res)
     }
@@ -904,7 +949,9 @@ impl MpcWallet {
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending...");
         self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
         let mut begin_op_data = self.send_begin_impl(
+            &txn,
             recipient_map,
             donation,
             fee_rate,
@@ -914,7 +961,10 @@ impl MpcWallet {
             None,
         )?;
         begin_op_data.psbt = self.mpc_sign_psbt(begin_op_data.psbt)?;
-        let res = self.send_end_impl(&begin_op_data.psbt)?;
+        let res = self.send_end_impl(&txn, &begin_op_data.psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Send completed");
         Ok(res)
     }
@@ -932,7 +982,9 @@ impl MpcWallet {
     ) -> Result<SendBeginResult, Error> {
         info!(self.logger(), "Sending (begin)...");
         self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
         let begin_op_data = self.send_begin_impl(
+            &txn,
             recipient_map,
             donation,
             fee_rate,
@@ -941,6 +993,13 @@ impl MpcWallet {
             dry_run,
             None,
         )?;
+        if !dry_run {
+            self.update_backup_info(&txn, false)?;
+        }
+        txn.commit()?;
+        if !dry_run {
+            self.trigger_auto_backup();
+        }
         info!(self.logger(), "Send (begin) completed");
         Ok(SendBeginResult {
             psbt: begin_op_data.psbt.to_string(),
@@ -967,7 +1026,11 @@ impl MpcWallet {
         info!(self.logger(), "Sending (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.send_end_impl(&psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.send_end_impl(&txn, &psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Send (end) completed");
         Ok(res)
     }
@@ -983,9 +1046,13 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC...");
         self.check_online(online)?;
-        let psbt = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, true, None)?;
+        let txn = self.database().begin_transaction()?;
+        let psbt =
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, true, None)?;
         let signed = self.mpc_sign_psbt(psbt)?;
-        let res = self.send_btc_end_impl(&signed)?;
+        let res = self.send_btc_end_impl(&txn, &signed)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
         info!(self.logger(), "Send BTC completed");
         Ok(res)
     }
@@ -1002,7 +1069,13 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Sending BTC (begin)...");
         self.check_online(online)?;
-        let res = self.send_btc_begin_impl(address, amount, fee_rate, skip_sync, dry_run, None)?;
+        let txn = self.database().begin_transaction()?;
+        let res =
+            self.send_btc_begin_impl(&txn, address, amount, fee_rate, skip_sync, dry_run, None)?;
+        if !dry_run {
+            self.update_backup_info(&txn, false)?;
+        }
+        txn.commit()?;
         info!(self.logger(), "Send BTC (begin) completed");
         Ok(res.to_string())
     }
@@ -1012,7 +1085,10 @@ impl MpcWallet {
         info!(self.logger(), "Sending BTC (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let res = self.send_btc_end_impl(&psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.send_btc_end_impl(&txn, &psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
         info!(self.logger(), "Send BTC (end) completed");
         Ok(res)
     }
@@ -1026,9 +1102,13 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Draining...");
         self.check_online(online)?;
-        let psbt = self.drain_to_begin_impl(address, fee_rate, true)?;
+        let txn = self.database().begin_transaction()?;
+        let psbt = self.drain_to_begin_impl(&txn, address, fee_rate, true)?;
         let signed = self.mpc_sign_psbt(psbt)?;
-        let tx = self.drain_to_end_impl(&signed)?;
+        let tx = self.drain_to_end_impl(&txn, &signed)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Drain completed");
         Ok(tx.compute_txid().to_string())
     }
@@ -1043,7 +1123,12 @@ impl MpcWallet {
     ) -> Result<String, Error> {
         info!(self.logger(), "Draining (begin)...");
         self.check_online(online)?;
-        let psbt = self.drain_to_begin_impl(address, fee_rate, dry_run)?;
+        let txn = self.database().begin_transaction()?;
+        let psbt = self.drain_to_begin_impl(&txn, address, fee_rate, dry_run)?;
+        if !dry_run {
+            self.update_backup_info(&txn, false)?;
+        }
+        txn.commit()?;
         info!(self.logger(), "Drain (begin) completed");
         Ok(psbt.to_string())
     }
@@ -1053,7 +1138,11 @@ impl MpcWallet {
         info!(self.logger(), "Draining (end)...");
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
-        let tx = self.drain_to_end_impl(&psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let tx = self.drain_to_end_impl(&txn, &psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
         info!(self.logger(), "Drain (end) completed");
         Ok(tx.compute_txid().to_string())
     }
