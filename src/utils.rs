@@ -630,6 +630,22 @@ pub(crate) fn hash_bytes_hex(data: &[u8]) -> String {
     hex::encode(hash_bytes(data))
 }
 
+/// Derive the proxy routing key for a witness recipient.
+///
+/// `recipient_id` is the RGB Beneficiary string emitted by the wallet (today,
+/// derived from the pinned External script). `nonce` is per-invoice random
+/// bytes. When `nonce` is empty, returns `recipient_id` unchanged (legacy
+/// path for in-flight transfers issued before this fix).
+pub(crate) fn derive_proxy_recipient_id(recipient_id: &str, nonce: &[u8]) -> String {
+    if nonce.is_empty() {
+        return recipient_id.to_string();
+    }
+    let mut buf = Vec::with_capacity(recipient_id.len() + nonce.len());
+    buf.extend_from_slice(recipient_id.as_bytes());
+    buf.extend_from_slice(nonce);
+    hash_bytes_hex(&buf)
+}
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn hash_file(path: &Path) -> Result<String, Error> {
     let mut file = fs::File::open(path)?;
@@ -1297,5 +1313,43 @@ mod tests {
         let network = BitcoinNetwork::SignetCustom;
         let rust_bitcoin_network = bitcoin::Network::from(network);
         assert_eq!(rust_bitcoin_network, bitcoin::Network::Signet);
+    }
+}
+
+#[cfg(test)]
+mod tests_proxy_recipient_id {
+    use super::*;
+
+    #[test]
+    fn legacy_empty_nonce_returns_recipient_id_unchanged() {
+        let rid = "wvout:BczOakzm-uHua56v-znf1Q~A-BTRpWDb";
+        assert_eq!(derive_proxy_recipient_id(rid, &[]), rid);
+    }
+
+    #[test]
+    fn nonempty_nonce_returns_64_char_hex_hash() {
+        let rid = "wvout:BczOakzm-uHua56v-znf1Q~A-BTRpWDb";
+        let nonce = [0u8; 16];
+        let out = derive_proxy_recipient_id(rid, &nonce);
+        assert_eq!(out.len(), 64);
+        assert!(out.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn different_nonces_yield_different_ids() {
+        let rid = "wvout:BczOakzm-uHua56v-znf1Q~A-BTRpWDb";
+        let a = derive_proxy_recipient_id(rid, &[1u8; 16]);
+        let b = derive_proxy_recipient_id(rid, &[2u8; 16]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn same_inputs_yield_same_id() {
+        let rid = "wvout:BczOakzm-uHua56v-znf1Q~A-BTRpWDb";
+        let nonce = [7u8; 16];
+        assert_eq!(
+            derive_proxy_recipient_id(rid, &nonce),
+            derive_proxy_recipient_id(rid, &nonce)
+        );
     }
 }
