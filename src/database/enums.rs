@@ -156,7 +156,7 @@ pub enum RecipientTypeFull {
     Witness {
         vout: Option<u32>,
         /// Per-invoice random bytes mixed into the proxy routing key.
-        /// Empty for legacy entries created before the hybrid fix.
+        /// Empty when no nonce is in use (e.g. wallets without address reuse).
         #[serde(default)]
         recipient_nonce: Vec<u8>,
     },

@@ -250,3 +250,112 @@ fn witness_receive_keeps_recipient_id_but_rotates_invoice_nonce() {
     }
 }
 
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn two_consecutive_witness_transfers_both_settle() {
+    initialize();
+
+    // Sender: default funded party (no reuse). Issues an asset.
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_nia(Some(&[AMOUNT, AMOUNT * 2]));
+
+    // Receiver: reuse_addresses=true so both invoices hit the same pinned
+    // External script. Verifies the proxy routing key differs per invoice
+    // so the second send is not rejected as a duplicate.
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut rcv_wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
+    fund_wallet(rcv_wallet.get_address().unwrap());
+    rcv_wallet
+        .create_utxos(rcv_online.clone(), false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+    let mut rcv_party = party!(rcv_wallet, rcv_online);
+
+    let amount: u64 = 1;
+    let mut prior_recipient_id: Option<String> = None;
+    let mut rcv_batch_idxs: Vec<i32> = vec![];
+    let mut sender_txids: Vec<String> = vec![];
+    for cycle in 0..2 {
+        // Receiver issues a witness invoice. Reuse_addresses ⇒ same pinned
+        // script ⇒ same recipient_id; only the rid_nonce changes per call.
+        let receive_data = rcv_party.witness_receive();
+        if let Some(prev) = prior_recipient_id.as_ref() {
+            assert_eq!(
+                prev, &receive_data.recipient_id,
+                "cycle {cycle}: recipient_id (beneficiary) should be pinned across calls"
+            );
+        }
+        prior_recipient_id = Some(receive_data.recipient_id.clone());
+        rcv_batch_idxs.push(receive_data.batch_transfer_idx);
+
+        // Build the sender's Recipient from the parsed invoice, so the
+        // transport URLs carry rid_nonce (matching production sender flow).
+        let invoice = Invoice::new(receive_data.invoice.clone()).unwrap();
+        let invoice_endpoints = invoice.invoice_data().transport_endpoints;
+        let recipient_map = HashMap::from([(
+            asset.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_data.recipient_id.clone(),
+                witness_data: Some(WitnessData {
+                    amount_sat: 1000,
+                    blinding: None,
+                }),
+                transport_endpoints: invoice_endpoints,
+            }],
+        )]);
+        let txid = party.send_retry(&recipient_map);
+        assert!(!txid.is_empty(), "cycle {cycle}: send returned empty txid");
+        sender_txids.push(txid);
+
+        // Drive both sides to Settled.
+        std::thread::sleep(Duration::from_millis(1000));
+        rcv_party.wait_for_refresh(None);
+        party.wait_for_refresh(Some(&asset.asset_id));
+        mine(false);
+        std::thread::sleep(Duration::from_millis(1000));
+        rcv_party.wait_for_refresh(None);
+        party.wait_for_refresh(Some(&asset.asset_id));
+    }
+
+    // Both witness transfers on the receiver must be Settled. Look up by
+    // batch_transfer_idx (unique per invoice) since recipient_id is shared
+    // across the two transfers under reuse_addresses.
+    let rcv_transfers = rcv_party.list_transfers(Some(&asset.asset_id));
+    for batch_idx in &rcv_batch_idxs {
+        let t = rcv_transfers
+            .iter()
+            .find(|t| t.batch_transfer_idx == *batch_idx)
+            .unwrap_or_else(|| panic!("no receiver transfer for batch_idx {batch_idx}"));
+        assert_eq!(
+            t.status,
+            TransferStatus::Settled,
+            "receiver transfer for batch_idx {batch_idx} not settled"
+        );
+    }
+
+    // Both sends on the sender side must also be Settled.
+    for txid in &sender_txids {
+        let (sender_transfer, _, _) = party.get_test_transfer_sender(txid);
+        let (sender_data, _) = party.get_test_transfer_data(&sender_transfer);
+        assert_eq!(
+            sender_data.status,
+            TransferStatus::Settled,
+            "sender transfer for txid {txid} not settled"
+        );
+    }
+}

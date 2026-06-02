@@ -2091,7 +2091,15 @@ pub trait WalletOffline: WalletBackup {
                 TransferStatus::WaitingCounterparty,
             ) => None,
             (TransferKind::ReceiveBlind | TransferKind::ReceiveWitness, _) => {
-                Some(self.get_receive_consignment_path(&transfer.recipient_id.clone().unwrap()))
+                let recipient_id = transfer.recipient_id.clone().unwrap();
+                let nonce: &[u8] = match transfer.recipient_type.as_ref() {
+                    Some(RecipientTypeFull::Witness {
+                        recipient_nonce, ..
+                    }) => recipient_nonce.as_slice(),
+                    _ => &[],
+                };
+                let proxy_rid = crate::utils::derive_proxy_recipient_id(&recipient_id, nonce);
+                Some(self.get_receive_consignment_path(&proxy_rid))
             }
             (TransferKind::Issuance, _) => {
                 Some(self.get_issue_consignment_path(&asset_transfer.asset_id.clone().unwrap()))

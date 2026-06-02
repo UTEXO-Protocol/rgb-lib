@@ -1789,10 +1789,10 @@ impl MultisigWallet {
         let recipient_id = invoice_data.recipient_id.clone();
 
         // Strip the per-invoice `rid_nonce` query parameter from each transport
-        // endpoint URL before storing, so the cosigner's stored endpoints match
-        // the initiator's (bare URLs). Capture the nonce — the same value is
-        // attached to every endpoint by the initiator per the design — so the
-        // cosigner can derive the proxy routing key during refresh.
+        // endpoint URL before storing, so stored endpoints stay as bare URLs.
+        // Capture the nonce so the cosigner can derive the proxy routing key
+        // during refresh. All endpoints on a given invoice carry the same
+        // nonce; take the first non-empty one.
         let mut recipient_nonce: Vec<u8> = vec![];
         let bare_endpoints: Vec<String> = invoice_data
             .transport_endpoints
