@@ -179,3 +179,74 @@ fn witness_receive_twice_reuses_pending_witness_script_row() {
         .unwrap();
 }
 
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn witness_receive_keeps_recipient_id_but_rotates_invoice_nonce() {
+    initialize();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let online = wallet.go_online(test_go_online_options(None)).unwrap();
+
+    let pinned_addr = wallet.get_address().unwrap();
+    fund_wallet(pinned_addr);
+    wallet
+        .create_utxos(online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+
+    let inv1 = wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let inv2 = wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+
+    // Script-derived recipient_id (Beneficiary) is stable across calls.
+    assert_eq!(inv1.recipient_id, inv2.recipient_id);
+
+    // The two invoice strings differ — each carries its own rid_nonce.
+    assert_ne!(inv1.invoice, inv2.invoice);
+
+    // Parse each invoice and verify the transport endpoint round-trips with
+    // a `rid_nonce=<hex>` query parameter that decodes to a 16-byte vec.
+    for (label, inv) in [("inv1", &inv1), ("inv2", &inv2)] {
+        let parsed = Invoice::new(inv.invoice.clone()).unwrap();
+        let endpoints = parsed.invoice_data().transport_endpoints;
+        assert!(!endpoints.is_empty(), "{label}: no transport endpoints");
+        let ep = &endpoints[0];
+        assert!(
+            ep.contains("rid_nonce="),
+            "{label}: parsed endpoint missing rid_nonce=: {ep}"
+        );
+        let (_, nonce) = crate::utils::extract_recipient_nonce(ep);
+        let nonce = nonce.expect("rid_nonce should parse");
+        assert_eq!(nonce.len(), 16, "{label}: nonce wrong length: {nonce:?}");
+    }
+}
+

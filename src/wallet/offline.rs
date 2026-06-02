@@ -973,9 +973,12 @@ pub trait WalletOffline: WalletBackup {
             RecipientType::Witness => {
                 let script_pubkey = self.get_new_address()?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
+                let mut recipient_nonce = [0u8; 16];
+                rand::Rng::fill_bytes(&mut rand::rng(), &mut recipient_nonce);
+                let recipient_nonce = recipient_nonce.to_vec();
                 let recipient_type_full = RecipientTypeFull::Witness {
                     vout: None,
-                    recipient_nonce: vec![],
+                    recipient_nonce,
                 };
                 (beneficiary, recipient_type_full, None, Some(script_pubkey))
             }
@@ -1015,7 +1018,21 @@ pub trait WalletOffline: WalletBackup {
         if let Some(contract_id) = contract_id {
             invoice_builder = invoice_builder.set_contract(contract_id);
         }
-        let transports: Vec<&str> = transport_endpoints.iter().map(AsRef::as_ref).collect();
+        let nonce_for_invoice: &[u8] = match &recipient_type_full {
+            RecipientTypeFull::Witness { recipient_nonce, .. } => recipient_nonce.as_slice(),
+            RecipientTypeFull::Blind { .. } => &[],
+        };
+        let decorated_transports: Vec<String> = transport_endpoints
+            .iter()
+            .map(|ep| {
+                if nonce_for_invoice.is_empty() {
+                    ep.clone()
+                } else {
+                    crate::utils::append_recipient_nonce(ep, nonce_for_invoice)
+                }
+            })
+            .collect();
+        let transports: Vec<&str> = decorated_transports.iter().map(AsRef::as_ref).collect();
         invoice_builder = invoice_builder.add_transports(transports).unwrap();
         let detected_assignment = match (&assignment, schema) {
             (
