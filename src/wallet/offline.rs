@@ -973,9 +973,16 @@ pub trait WalletOffline: WalletBackup {
             RecipientType::Witness => {
                 let script_pubkey = self.get_new_address()?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
-                let mut recipient_nonce = [0u8; 16];
-                rand::Rng::fill_bytes(&mut rand::rng(), &mut recipient_nonce);
-                let recipient_nonce = recipient_nonce.to_vec();
+                // Per-invoice nonce is only needed when address reuse is on:
+                // without reuse, each witness_receive draws a fresh script, so
+                // the script-derived recipient_id is already unique per call.
+                let recipient_nonce = if self.wallet_data().reuse_addresses {
+                    let mut buf = [0u8; 16];
+                    rand::Rng::fill_bytes(&mut rand::rng(), &mut buf);
+                    buf.to_vec()
+                } else {
+                    vec![]
+                };
                 let recipient_type_full = RecipientTypeFull::Witness {
                     vout: None,
                     recipient_nonce,
