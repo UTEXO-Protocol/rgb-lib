@@ -1787,7 +1787,27 @@ impl MultisigWallet {
         let invoice = Invoice::new(receive_metadata.invoice.clone())?;
         let invoice_data = invoice.invoice_data();
         let recipient_id = invoice_data.recipient_id.clone();
-        let endpoints = self.convert_transport_endpoints(&invoice_data.transport_endpoints)?;
+
+        // Strip the per-invoice `rid_nonce` query parameter from each transport
+        // endpoint URL before storing, so the cosigner's stored endpoints match
+        // the initiator's (bare URLs). Capture the nonce — the same value is
+        // attached to every endpoint by the initiator per the design — so the
+        // cosigner can derive the proxy routing key during refresh.
+        let mut recipient_nonce: Vec<u8> = vec![];
+        let bare_endpoints: Vec<String> = invoice_data
+            .transport_endpoints
+            .iter()
+            .map(|ep| {
+                let (bare, nonce) = crate::utils::extract_recipient_nonce(ep);
+                if let Some(n) = nonce {
+                    if recipient_nonce.is_empty() {
+                        recipient_nonce = n;
+                    }
+                }
+                bare
+            })
+            .collect();
+        let endpoints = self.convert_transport_endpoints(&bare_endpoints)?;
 
         // parse data based on operation type
         let (blind_seal, recipient_type_full, script_pubkey) = match operation_type {
@@ -1812,7 +1832,7 @@ impl MultisigWallet {
                 None,
                 RecipientTypeFull::Witness {
                     vout: None,
-                    recipient_nonce: vec![],
+                    recipient_nonce,
                 },
                 Some(script_buf_from_recipient_id(invoice_data.recipient_id.clone())?.unwrap()),
             ),
