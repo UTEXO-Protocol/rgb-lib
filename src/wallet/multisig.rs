@@ -1799,10 +1799,10 @@ impl MultisigWallet {
             .iter()
             .map(|ep| {
                 let (bare, nonce) = crate::utils::extract_recipient_nonce(ep);
-                if let Some(n) = nonce {
-                    if recipient_nonce.is_empty() {
-                        recipient_nonce = n;
-                    }
+                if let Some(n) = nonce
+                    && recipient_nonce.is_empty()
+                {
+                    recipient_nonce = n;
                 }
                 bare
             })

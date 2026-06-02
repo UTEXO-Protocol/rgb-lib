@@ -280,7 +280,7 @@ fn two_consecutive_witness_transfers_both_settle() {
     let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
     fund_wallet(rcv_wallet.get_address().unwrap());
     rcv_wallet
-        .create_utxos(rcv_online.clone(), false, None, None, FEE_RATE, false)
+        .create_utxos(rcv_online, false, None, None, FEE_RATE, false)
         .unwrap();
     mine(false);
     let mut rcv_party = party!(rcv_wallet, rcv_online);

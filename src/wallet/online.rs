@@ -1024,19 +1024,18 @@ pub trait WalletOnline: WalletOffline {
             // download consignment and its metadata
             let mut proxy_res = None;
             for (transfer_transport_endpoint, transport_endpoint) in tte_data {
-                let result = match self
-                    .get_consignment(&transport_endpoint.endpoint, proxy_rid.clone())
-                {
-                    Err(Error::NoConsignment) => {
-                        info!(
-                            self.logger(),
-                            "Skipping transport endpoint: {:?}", &transport_endpoint
-                        );
-                        continue;
-                    }
-                    Err(e) => return Err(e),
-                    Ok(r) => r,
-                };
+                let result =
+                    match self.get_consignment(&transport_endpoint.endpoint, proxy_rid.clone()) {
+                        Err(Error::NoConsignment) => {
+                            info!(
+                                self.logger(),
+                                "Skipping transport endpoint: {:?}", &transport_endpoint
+                            );
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                        Ok(r) => r,
+                    };
 
                 proxy_res = Some((
                     result.consignment,

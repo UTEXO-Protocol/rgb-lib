@@ -660,6 +660,7 @@ pub(crate) fn append_recipient_nonce(url: &str, nonce: &[u8]) -> String {
 
 /// Extract the `rid_nonce` query parameter from a transport endpoint URL.
 /// Returns `(bare_url_with_other_params, nonce_bytes_if_present)`.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn extract_recipient_nonce(url: &str) -> (String, Option<Vec<u8>>) {
     let Some(qpos) = url.find('?') else {
         return (url.to_string(), None);
@@ -670,11 +671,11 @@ pub(crate) fn extract_recipient_nonce(url: &str) -> (String, Option<Vec<u8>>) {
     let mut kept: Vec<&str> = Vec::new();
     let mut found: Option<Vec<u8>> = None;
     for pair in query.split('&') {
-        if let Some(value) = pair.strip_prefix(prefix.as_str()) {
-            if let Ok(bytes) = hex::decode(value) {
-                found = Some(bytes);
-                continue;
-            }
+        if let Some(value) = pair.strip_prefix(prefix.as_str())
+            && let Ok(bytes) = hex::decode(value)
+        {
+            found = Some(bytes);
+            continue;
         }
         kept.push(pair);
     }
@@ -1394,7 +1395,7 @@ mod tests_proxy_recipient_id {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
 mod tests_transport_url_nonce {
     use super::*;
 
@@ -1438,7 +1439,10 @@ mod tests_transport_url_nonce {
     fn extract_preserves_other_query_params() {
         let url = "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&rid_nonce=ab&baz=qux";
         let (bare, nonce) = extract_recipient_nonce(url);
-        assert_eq!(bare, "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&baz=qux");
+        assert_eq!(
+            bare,
+            "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&baz=qux"
+        );
         assert_eq!(nonce, Some(vec![0xab]));
     }
 }

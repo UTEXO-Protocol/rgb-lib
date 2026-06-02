@@ -307,9 +307,11 @@ impl DbTxn {
             .clone()
             .take()
             .expect("script must be set on the active model");
-        let on_conflict = sea_query::OnConflict::column(pending_witness_script::Column::Script)
-            .do_nothing()
-            .to_owned();
+        let on_conflict = sea_query::OnConflict::column(
+            crate::database::entities::pending_witness_script::Column::Script,
+        )
+        .do_nothing()
+        .to_owned();
         let conn = self.inner();
         let res = block_on(
             PendingWitnessScript::insert(pending_witness_script)
@@ -321,7 +323,10 @@ impl DbTxn {
             Err(DbErr::RecordNotInserted) => {
                 let existing = block_on(
                     PendingWitnessScript::find()
-                        .filter(pending_witness_script::Column::Script.eq(script))
+                        .filter(
+                            crate::database::entities::pending_witness_script::Column::Script
+                                .eq(script),
+                        )
                         .one(conn),
                 )?;
                 match existing {

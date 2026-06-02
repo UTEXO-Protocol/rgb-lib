@@ -1026,7 +1026,9 @@ pub trait WalletOffline: WalletBackup {
             invoice_builder = invoice_builder.set_contract(contract_id);
         }
         let nonce_for_invoice: &[u8] = match &recipient_type_full {
-            RecipientTypeFull::Witness { recipient_nonce, .. } => recipient_nonce.as_slice(),
+            RecipientTypeFull::Witness {
+                recipient_nonce, ..
+            } => recipient_nonce.as_slice(),
             RecipientTypeFull::Blind { .. } => &[],
         };
         let decorated_transports: Vec<String> = transport_endpoints
