@@ -646,6 +646,46 @@ pub(crate) fn derive_proxy_recipient_id(recipient_id: &str, nonce: &[u8]) -> Str
     hash_bytes_hex(&buf)
 }
 
+const RECIPIENT_NONCE_PARAM: &str = "rid_nonce";
+
+/// Append the per-invoice `rid_nonce=<hex>` query parameter to a transport
+/// endpoint URL. Used by the receiver side when emitting witness invoices.
+pub(crate) fn append_recipient_nonce(url: &str, nonce: &[u8]) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!(
+        "{url}{separator}{RECIPIENT_NONCE_PARAM}={}",
+        hex::encode(nonce)
+    )
+}
+
+/// Extract the `rid_nonce` query parameter from a transport endpoint URL.
+/// Returns `(bare_url_with_other_params, nonce_bytes_if_present)`.
+pub(crate) fn extract_recipient_nonce(url: &str) -> (String, Option<Vec<u8>>) {
+    let Some(qpos) = url.find('?') else {
+        return (url.to_string(), None);
+    };
+    let (base, query) = url.split_at(qpos);
+    let query = &query[1..];
+    let prefix = format!("{RECIPIENT_NONCE_PARAM}=");
+    let mut kept: Vec<&str> = Vec::new();
+    let mut found: Option<Vec<u8>> = None;
+    for pair in query.split('&') {
+        if let Some(value) = pair.strip_prefix(prefix.as_str()) {
+            if let Ok(bytes) = hex::decode(value) {
+                found = Some(bytes);
+                continue;
+            }
+        }
+        kept.push(pair);
+    }
+    let rebuilt = if kept.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", kept.join("&"))
+    };
+    (rebuilt, found)
+}
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn hash_file(path: &Path) -> Result<String, Error> {
     let mut file = fs::File::open(path)?;
@@ -1351,5 +1391,54 @@ mod tests_proxy_recipient_id {
             derive_proxy_recipient_id(rid, &nonce),
             derive_proxy_recipient_id(rid, &nonce)
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_transport_url_nonce {
+    use super::*;
+
+    #[test]
+    fn append_to_url_without_query() {
+        let url = "rpcs://proxy.example.com/0.2/json-rpc";
+        let nonce = [0x01, 0x02, 0x03];
+        assert_eq!(
+            append_recipient_nonce(url, &nonce),
+            "rpcs://proxy.example.com/0.2/json-rpc?rid_nonce=010203"
+        );
+    }
+
+    #[test]
+    fn append_to_url_with_existing_query() {
+        let url = "rpcs://proxy.example.com/0.2/json-rpc?foo=bar";
+        let nonce = [0xab, 0xcd];
+        assert_eq!(
+            append_recipient_nonce(url, &nonce),
+            "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&rid_nonce=abcd"
+        );
+    }
+
+    #[test]
+    fn extract_returns_bare_url_and_nonce_when_present() {
+        let url = "rpcs://proxy.example.com/0.2/json-rpc?rid_nonce=deadbeef";
+        let (bare, nonce) = extract_recipient_nonce(url);
+        assert_eq!(bare, "rpcs://proxy.example.com/0.2/json-rpc");
+        assert_eq!(nonce, Some(vec![0xde, 0xad, 0xbe, 0xef]));
+    }
+
+    #[test]
+    fn extract_returns_none_when_absent() {
+        let url = "rpcs://proxy.example.com/0.2/json-rpc";
+        let (bare, nonce) = extract_recipient_nonce(url);
+        assert_eq!(bare, url);
+        assert_eq!(nonce, None);
+    }
+
+    #[test]
+    fn extract_preserves_other_query_params() {
+        let url = "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&rid_nonce=ab&baz=qux";
+        let (bare, nonce) = extract_recipient_nonce(url);
+        assert_eq!(bare, "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&baz=qux");
+        assert_eq!(nonce, Some(vec![0xab]));
     }
 }
