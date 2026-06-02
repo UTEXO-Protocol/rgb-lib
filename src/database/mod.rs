@@ -302,9 +302,35 @@ impl DbTxn {
         &self,
         pending_witness_script: DbPendingWitnessScriptActMod,
     ) -> Result<i32, Error> {
-        let res =
-            block_on(PendingWitnessScript::insert(pending_witness_script).exec(self.inner()))?;
-        Ok(res.last_insert_id)
+        let script = pending_witness_script
+            .script
+            .clone()
+            .take()
+            .expect("script must be set on the active model");
+        let on_conflict = sea_query::OnConflict::column(pending_witness_script::Column::Script)
+            .do_nothing()
+            .to_owned();
+        let conn = self.inner();
+        let res = block_on(
+            PendingWitnessScript::insert(pending_witness_script)
+                .on_conflict(on_conflict)
+                .exec(conn),
+        );
+        match res {
+            Ok(insert_result) => Ok(insert_result.last_insert_id),
+            Err(DbErr::RecordNotInserted) => {
+                let existing = block_on(
+                    PendingWitnessScript::find()
+                        .filter(pending_witness_script::Column::Script.eq(script))
+                        .one(conn),
+                )?;
+                match existing {
+                    Some(row) => Ok(row.idx),
+                    None => unreachable!("RecordNotInserted means the row exists"),
+                }
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -629,6 +655,56 @@ impl DbTxn {
         &self,
     ) -> Result<Vec<DbPendingWitnessScript>, Error> {
         Ok(block_on(PendingWitnessScript::find().all(self.inner()))?)
+    }
+
+    /// Count in-flight (non-Settled, non-Failed) witness `batch_transfer`s
+    /// whose associated `transfer.recipient_id` derives back to `script_hex`.
+    ///
+    /// Used by sync paths to decide whether deleting a `pending_witness_script`
+    /// row is safe: the row must stay alive while ≥ 2 in-flight invoices target
+    /// the same pinned script, so later-arriving UTXOs at that script keep
+    /// getting `pending_witness=true` and are excluded from coin selection.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn count_in_flight_witness_transfers_for_script(
+        &self,
+        script_hex: &str,
+    ) -> Result<u32, Error> {
+        let batch_transfers = self.iter_batch_transfers()?;
+        let asset_transfers = self.iter_asset_transfers()?;
+        let transfers = self.iter_transfers()?;
+
+        let in_flight_batch_idx: std::collections::HashSet<i32> = batch_transfers
+            .iter()
+            .filter(|bt| !bt.status.settled() && !bt.status.failed())
+            .map(|bt| bt.idx)
+            .collect();
+        let in_flight_asset_transfer_idx: std::collections::HashSet<i32> = asset_transfers
+            .iter()
+            .filter(|at| in_flight_batch_idx.contains(&at.batch_transfer_idx))
+            .map(|at| at.idx)
+            .collect();
+
+        let mut count: u32 = 0;
+        for t in &transfers {
+            if !in_flight_asset_transfer_idx.contains(&t.asset_transfer_idx) {
+                continue;
+            }
+            if !matches!(t.recipient_type, Some(RecipientTypeFull::Witness { .. })) {
+                continue;
+            }
+            let Some(ref recipient_id) = t.recipient_id else {
+                continue;
+            };
+            match crate::utils::script_buf_from_recipient_id(recipient_id.clone()) {
+                Ok(Some(script)) => {
+                    if script.to_hex_string() == script_hex {
+                        count = count.saturating_add(1);
+                    }
+                }
+                _ => continue,
+            }
+        }
+        Ok(count)
     }
 
     pub(crate) fn iter_reserved_txos(&self) -> Result<Vec<DbReservedTxo>, Error> {

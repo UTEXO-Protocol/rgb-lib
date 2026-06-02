@@ -87,7 +87,11 @@ impl WalletCore for MpcWallet {
                     let script_hex = txout.script_pubkey.to_hex_string();
                     if pending_witness_scripts.contains(&script_hex) {
                         new_db_utxo.pending_witness = ActiveValue::Set(true);
-                        txn.del_pending_witness_script(script_hex)?;
+                        let in_flight =
+                            txn.count_in_flight_witness_transfers_for_script(&script_hex)?;
+                        if in_flight <= 1 {
+                            txn.del_pending_witness_script(script_hex)?;
+                        }
                     }
                 }
 

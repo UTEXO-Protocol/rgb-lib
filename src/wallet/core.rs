@@ -421,7 +421,11 @@ pub trait WalletCore {
                 let pending_witness_script = new_utxo.txout.script_pubkey.to_hex_string();
                 if pending_witness_scripts.contains(&pending_witness_script) {
                     new_db_utxo.pending_witness = ActiveValue::Set(true);
-                    txn.del_pending_witness_script(pending_witness_script)?;
+                    let in_flight =
+                        txn.count_in_flight_witness_transfers_for_script(&pending_witness_script)?;
+                    if in_flight <= 1 {
+                        txn.del_pending_witness_script(pending_witness_script)?;
+                    }
                 }
             }
             txn.set_txo(new_db_utxo.clone())?;
