@@ -153,7 +153,13 @@ pub enum RecipientTypeFull {
     /// Receive via blinded UTXO
     Blind { unblinded_utxo: Outpoint },
     /// Receive via witness TX
-    Witness { vout: Option<u32> },
+    Witness {
+        vout: Option<u32>,
+        /// Per-invoice random bytes mixed into the proxy routing key.
+        /// Empty for legacy entries created before the hybrid fix.
+        #[serde(default)]
+        recipient_nonce: Vec<u8>,
+    },
 }
 
 impl From<RecipientTypeFull> for Value {
@@ -488,13 +494,40 @@ mod tests {
                 vout: 0,
             },
         };
-        let witness = RecipientTypeFull::Witness { vout: Some(1) };
-        let witness_none = RecipientTypeFull::Witness { vout: None };
+        let witness = RecipientTypeFull::Witness {
+            vout: Some(1),
+            recipient_nonce: vec![],
+        };
+        let witness_none = RecipientTypeFull::Witness {
+            vout: None,
+            recipient_nonce: vec![],
+        };
         for recipient in [blind, witness, witness_none] {
             let value: Value = recipient.clone().into();
             let recovered = RecipientTypeFull::try_from(value).unwrap();
             assert_eq!(recipient, recovered);
         }
+
+        // roundtrip with non-empty nonce
+        let witness_nonce = RecipientTypeFull::Witness {
+            vout: Some(2),
+            recipient_nonce: vec![1, 2, 3, 4],
+        };
+        let value: Value = witness_nonce.clone().into();
+        let recovered = RecipientTypeFull::try_from(value).unwrap();
+        assert_eq!(witness_nonce, recovered);
+
+        // legacy JSON (no recipient_nonce field) deserializes with empty nonce
+        let legacy_json = serde_json::json!({ "Witness": { "vout": null } });
+        let value = Value::Json(Some(Box::new(legacy_json)));
+        let recovered = RecipientTypeFull::try_from(value).unwrap();
+        assert_eq!(
+            recovered,
+            RecipientTypeFull::Witness {
+                vout: None,
+                recipient_nonce: vec![]
+            }
+        );
 
         // try from value: not JSON
         let value = Value::Int(Some(42));

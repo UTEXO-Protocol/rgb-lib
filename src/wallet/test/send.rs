@@ -3999,7 +3999,7 @@ fn witness_multiple_assets_success() {
         (rcv_xfer_2a, btc_amount_2a),
         (rcv_xfer_2b, btc_amount_2b),
     ] {
-        let RecipientTypeFull::Witness { vout } = rcv_xfer.recipient_type.unwrap() else {
+        let RecipientTypeFull::Witness { vout, .. } = rcv_xfer.recipient_type.unwrap() else {
             panic!()
         };
         let transfer_vout = vout.unwrap() as u64;

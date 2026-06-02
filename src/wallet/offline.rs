@@ -973,7 +973,10 @@ pub trait WalletOffline: WalletBackup {
             RecipientType::Witness => {
                 let script_pubkey = self.get_new_address()?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
-                let recipient_type_full = RecipientTypeFull::Witness { vout: None };
+                let recipient_type_full = RecipientTypeFull::Witness {
+                    vout: None,
+                    recipient_nonce: vec![],
+                };
                 (beneficiary, recipient_type_full, None, Some(script_pubkey))
             }
         };
@@ -2016,7 +2019,7 @@ pub trait WalletOffline: WalletBackup {
             .collect();
         let receive_utxo = match &transfer.recipient_type {
             Some(RecipientTypeFull::Blind { unblinded_utxo }) => Some(unblinded_utxo.clone()),
-            Some(RecipientTypeFull::Witness { vout }) => {
+            Some(RecipientTypeFull::Witness { vout, .. }) => {
                 let received_txo_idx: Vec<i32> = filtered_coloring
                     .clone()
                     // issue coloring from inflation is considered as received

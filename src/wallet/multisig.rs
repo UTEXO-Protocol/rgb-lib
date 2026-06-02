@@ -1810,7 +1810,10 @@ impl MultisigWallet {
             }
             OperationType::WitnessReceive => (
                 None,
-                RecipientTypeFull::Witness { vout: None },
+                RecipientTypeFull::Witness {
+                    vout: None,
+                    recipient_nonce: vec![],
+                },
                 Some(script_buf_from_recipient_id(invoice_data.recipient_id.clone())?.unwrap()),
             ),
             _ => unreachable!("only receive operations"),

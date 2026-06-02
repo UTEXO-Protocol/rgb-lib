@@ -1395,10 +1395,16 @@ pub trait WalletOnline: WalletOffline {
             Some(RecipientTypeFull::Blind { ref unblinded_utxo }) => {
                 txn.get_txo(unblinded_utxo)?.expect("utxo must exist").idx
             }
-            Some(RecipientTypeFull::Witness { .. }) => {
+            Some(RecipientTypeFull::Witness {
+                ref recipient_nonce,
+                ..
+            }) => {
                 let mut updated_transfer: DbTransferActMod = transfer.clone().into();
                 updated_transfer.recipient_type =
-                    ActiveValue::Set(Some(RecipientTypeFull::Witness { vout }));
+                    ActiveValue::Set(Some(RecipientTypeFull::Witness {
+                        vout,
+                        recipient_nonce: recipient_nonce.clone(),
+                    }));
                 txn.update_transfer(&mut updated_transfer)?;
                 let db_utxo = DbTxoActMod {
                     txid: ActiveValue::Set(txid.clone()),
@@ -1649,7 +1655,7 @@ pub trait WalletOnline: WalletOffline {
                 .expect("transfer should have a recipient ID");
             debug!(self.logger(), "Recipient ID: {recipient_id}");
 
-            if let Some(RecipientTypeFull::Witness { vout }) = transfer.recipient_type {
+            if let Some(RecipientTypeFull::Witness { vout, .. }) = transfer.recipient_type {
                 if !skip_sync {
                     self.sync_wallet(
                         txn,
@@ -2763,7 +2769,10 @@ pub trait WalletOnline: WalletOffline {
                         txn.set_coloring(db_coloring)?;
                         (
                             Some(recipient.recipient_id.clone()),
-                            Some(RecipientTypeFull::Witness { vout: Some(vout) }),
+                            Some(RecipientTypeFull::Witness {
+                                vout: Some(vout),
+                                recipient_nonce: vec![],
+                            }),
                             recipient.assignment,
                         )
                     }
