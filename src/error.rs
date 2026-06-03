@@ -524,7 +524,11 @@ pub enum Error {
         details: String,
     },
 
-    /// Provided recipient ID has already been used for another transfer
+    /// The proxy reports the routing key as already used (its `UNIQUE`
+    /// constraint on `recipient_id`). Witness invoices carry a per-invoice
+    /// random nonce in the proxy routing key, so this should not occur in
+    /// normal flow; see it only when an external party has pre-registered
+    /// the same routing key, or when reusing an invoice across attempts.
     #[error("Recipient ID already used")]
     RecipientIDAlreadyUsed,
 

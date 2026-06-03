@@ -973,7 +973,20 @@ pub trait WalletOffline: WalletBackup {
             RecipientType::Witness => {
                 let script_pubkey = self.get_new_address()?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
-                let recipient_type_full = RecipientTypeFull::Witness { vout: None };
+                // Per-invoice nonce is only needed when address reuse is on:
+                // without reuse, each witness_receive draws a fresh script, so
+                // the script-derived recipient_id is already unique per call.
+                let recipient_nonce = if self.wallet_data().reuse_addresses {
+                    let mut buf = [0u8; 16];
+                    rand::Rng::fill_bytes(&mut rand::rng(), &mut buf);
+                    buf.to_vec()
+                } else {
+                    vec![]
+                };
+                let recipient_type_full = RecipientTypeFull::Witness {
+                    vout: None,
+                    recipient_nonce,
+                };
                 (beneficiary, recipient_type_full, None, Some(script_pubkey))
             }
         };
@@ -1012,7 +1025,23 @@ pub trait WalletOffline: WalletBackup {
         if let Some(contract_id) = contract_id {
             invoice_builder = invoice_builder.set_contract(contract_id);
         }
-        let transports: Vec<&str> = transport_endpoints.iter().map(AsRef::as_ref).collect();
+        let nonce_for_invoice: &[u8] = match &recipient_type_full {
+            RecipientTypeFull::Witness {
+                recipient_nonce, ..
+            } => recipient_nonce.as_slice(),
+            RecipientTypeFull::Blind { .. } => &[],
+        };
+        let decorated_transports: Vec<String> = transport_endpoints
+            .iter()
+            .map(|ep| {
+                if nonce_for_invoice.is_empty() {
+                    ep.clone()
+                } else {
+                    crate::utils::append_recipient_nonce(ep, nonce_for_invoice)
+                }
+            })
+            .collect();
+        let transports: Vec<&str> = decorated_transports.iter().map(AsRef::as_ref).collect();
         invoice_builder = invoice_builder.add_transports(transports).unwrap();
         let detected_assignment = match (&assignment, schema) {
             (
@@ -2016,7 +2045,7 @@ pub trait WalletOffline: WalletBackup {
             .collect();
         let receive_utxo = match &transfer.recipient_type {
             Some(RecipientTypeFull::Blind { unblinded_utxo }) => Some(unblinded_utxo.clone()),
-            Some(RecipientTypeFull::Witness { vout }) => {
+            Some(RecipientTypeFull::Witness { vout, .. }) => {
                 let received_txo_idx: Vec<i32> = filtered_coloring
                     .clone()
                     // issue coloring from inflation is considered as received
@@ -2064,7 +2093,15 @@ pub trait WalletOffline: WalletBackup {
                 TransferStatus::WaitingCounterparty,
             ) => None,
             (TransferKind::ReceiveBlind | TransferKind::ReceiveWitness, _) => {
-                Some(self.get_receive_consignment_path(&transfer.recipient_id.clone().unwrap()))
+                let recipient_id = transfer.recipient_id.clone().unwrap();
+                let nonce: &[u8] = match transfer.recipient_type.as_ref() {
+                    Some(RecipientTypeFull::Witness {
+                        recipient_nonce, ..
+                    }) => recipient_nonce.as_slice(),
+                    _ => &[],
+                };
+                let proxy_rid = crate::utils::derive_proxy_recipient_id(&recipient_id, nonce);
+                Some(self.get_receive_consignment_path(&proxy_rid))
             }
             (TransferKind::Issuance, _) => {
                 Some(self.get_issue_consignment_path(&asset_transfer.asset_id.clone().unwrap()))
