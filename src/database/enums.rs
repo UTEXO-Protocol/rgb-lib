@@ -308,13 +308,16 @@ impl TransferStatus {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub(crate) fn is_fallible(&self) -> bool {
-        [
+    pub(crate) fn is_fallible(&self, force: bool) -> bool {
+        let always = [
             TransferStatus::Initiated,
             TransferStatus::WaitingCounterparty,
             TransferStatus::WaitingSafeHeight,
-        ]
-        .contains(self)
+        ];
+        if always.contains(self) {
+            return true;
+        }
+        force && *self == TransferStatus::WaitingConfirmations
     }
 }
 

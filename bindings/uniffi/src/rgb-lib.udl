@@ -932,7 +932,7 @@ interface Wallet {
   [Throws=RgbLibError]
   boolean fail_transfers(
     Online online, i32? batch_transfer_idx, boolean no_asset_only,
-    boolean skip_sync);
+    boolean skip_sync, boolean force);
 
   [Throws=RgbLibError]
   string get_address();
@@ -1123,7 +1123,7 @@ interface MultisigWallet {
   [Throws=RgbLibError]
   boolean fail_transfers(
     Online online, i32? batch_transfer_idx, boolean no_asset_only,
-    boolean skip_sync);
+    boolean skip_sync, boolean force);
 
   [Throws=RgbLibError]
   Balance get_asset_balance(string asset_id);

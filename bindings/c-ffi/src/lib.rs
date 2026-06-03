@@ -225,6 +225,7 @@ pub extern "C" fn rgblib_fail_transfers(
     batch_transfer_idx_opt: *const c_char,
     no_asset_only: bool,
     skip_sync: bool,
+    force: bool,
 ) -> CResultString {
     fail_transfers(
         wallet,
@@ -232,6 +233,7 @@ pub extern "C" fn rgblib_fail_transfers(
         batch_transfer_idx_opt,
         no_asset_only,
         skip_sync,
+        force,
     )
     .into()
 }

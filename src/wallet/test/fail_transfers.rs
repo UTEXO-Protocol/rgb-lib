@@ -384,6 +384,118 @@ fn fail() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn force_waiting_confirmations() {
+    initialize();
+
+    // wallets
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    // issue
+    let asset = party.issue_asset_nia(None);
+    let asset_id = asset.asset_id.clone();
+
+    // start a transfer and progress both sides to WaitingConfirmations
+    let receive_data = rcv_party.blind_receive();
+    let recipient_id = receive_data.recipient_id;
+    let batch_transfer_idx = receive_data.batch_transfer_idx;
+    let recipient_map = HashMap::from([(
+        asset_id.clone(),
+        vec![Recipient {
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            assignment: Assignment::Fungible(66),
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let send_result = party.send_result(&recipient_map).unwrap();
+
+    let _guard = stop_mining();
+
+    // case (a): force=false still rejects WaitingConfirmations (regression guard);
+    // the sync performed by fail_transfers also progresses WaitingCounterparty ->
+    // WaitingConfirmations on both sides
+    let result = rcv_party.fail_transfers_force(Some(batch_transfer_idx), false, false, false);
+    assert!(matches!(result, Err(Error::CannotFailBatchTransfer)));
+    assert!(
+        rcv_party
+            .check_test_transfer_status_recipient(&recipient_id, TransferStatus::WaitingConfirmations)
+    );
+    let result =
+        party.fail_transfers_force(Some(send_result.batch_transfer_idx), false, false, false);
+    assert!(matches!(result, Err(Error::CannotFailBatchTransfer)));
+    assert!(
+        party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::WaitingConfirmations)
+    );
+
+    // case (b): force=true on the inbound transfer succeeds and transitions to Failed
+    let result = rcv_party.fail_transfers_force(Some(batch_transfer_idx), false, false, true);
+    assert!(result.is_ok());
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
+
+    // delete then succeeds now that the transfer is Failed
+    assert!(rcv_party.delete_transfers(Some(batch_transfer_idx), false));
+
+    // case (c): force=true on the outbound transfer succeeds symmetrically.
+    // This scenario assumes the operator has already verified the broadcast tx will
+    // not confirm; forcing it to Failed only frees the local record.
+    let result =
+        party.fail_transfers_force(Some(send_result.batch_transfer_idx), false, false, true);
+    assert!(result.is_ok());
+    assert!(party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Failed));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn force_does_not_fail_settled() {
+    initialize();
+
+    // wallets
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    // issue
+    let asset = party.issue_asset_nia(None);
+    let asset_id = asset.asset_id.clone();
+
+    // complete a transfer all the way to Settled on both sides
+    let receive_data = rcv_party.blind_receive();
+    let recipient_id = receive_data.recipient_id;
+    let batch_transfer_idx = receive_data.batch_transfer_idx;
+    let recipient_map = HashMap::from([(
+        asset_id.clone(),
+        vec![Recipient {
+            recipient_id: recipient_id.clone(),
+            witness_data: None,
+            assignment: Assignment::Fungible(66),
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let send_result = party.send_result(&recipient_map).unwrap();
+
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset_id));
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset_id));
+
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
+    assert!(party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
+
+    // case (d): force=true does not bypass the terminal Settled state
+    let result = rcv_party.fail_transfers_force(Some(batch_transfer_idx), false, false, true);
+    assert!(matches!(result, Err(Error::CannotFailBatchTransfer)));
+    assert!(rcv_party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
+    let result =
+        party.fail_transfers_force(Some(send_result.batch_transfer_idx), false, false, true);
+    assert!(matches!(result, Err(Error::CannotFailBatchTransfer)));
+    assert!(party.check_test_transfer_status_recipient(&recipient_id, TransferStatus::Settled));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn batch_fail() {
     initialize();
 

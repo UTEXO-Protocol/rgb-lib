@@ -666,20 +666,32 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
     ) -> Result<bool, Error> {
         let online = self.party_online();
         self.wlt_mut()
-            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)
+            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync, false)
+    }
+
+    fn fail_transfers_force(
+        &mut self,
+        batch_transfer_idx: Option<i32>,
+        no_asset_only: bool,
+        skip_sync: bool,
+        force: bool,
+    ) -> Result<bool, Error> {
+        let online = self.party_online();
+        self.wlt_mut()
+            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync, force)
     }
 
     fn fail_transfers_all(&mut self) -> bool {
         let online = self.party_online();
         self.wlt_mut()
-            .fail_transfers(online, None, false, false)
+            .fail_transfers(online, None, false, false, false)
             .unwrap()
     }
 
     fn fail_transfers_single(&mut self, batch_transfer_idx: i32) -> bool {
         let online = self.party_online();
         self.wlt_mut()
-            .fail_transfers(online, Some(batch_transfer_idx), false, false)
+            .fail_transfers(online, Some(batch_transfer_idx), false, false, false)
             .unwrap()
     }
 

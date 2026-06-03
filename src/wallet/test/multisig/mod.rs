@@ -789,6 +789,7 @@ fn success() {
             Some(receive_data.batch_transfer_idx),
             false,
             false,
+            false,
         )
         .unwrap();
     sync_wallets_full(&mut [&mut wlt_2, &mut wlt_3]);
@@ -831,6 +832,7 @@ fn success() {
         .fail_transfers(
             wlt_1.online(),
             Some(transfer.batch_transfer_idx),
+            false,
             false,
             false,
         )

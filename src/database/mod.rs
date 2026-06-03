@@ -103,8 +103,8 @@ impl DbBatchTransfer {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub(crate) fn is_fallible(&self) -> bool {
-        self.status.is_fallible()
+    pub(crate) fn is_fallible(&self, force: bool) -> bool {
+        self.status.is_fallible(force)
     }
 }
 

@@ -1152,9 +1152,10 @@ impl Wallet {
         batch_transfer_idx: Option<i32>,
         no_asset_only: bool,
         skip_sync: bool,
+        force: bool,
     ) -> Result<bool, RgbLibError> {
         self._get_wallet()
-            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)
+            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync, force)
     }
 
     fn get_address(&self) -> Result<String, RgbLibError> {
@@ -1712,9 +1713,10 @@ impl MultisigWallet {
         batch_transfer_idx: Option<i32>,
         no_asset_only: bool,
         skip_sync: bool,
+        force: bool,
     ) -> Result<bool, RgbLibError> {
         self._get_wallet()
-            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)
+            .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync, force)
     }
 
     fn get_asset_balance(&self, asset_id: String) -> Result<Balance, RgbLibError> {

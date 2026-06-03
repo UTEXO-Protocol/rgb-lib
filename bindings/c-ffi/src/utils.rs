@@ -443,11 +443,12 @@ pub(crate) fn fail_transfers(
     batch_transfer_idx_opt: *const c_char,
     no_asset_only: bool,
     skip_sync: bool,
+    force: bool,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
     let online = convert_online(online)?;
     let batch_transfer_idx = convert_optional_number(batch_transfer_idx_opt)?;
-    let res = wallet.fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)?;
+    let res = wallet.fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync, force)?;
     Ok(serde_json::to_string(&res)?)
 }
 

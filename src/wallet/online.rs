@@ -484,6 +484,7 @@ pub trait WalletOnline: WalletOffline {
         batch_transfer_idx: Option<i32>,
         no_asset_only: bool,
         skip_sync: bool,
+        force: bool,
     ) -> Result<FailTransfersOutcome, Error> {
         if !skip_sync {
             self.sync_wallet(
@@ -504,7 +505,7 @@ pub trait WalletOnline: WalletOffline {
             let batch_transfer =
                 txn.get_batch_transfer_or_fail(batch_transfer_idx, &db_data.batch_transfers)?;
 
-            if !batch_transfer.is_fallible() {
+            if !batch_transfer.is_fallible(force) {
                 return Ok(FailTransfersOutcome {
                     transfers_changed: false,
                     cannot_fail: true,
@@ -533,7 +534,7 @@ pub trait WalletOnline: WalletOffline {
             let now = now().unix_timestamp();
             for batch_transfer in db_data.batch_transfers.iter().filter(|t| {
                 let expired = t.expiration.unwrap_or(now) < now;
-                expired && t.is_fallible()
+                expired && t.is_fallible(force)
             }) {
                 if no_asset_only {
                     let connected_assets = batch_transfer
@@ -3796,12 +3797,21 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
     ///
     /// Transfers are eligible if they remain in status [`TransferStatus::WaitingCounterparty`]
     /// after a `refresh` has been performed.
+    ///
+    /// When `force` is true, a transfer in status [`TransferStatus::WaitingConfirmations`] also
+    /// becomes eligible to be failed. This is the only recovery path for a transfer wedged in
+    /// `WaitingConfirmations` (e.g. an inbound receive whose consignment never validated). For
+    /// outgoing transfers `force = true` is unsafe if the broadcast transaction may still confirm:
+    /// it only frees the local record, so the caller assumes responsibility for having verified the
+    /// transaction will not confirm. Other terminal statuses ([`TransferStatus::Settled`],
+    /// [`TransferStatus::Failed`]) stay non-fallible regardless of `force`.
     fn fail_transfers(
         &mut self,
         online: Online,
         batch_transfer_idx: Option<i32>,
         no_asset_only: bool,
         skip_sync: bool,
+        force: bool,
     ) -> Result<bool, Error> {
         info!(
             self.logger(),
@@ -3810,7 +3820,7 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let outcome =
-            self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
+            self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync, force)?;
         if outcome.transfers_changed {
             self.update_backup_info(&txn, false)?;
         }
