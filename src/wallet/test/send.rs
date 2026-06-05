@@ -7856,7 +7856,7 @@ fn offline_receiver_blind_restart_donation_true() {
 
     let asset = party.issue_asset_nia(None);
 
-    stop_mining();
+    let mining_guard = stop_mining();
 
     let receive_data = rcv_party.blind_receive();
     let recipient_id = receive_data.recipient_id.clone();
@@ -7912,6 +7912,7 @@ fn offline_receiver_blind_restart_donation_true() {
     party.refresh_all();
     assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
 
+    drop(mining_guard);
     mine(false);
     rcv_party.wait_for_refresh_raw(None, None);
     party.wait_for_refresh_raw(Some(&asset.asset_id), None);

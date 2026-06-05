@@ -58,7 +58,12 @@ pub trait WalletOnline: WalletOffline {
     }
 
     fn sync_impl(&mut self, txn: &DbTxn, options: SyncOptions) -> Result<(), Error> {
-        self.sync_bdk_and_db_txos(txn, options, false)
+        let is_colored = matches!(options.keychain, SyncKeychain::Colored);
+        self.sync_bdk_and_db_txos(txn, options, false)?;
+        if is_colored {
+            self.reconcile_orphaned_colored_txos(txn)?;
+        }
+        Ok(())
     }
 
     fn broadcast_tx(&self, tx: BdkTransaction) -> Result<BdkTransaction, Error> {
