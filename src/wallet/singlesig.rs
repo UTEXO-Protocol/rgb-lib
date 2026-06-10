@@ -186,6 +186,7 @@ impl Wallet {
             descs.vanilla,
             watch_only,
             BdkNetwork::from(wdata.bitcoin_network),
+            &logger,
         )?;
 
         // setup RGB

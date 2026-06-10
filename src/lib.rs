@@ -236,9 +236,7 @@ use sea_orm::{
 };
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-use slog::warn;
-use slog::{Drain, Logger, debug, error, info, o};
+use slog::{Drain, Logger, debug, error, info, o, warn};
 use slog_async::AsyncGuard;
 use slog_term::{FullFormat, PlainDecorator};
 use strict_encoding::{DecodeError, DeserializeError, FieldName};

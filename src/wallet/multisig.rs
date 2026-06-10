@@ -1046,6 +1046,7 @@ impl MultisigWallet {
             descs.vanilla,
             true,
             BdkNetwork::from(wdata.bitcoin_network),
+            &logger,
         )?;
 
         // setup RGB
