@@ -119,6 +119,61 @@ pub(crate) fn setup_db<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbLibDatabase, 
     Ok(RgbLibDatabase::new(connection))
 }
 
+/// Open the BDK changeset store, self-healing a corrupt tail.
+///
+/// The store is an append-only `bincode` log; an interrupted `persist` can leave
+/// an undecodable trailing record that makes a plain load fail. When BDK reports
+/// such corruption it still returns the changeset aggregated before the bad
+/// record, so we rebuild a clean store from it (keeping the corrupt file aside as
+/// `<name>.corrupt` for forensics) and carry on. Corruption with nothing
+/// recoverable (bad magic / first record) is surfaced unchanged — we never wipe a
+/// file we could not read at all. Returns the recovered store and, when a repair
+/// happened, the path of the preserved corrupt copy.
+pub(crate) fn load_or_recover_bdk_store(
+    magic: &[u8],
+    path: &Path,
+) -> Result<(Store<ChangeSet>, Option<PathBuf>), Error> {
+    match Store::<ChangeSet>::load_or_create(magic, path) {
+        Ok((store, _)) => Ok((store, None)),
+        Err(bdk_wallet::file_store::StoreErrorWithDump {
+            changeset: Some(recovered),
+            ..
+        }) => {
+            let tmp_path = path.with_extension("recovering");
+            let _ = fs::remove_file(&tmp_path);
+            {
+                let mut rebuilt =
+                    Store::<ChangeSet>::create(magic, &tmp_path).map_err(|e| Error::IO {
+                        details: e.to_string(),
+                    })?;
+                rebuilt.append(recovered.as_ref())?;
+            }
+            let backup_path = unique_corrupt_path(path);
+            fs::copy(path, &backup_path)?;
+            fs::rename(&tmp_path, path)?;
+            let (store, _) = Store::<ChangeSet>::load_or_create(magic, path)?;
+            Ok((store, Some(backup_path)))
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// First non-existing `<name>.corrupt[.N]` sibling of `path`.
+fn unique_corrupt_path(path: &Path) -> PathBuf {
+    let base = path.with_extension("corrupt");
+    if !base.exists() {
+        return base;
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = path.with_extension(format!("corrupt.{n}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 pub(crate) fn setup_bdk<P: AsRef<Path>>(
     wallet_data: &WalletData,
     wallet_dir: P,
@@ -126,6 +181,7 @@ pub(crate) fn setup_bdk<P: AsRef<Path>>(
     desc_vanilla: String,
     watch_only: bool,
     bdk_network: BdkNetwork,
+    logger: &Logger,
 ) -> Result<(PersistedWallet<Store<ChangeSet>>, Store<ChangeSet>), Error> {
     let chain_net: ChainNet = wallet_data.bitcoin_network.into();
     let mut wallet_params = BdkWallet::load()
@@ -141,8 +197,16 @@ pub(crate) fn setup_bdk<P: AsRef<Path>>(
         BDK_DB_NAME.to_string()
     };
     let bdk_db_path = wallet_dir.as_ref().join(bdk_db_name);
-    let (mut bdk_database, _) =
-        Store::<ChangeSet>::load_or_create(BDK_DB_NAME.as_bytes(), bdk_db_path)?;
+    let (mut bdk_database, recovered_from) =
+        load_or_recover_bdk_store(BDK_DB_NAME.as_bytes(), &bdk_db_path)?;
+    if let Some(backup) = recovered_from {
+        warn!(
+            logger,
+            "Recovered corrupted BDK store '{:?}'; corrupt copy saved to '{:?}'",
+            bdk_db_path,
+            backup
+        );
+    }
     let bdk_wallet = match wallet_params.load_wallet(&mut bdk_database)? {
         Some(wallet) => wallet,
         None => BdkWallet::create(desc_colored, desc_vanilla)
@@ -442,5 +506,89 @@ pub trait WalletCore {
         include_spent: bool,
     ) -> Result<(), Error> {
         self.sync_bdk_and_db_txos(txn, options, include_spent)
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    const MAGIC: &[u8] = b"bdk_db";
+    const DESC_COLORED: &str = "tr(tpubD6NzVbkrYhZ4WLczPJWReQycCJdd6YVWXubbVUFnJ5KgU5MDQrD998ZJLSmaB7GVcCnJSDWprxmrGkJ6SvgQC6QAffVpqSvonXmeizXcrkN/0/*,multi_a(2,[05472fdd/86'/827167'/0']tpubDCxjuzxcTK8oYxkCcYdkLc9kJvtiY8RyAcP682DAsscutn5MwVHonbEm4cx9DgtcY6ctED6d3PaGHpZGuGvecAhH7kZTyh4WFmPm9GPqQj5/0/*,[43239ae4/86'/827167'/0']tpubDDcUi4u4JBPgDZquTt1gpHhhia2G8Fmqh5LKzjfiFptWPSATcVxq2v6YaJBEmv34jyGDHGkiyYg77nWyhPzEhqNqYWqX9Ga3eP8x5D2VrbP/0/*,[ca57bd4d/86'/827167'/0']tpubDCN3iBXTTJkKd1scjkrhURLEN3wKNFDbfSaTkWR5Lf6Cxet7e9yvwMxmfV8DQeSL1rX7yuTPBt7DJiyzhWxFjvpShCxuVQUvcAMoYHt4k2a/0/*))";
+    const DESC_VANILLA: &str = "tr(tpubD6NzVbkrYhZ4WLczPJWReQycCJdd6YVWXubbVUFnJ5KgU5MDQrD998ZJLSmaB7GVcCnJSDWprxmrGkJ6SvgQC6QAffVpqSvonXmeizXcrkN/0/*,multi_a(2,[05472fdd/86'/1'/0']tpubDChjb8FBE6RWmMv6W8aL9PysAgZeGELfLmQuDu9VEGycLG8onyN9gwfUwATeSgfWoFmBFr4rd3u4GWpYGBTHGzDkJsjKZPs1AX1krrU5Rig/0/*,[43239ae4/86'/1'/0']tpubDD1u9fzdBAq5G4UiYEgEF8XQdp8go6Ff5ipUBqj4HZqVChLT61vHSEAv3HXeEPgPF85rZrgvfNgb2we1Rje7zTPT5m9BEXDxX9csyW7QGaR/0/*,[ca57bd4d/86'/1'/0']tpubDCmjBvTZXrTatWiUSLKqCWPeA61TAhDpndcKSyAuoWc8EDAagikf4z9hgA3AvXZDPqkB6kEkb5vXTh141ao4ZUePkEERNFEQrmQuzwmJPuF/0/*))";
+
+    /// Persist a real watch-only BDK wallet, like `setup_bdk` + a `persist`.
+    fn write_valid_store(path: &Path) {
+        let mut store = Store::<ChangeSet>::create(MAGIC, path).unwrap();
+        let mut wallet = BdkWallet::create(DESC_COLORED.to_string(), DESC_VANILLA.to_string())
+            .network(BdkNetwork::Signet)
+            .create_wallet(&mut store)
+            .unwrap();
+        let _ = wallet.reveal_next_address(KeychainKind::External);
+        wallet.persist(&mut store).unwrap();
+    }
+
+    /// A torn trailing record (recoverable dump) self-heals and preserves the
+    /// corrupt file, leaving a store that loads cleanly with its data intact.
+    #[test]
+    fn recovers_corrupt_bdk_store_from_tail_corruption() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bdk_db_watch_only");
+        write_valid_store(&path);
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(&[0x0e]).unwrap();
+        drop(f);
+
+        // Today's plain load fails on this file.
+        assert!(Store::<ChangeSet>::load_or_create(MAGIC, &path).is_err());
+
+        let (mut store, backup) =
+            load_or_recover_bdk_store(MAGIC, &path).expect("torn tail should recover");
+        let backup = backup.expect("corrupt file should be preserved");
+        assert!(backup.exists(), "corrupt backup kept for forensics");
+        let recovered = store
+            .dump()
+            .expect("clean dump")
+            .expect("non-empty changeset");
+        assert!(
+            recovered.descriptor.is_some(),
+            "descriptor survives recovery"
+        );
+        assert!(
+            Store::<ChangeSet>::load_or_create(MAGIC, &path).is_ok(),
+            "file on disk now loads cleanly"
+        );
+    }
+
+    /// Corruption with no recoverable data must surface as an error, never a
+    /// silent wipe.
+    #[test]
+    fn keeps_erroring_when_nothing_recoverable() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bdk_db_watch_only");
+        let _ = Store::<ChangeSet>::create(MAGIC, &path).unwrap();
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        f.write_all(&[0x0e]).unwrap();
+        drop(f);
+
+        let before = std::fs::read(&path).unwrap();
+        assert!(load_or_recover_bdk_store(MAGIC, &path).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "unreadable file left untouched"
+        );
+    }
+
+    /// A healthy store loads unchanged and creates no backup.
+    #[test]
+    fn passes_through_clean_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bdk_db_watch_only");
+        write_valid_store(&path);
+        let (_store, backup) = load_or_recover_bdk_store(MAGIC, &path).expect("clean load");
+        assert!(backup.is_none(), "no backup for a healthy store");
     }
 }

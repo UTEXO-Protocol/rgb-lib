@@ -629,6 +629,7 @@ impl MpcWallet {
             desc_vanilla,
             true, // watch_only
             bdk_network,
+            &logger,
         )?;
 
         setup_rgb(
