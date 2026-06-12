@@ -450,6 +450,44 @@ pub trait WalletCore {
         Ok(())
     }
 
+    /// Mark any rgb-lib `Txo` row currently held as `exists && !spent && !pending_witness`
+    /// whose outpoint is not in BDK's `list_unspent` after sync.
+    ///
+    /// This closes the divergence window where rgb-lib's DB and BDK's persisted store
+    /// disagree on whether a UTXO is still spendable (e.g. after a snapshot restore,
+    /// an out-of-band spend, or a non-graceful shutdown). The function never marks a
+    /// row unspent — only spent — so it cannot revive UTXOs that rgb-lib has already
+    /// observed being consumed.
+    ///
+    /// This is intentionally NOT called from `sync_bdk_and_db_txos`: the singlesig
+    /// consistency check at `go_online` time relies on the raw divergence being
+    /// visible so it can refuse to come online in the cross-device-wallet case
+    /// (where healing would silently lose RGB allocations). The reconcile runs only
+    /// on the user-facing `Wallet::sync` path, after the wallet is already online.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn reconcile_orphaned_colored_txos(&self, txn: &DbTxn) -> Result<(), Error> {
+        let bdk_unspent_outpoints: HashSet<String> = self
+            .bdk_wallet()
+            .list_unspent()
+            .filter(|u| u.keychain == KeychainKind::External)
+            .map(|u| u.outpoint.to_string())
+            .collect();
+
+        for txo in txn.iter_txos()? {
+            if !(txo.exists && !txo.spent && !txo.pending_witness) {
+                continue;
+            }
+            if bdk_unspent_outpoints.contains(&txo.outpoint().to_string()) {
+                continue;
+            }
+            let mut active: DbTxoActMod = txo.into();
+            active.spent = ActiveValue::Set(true);
+            txn.update_txo(active)?;
+        }
+
+        Ok(())
+    }
+
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn update_db_colored_txos_from_bdk(
         &mut self,
