@@ -1,0 +1,23 @@
+{
+  "operation_idx": 5,
+  "operation_type": "SendRgb",
+  "asset_id": "rgb:i419M6E9-RyPUoXr-hIFFGnm-mM_5FWO-nDV9a2p-4O3kogQ",
+  "amount_raw": 1000000,
+  "recipient_id": "sb:utxob:15Uroqgz-oJnbbeT-uw8Uwb2-yz_EJK5-v81CZRy-5UkJdut-BlpZn",
+  "entropy": 1890141285888588334,
+  "cosigner_fingerprints": {
+    "1": "a0d30ec5",
+    "2": "27efda0a",
+    "3": "07310948"
+  },
+  "txid": "fcf92b9147c3eb7a0dbdae1ded6874cb4035a3fd47a4a36f373e8bc2c558a094",
+  "wrong_ack_finalize": {
+    "hub_status_after_ack": "Approved",
+    "party2_ack_exit_code": 1,
+    "party2_ack_error": "Stock error: contract unknown (local process_operation after hub accepted ResponsePsbt)",
+    "all_parties_send_completed": true,
+    "tx_on_chain": true,
+    "receiver_status": "WaitingConfirmations",
+    "multisig_usdt_spendable_after": 0
+  }
+}

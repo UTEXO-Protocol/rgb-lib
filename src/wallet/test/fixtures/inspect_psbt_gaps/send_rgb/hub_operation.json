@@ -1,0 +1,32 @@
+{
+    "operation_idx": 5,
+    "initiator_xpub": "tpubDC89L63ALPX4yxaguKmQhfn2zLFv2GyjihKgJ8MqsDqrCGEw53vGt1df7GTAsgmCnU6MLkesZZfAGKMVMjchMoDVuZTjWL63nkn7WvEBrXW",
+    "created_at": 1781249806,
+    "operation_type": "SendRgb",
+    "status": "Pending",
+    "acked_by": [],
+    "nacked_by": [],
+    "threshold": 2,
+    "my_response": null,
+    "processed_at": null,
+    "files": [
+        {
+            "file_id": "060133ebb9d7380800ab1979e2266d81a7bb91a0e9130ea62b02036e567dc99f",
+            "type": "Fascia",
+            "posted_by_xpub": "tpubDC89L63ALPX4yxaguKmQhfn2zLFv2GyjihKgJ8MqsDqrCGEw53vGt1df7GTAsgmCnU6MLkesZZfAGKMVMjchMoDVuZTjWL63nkn7WvEBrXW",
+            "size_bytes": 2254
+        },
+        {
+            "file_id": "a1060891c5bf60469d0f8edba956f5c4323c238f60e7a5f92ad3ea0888a9848d",
+            "type": "OperationData",
+            "posted_by_xpub": "tpubDC89L63ALPX4yxaguKmQhfn2zLFv2GyjihKgJ8MqsDqrCGEw53vGt1df7GTAsgmCnU6MLkesZZfAGKMVMjchMoDVuZTjWL63nkn7WvEBrXW",
+            "size_bytes": 1483
+        },
+        {
+            "file_id": "3f1c956f3c1880440098c1bff55b94d8eb8b44102a43a40d929708ebd9b26df0",
+            "type": "OperationPsbt",
+            "posted_by_xpub": "tpubDC89L63ALPX4yxaguKmQhfn2zLFv2GyjihKgJ8MqsDqrCGEw53vGt1df7GTAsgmCnU6MLkesZZfAGKMVMjchMoDVuZTjWL63nkn7WvEBrXW",
+            "size_bytes": 2012
+        }
+    ]
+}

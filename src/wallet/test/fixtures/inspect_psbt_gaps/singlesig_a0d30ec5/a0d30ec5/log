@@ -1,0 +1,21 @@
+2026-06-12T08:42:31.994+00 INFO[src/wallet/core.rs:171:5] New wallet in '"/Users/mirvajsdacok/go/src/rgb-lib/src/wallet/test/fixtures/inspect_psbt_gaps/singlesig_a0d30ec5/a0d30ec5"'
+2026-06-12T08:42:33.095+00 INFO[src/wallet/singlesig.rs:197:9] New wallet completed
+2026-06-12T08:42:33.095+00 INFO[src/wallet/singlesig.rs:250:9] Signing PSBT...
+2026-06-12T08:42:33.100+00 INFO[src/wallet/singlesig.rs:253:9] Sign PSBT completed
+2026-06-12T08:44:08.366+00 INFO[src/wallet/core.rs:171:5] New wallet in '"/Users/mirvajsdacok/go/src/rgb-lib/src/wallet/test/fixtures/inspect_psbt_gaps/singlesig_a0d30ec5/a0d30ec5"'
+2026-06-12T08:44:08.447+00 INFO[src/wallet/singlesig.rs:197:9] New wallet completed
+2026-06-12T08:44:08.447+00 INFO[src/wallet/singlesig.rs:250:9] Signing PSBT...
+2026-06-12T08:44:08.451+00 INFO[src/wallet/singlesig.rs:253:9] Sign PSBT completed
+2026-06-12T08:45:33.702+00 INFO[src/wallet/core.rs:171:5] New wallet in '"/Users/mirvajsdacok/go/src/rgb-lib/src/wallet/test/fixtures/inspect_psbt_gaps/singlesig_a0d30ec5/a0d30ec5"'
+2026-06-12T08:45:33.787+00 INFO[src/wallet/singlesig.rs:197:9] New wallet completed
+2026-06-12T08:45:33.787+00 INFO[src/wallet/singlesig.rs:250:9] Signing PSBT...
+2026-06-12T08:45:33.791+00 INFO[src/wallet/singlesig.rs:253:9] Sign PSBT completed
+2026-06-12T08:46:06.424+00 INFO[src/wallet/core.rs:171:5] New wallet in '"/Users/mirvajsdacok/go/src/rgb-lib/src/wallet/test/fixtures/inspect_psbt_gaps/singlesig_a0d30ec5/a0d30ec5"'
+2026-06-12T08:46:06.513+00 INFO[src/wallet/singlesig.rs:197:9] New wallet completed
+2026-06-12T08:46:06.513+00 INFO[src/wallet/singlesig.rs:250:9] Signing PSBT...
+2026-06-12T08:46:06.518+00 INFO[src/wallet/singlesig.rs:253:9] Sign PSBT completed
+2026-06-12T08:53:42.348+00 INFO[src/wallet/core.rs:171:5] New wallet in '"/Users/mirvajsdacok/go/src/rgb-lib/src/wallet/test/fixtures/inspect_psbt_gaps/singlesig_a0d30ec5/a0d30ec5"'
+2026-06-12T08:53:42.436+00 INFO[src/wallet/singlesig.rs:197:9] New wallet completed
+2026-06-12T08:53:42.436+00 INFO[src/wallet/singlesig.rs:250:9] Signing PSBT...
+2026-06-12T08:53:42.441+00 INFO[src/wallet/singlesig.rs:253:9] Sign PSBT completed
+2026-06-12T08:53:42.471+00 ERRO[src/wallet/core.rs:175:9] PANIC: PanicHookInfo { payload: Any { .. }, location: Location { file: "src/wallet/test/inspect_psbt_gaps_common.rs", line: 257, column: 5 }, can_unwind: true, force_no_backtrace: false }

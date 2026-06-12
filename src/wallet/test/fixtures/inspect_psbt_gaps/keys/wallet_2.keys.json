@@ -1,0 +1,8 @@
+{
+  "mnemonic": "stumble measure text goat gate virus inform age kick punch giraffe coast",
+  "xpub": "tpubD6NzVbkrYhZ4WgY86c9LaEVfPF18FKL9Xfqqpci14M4Awu6M4NDzTGntUFKTDyGwM9GuLr6us73s4cg14WrQjmFpMVqRWE3wA2cXe4XkcX9",
+  "account_xpub_vanilla": "tpubDDqkxr2nDKQdDFPV9w6xnRQQWs7UZ9fgmpj2c8AR4fKAUEPR2uSQhnV4AL6D8XutaqhSzRingsA8fKegVanwdRyyege3iJsQaoMZ74JmjYE",
+  "account_xpub_colored": "tpubDCyM9iGCqRoruh6fr5B87cntA6pKDTJV2CVXndi8wvcatPXboeJs52RAQ1XXEbBdshgN8ttdcZUEA6XcS33ZXXjtVosMcvtf516orwfJGZJ",
+  "master_fingerprint": "27efda0a",
+  "witness_version": "Taproot"
+}
