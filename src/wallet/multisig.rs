@@ -2027,8 +2027,24 @@ impl MultisigWallet {
             }
             (OperationStatus::Approved, _) => {
                 let mut combined_psbt = Self::combine_psbts_from_files(files)?;
-                self.finalize_psbt_impl(&mut combined_psbt, None)?;
-                let txid = combined_psbt.unsigned_tx.compute_txid().to_string();
+                // Idempotency: if this operation's transaction is already known to
+                // the wallet (another cosigner finalized and broadcast it, or we
+                // did but lost our local commit), complete it without requiring
+                // this party to re-finalize the PSBT — otherwise an under-signed
+                // candidate would loop on `CannotFinalizePsbt` forever even though
+                // the transaction is already on-chain. The txid commits to all
+                // inputs and outputs, so it is stable regardless of finalization.
+                let tx = combined_psbt.unsigned_tx.compute_txid();
+                if self.tx_known_to_wallet(&tx) {
+                    info!(
+                        self.logger(),
+                        "operation {} tx {tx} already known to the wallet; completing without re-finalizing",
+                        op.operation_idx
+                    );
+                } else {
+                    self.finalize_psbt_impl(&mut combined_psbt, None)?;
+                }
+                let txid = tx.to_string();
                 H::reconstruct_transfer_directory(self, &txid, files)?;
                 let txn = self.database().begin_transaction()?;
                 let txid = H::finalize_and_execute(&txn, self, &combined_psbt)?;

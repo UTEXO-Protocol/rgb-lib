@@ -2628,12 +2628,11 @@ pub trait WalletOffline: WalletBackup {
     }
 
     fn get_transfer_end_data(&self, psbt: &Psbt) -> Result<TransferEndData, Error> {
-        let txid = psbt
-            .clone()
-            .extract_tx()
-            .map_err(InternalError::from)?
-            .compute_txid()
-            .to_string();
+        // The txid commits to all inputs and outputs and is therefore stable
+        // regardless of finalization, so derive it from the unsigned tx. This
+        // lets the completion path run on a combined-but-not-finalized PSBT
+        // (e.g. when the operation's transaction is already on-chain).
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
         let transfer_dir = self.get_transfer_dir(&txid);
         if !transfer_dir.exists() {
             return Err(Error::UnknownTransfer { txid });

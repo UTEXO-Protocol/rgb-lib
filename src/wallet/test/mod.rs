@@ -375,6 +375,7 @@ mod send;
 mod send_btc;
 mod sign_psbt;
 mod sync;
+mod tx_known_to_wallet;
 #[cfg(feature = "vss")]
 mod vss;
 #[cfg(feature = "vss")]
