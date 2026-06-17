@@ -255,6 +255,18 @@ pub trait WalletCore {
         &mut self.internals_mut().bdk_wallet
     }
 
+    /// Whether a transaction is already known to the wallet's BDK graph
+    /// (broadcast or confirmed as of the latest sync).
+    ///
+    /// Used to make multisig SendEnd idempotent: an operation whose transaction
+    /// is already on-chain must be completed without requiring this party to
+    /// re-finalize the (possibly under-signed) PSBT.
+    fn tx_known_to_wallet(&self, txid: &bdk_wallet::bitcoin::Txid) -> bool {
+        self.bdk_wallet()
+            .transactions()
+            .any(|canonical_tx| canonical_tx.tx_node.txid == *txid)
+    }
+
     fn bdk_wallet_db_mut(
         &mut self,
     ) -> (
