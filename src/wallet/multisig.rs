@@ -2027,18 +2027,26 @@ impl MultisigWallet {
             }
             (OperationStatus::Approved, _) => {
                 let mut combined_psbt = Self::combine_psbts_from_files(files)?;
-                // Idempotency: if this operation's transaction is already known to
-                // the wallet (another cosigner finalized and broadcast it, or we
-                // did but lost our local commit), complete it without requiring
-                // this party to re-finalize the PSBT — otherwise an under-signed
-                // candidate would loop on `CannotFinalizePsbt` forever even though
-                // the transaction is already on-chain. The txid commits to all
-                // inputs and outputs, so it is stable regardless of finalization.
+                // Idempotency: if this operation's transaction is already broadcast
+                // (another cosigner finalized and broadcast it, or we did but lost
+                // our local commit), complete it without requiring this party to
+                // re-finalize the PSBT — otherwise a party that has not yet
+                // collected all signatures loops on `CannotFinalizePsbt` forever
+                // even though the transaction is already on-chain. The txid commits
+                // to all inputs and outputs, so it is stable regardless of
+                // finalization. The BDK graph is a fast offline check; the indexer
+                // probe is the authoritative fallback so recovery does not depend
+                // on a prior chain sync.
                 let tx = combined_psbt.unsigned_tx.compute_txid();
-                if self.tx_known_to_wallet(&tx) {
+                let already_broadcast = self.tx_known_to_wallet(&tx)
+                    || self
+                        .indexer()
+                        .get_tx_confirmations(&tx.to_string())?
+                        .is_some();
+                if already_broadcast {
                     info!(
                         self.logger(),
-                        "operation {} tx {tx} already known to the wallet; completing without re-finalizing",
+                        "operation {} tx {tx} already broadcast; completing without re-finalizing",
                         op.operation_idx
                     );
                 } else {
