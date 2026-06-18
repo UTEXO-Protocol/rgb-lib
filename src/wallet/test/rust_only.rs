@@ -831,3 +831,14 @@ fn validate_consignment_offchain_file_not_found() {
 
     assert_matches!(result, Err(Error::Internal { details: _ }));
 }
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn offline() {
+    initialize();
+
+    let mut wallet = get_test_wallet(true, None);
+    let result = wallet.list_unspents_vanilla(Online { id: 0 }, MIN_CONFIRMATIONS, false);
+    assert_matches!(result, Err(Error::Offline));
+}
