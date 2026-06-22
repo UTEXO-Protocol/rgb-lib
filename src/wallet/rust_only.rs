@@ -836,6 +836,105 @@ impl Wallet {
         info!(self.logger(), "Fund statechain UTXO completed");
         Ok((txid, 1, consignment_bytes, signed_tx_hex))
     }
+
+    /// Register a Mercury statechain UTXO as a wallet-owned, colorable UTXO holding a settled RGB
+    /// allocation - so `rgb-lib` treats it exactly like an on-chain UTXO. A statechain UTXO is a
+    /// MuSig2 aggregate output that BDK does not own and the indexer's wallet sync cannot see; this
+    /// inserts the `txo` plus the `coloring`/`transfer` rows that `get_asset_balance`,
+    /// `list_unspents` and `blind_receive` read, with existence asserted by the statechain rather
+    /// than the blockchain. The matching allocation must already be in the stash (e.g. it was put
+    /// there by `fund_statechain_utxo` on this wallet, or imported from a consignment). Returns the
+    /// txo idx. This is design-doc item 1: statechain UTXOs as first-class colorable wallet UTXOs.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn register_statechain_utxo(
+        &self,
+        txid: String,
+        vout: u32,
+        btc_amount: u64,
+        contract_id: String,
+        rgb_amount: u64,
+        spend_outpoints: Vec<Outpoint>,
+    ) -> Result<i32, Error> {
+        info!(self.logger(), "Registering statechain UTXO...");
+        ContractId::from_str(&contract_id).map_err(|_| Error::Internal {
+            details: format!("invalid contract id: {contract_id}"),
+        })?;
+
+        let txn = self.database().begin_transaction()?;
+
+        // Mark on-chain UTXO(s) consumed by the deposit as spent in the DB. A color deposit spends
+        // them on-chain but bypasses DB send-accounting, leaving a stale (now double-counted)
+        // allocation; clearing it keeps `get_asset_balance` correct as the allocation moves to the
+        // statechain UTXO. (`settled()` excludes spent txos.)
+        for op in &spend_outpoints {
+            if let Some(src) = txn.get_txo(op)? {
+                let active = DbTxoActMod {
+                    idx: ActiveValue::Unchanged(src.idx),
+                    txid: ActiveValue::Unchanged(src.txid.clone()),
+                    vout: ActiveValue::Unchanged(src.vout),
+                    btc_amount: ActiveValue::Unchanged(src.btc_amount.clone()),
+                    spent: ActiveValue::Set(true),
+                    exists: ActiveValue::Unchanged(src.exists),
+                    pending_witness: ActiveValue::Unchanged(src.pending_witness),
+                };
+                txn.update_txo(active)?;
+            }
+        }
+
+        // 1. The colorable wallet UTXO. Existence is proven by the statechain (the SE published the
+        //    key-share / the deposit tx is confirmed), so exists=true even though BDK can't see it.
+        let txo_idx = txn.set_txo(DbTxoActMod {
+            idx: ActiveValue::NotSet,
+            txid: ActiveValue::Set(txid.clone()),
+            vout: ActiveValue::Set(vout),
+            btc_amount: ActiveValue::Set(btc_amount.to_string()),
+            spent: ActiveValue::Set(false),
+            exists: ActiveValue::Set(true),
+            pending_witness: ActiveValue::Set(false),
+        })?;
+
+        // rgb_amount == 0 registers a *free* colorable statechain UTXO (onboarding): a coin to
+        // receive on, with no allocation yet, that `blind_receive` can pick as a seal.
+        if rgb_amount == 0 {
+            txn.commit()?;
+            info!(self.logger(), "Register statechain UTXO completed (free)");
+            return Ok(txo_idx);
+        }
+
+        // 2-4. A settled incoming transfer carrying the allocation, so standard methods surface it.
+        let now = crate::utils::now().unix_timestamp();
+        let batch_transfer_idx = txn.set_batch_transfer(DbBatchTransferActMod {
+            status: ActiveValue::Set(TransferStatus::Settled),
+            created_at: ActiveValue::Set(now),
+            updated_at: ActiveValue::Set(now),
+            min_confirmations: ActiveValue::Set(0),
+            ..Default::default()
+        })?;
+        let asset_transfer_idx = txn.set_asset_transfer(DbAssetTransferActMod {
+            user_driven: ActiveValue::Set(true),
+            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
+            asset_id: ActiveValue::Set(Some(contract_id.clone())),
+            ..Default::default()
+        })?;
+        txn.set_transfer(DbTransferActMod {
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            incoming: ActiveValue::Set(true),
+            ..Default::default()
+        })?;
+        txn.set_coloring(DbColoringActMod {
+            txo_idx: ActiveValue::Set(txo_idx),
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            r#type: ActiveValue::Set(ColoringType::Receive),
+            assignment: ActiveValue::Set(crate::database::enums::Assignment::Fungible(rgb_amount)),
+            ..Default::default()
+        })?;
+
+        txn.commit()?;
+        info!(self.logger(), "Register statechain UTXO completed");
+        Ok(txo_idx)
+    }
 }
 
 #[cfg(test)]
