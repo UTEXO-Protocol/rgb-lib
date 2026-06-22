@@ -732,6 +732,110 @@ impl Wallet {
     pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
         self.send_consignment_path(asset_id, transfer_id)
     }
+
+    /// Build, color and sign the deposit funding transaction that binds an RGB asset to a Mercury
+    /// statechain UTXO. Unlike a standard `send` (which marks the asset as "sent away"), this keeps
+    /// the statechain UTXO re-colorable by the owner (the stash retains the allocation), so the owner
+    /// can later transfer/exit. Spends one wallet UTXO holding `>= rgb_amount` of `contract_id`, pays
+    /// `amount_sat` to the statechain `address`, assigns `rgb_amount` to it via an OP_RETURN opret
+    /// commitment, and signs with this (BDK) wallet. Returns `(txid, vout, consignment, signed_hex)`.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn fund_statechain_utxo(
+        &mut self,
+        address: String,
+        amount_sat: u64,
+        contract_id: String,
+        rgb_amount: u64,
+        fee_rate: u64,
+        blinding: u64,
+    ) -> Result<(String, u32, Vec<u8>, String), Error> {
+        use bdk_wallet::bitcoin::{
+            consensus::encode::serialize_hex, Address as BdkAddr, OutPoint as BdkOut, Txid as BdkTxid,
+        };
+        use rgbstd::containers::FileContent;
+        use std::collections::HashSet;
+        use std::fs;
+
+        info!(self.logger(), "Funding statechain UTXO...");
+        let contract = ContractId::from_str(&contract_id).map_err(|_| Error::Internal {
+            details: format!("invalid contract id: {contract_id}"),
+        })?;
+        let script = BdkAddr::from_str(&address)
+            .map_err(|e| Error::Internal { details: format!("invalid address: {e}") })?
+            .assume_checked()
+            .script_pubkey();
+
+        let unspents = self.list_unspents(None, false, true)?;
+        let mut asset_outpoint = None;
+        for u in unspents {
+            if !u.utxo.colorable || !u.utxo.exists || u.utxo.btc_amount < amount_sat + 1000 {
+                continue;
+            }
+            let has_enough = u.rgb_allocations.iter().any(|a| {
+                a.asset_id.as_deref() == Some(contract_id.as_str())
+                    && matches!(a.assignment, crate::database::enums::Assignment::Fungible(amt) if amt >= rgb_amount)
+            });
+            if has_enough {
+                asset_outpoint = Some(u.utxo.outpoint.clone());
+                break;
+            }
+        }
+        let asset_outpoint = asset_outpoint.ok_or(Error::InsufficientAllocationSlots)?;
+
+        let mut input_outpoints: HashSet<BdkOut> = HashSet::new();
+        input_outpoints.insert(BdkOut {
+            txid: BdkTxid::from_str(&asset_outpoint.txid).map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?,
+            vout: asset_outpoint.vout,
+        });
+
+        let fee_rate_checked = self.check_fee_rate(fee_rate)?;
+        let (mut psbt, _change) =
+            self.prepare_psbt(input_outpoints, &vec![(script, amount_sat)], fee_rate_checked, None)?;
+
+        let coloring_info = ColoringInfo {
+            asset_info_map: HashMap::from([(
+                contract,
+                AssetColoringInfo {
+                    output_map: HashMap::from([(0u32, rgb_amount)]),
+                    static_blinding: Some(blinding),
+                },
+            )]),
+            static_blinding: Some(blinding),
+            nonce: None,
+        };
+        let transfers = self.color_psbt_and_consume(&mut psbt, coloring_info)?;
+
+        let signed_psbt_b64 = self.sign_psbt(psbt.to_string(), None)?;
+        let signed_psbt = Psbt::from_str(&signed_psbt_b64)?;
+        let tx = signed_psbt.extract_tx().map_err(|e| Error::Internal {
+            details: e.to_string(),
+        })?;
+        let txid = tx.compute_txid().to_string();
+        let signed_tx_hex = serialize_hex(&tx);
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_dir =
+            std::env::temp_dir().join(format!("mercury-rgb-fund-{}-{}", std::process::id(), unique));
+        fs::create_dir_all(&tmp_dir)?;
+        let path = tmp_dir.join("consignment");
+        let consignment = transfers.first().ok_or(Error::InvalidConsignment)?;
+        consignment.save_file(&path).map_err(|e| Error::Internal {
+            details: format!("could not serialize consignment: {e}"),
+        })?;
+        let consignment_bytes = fs::read(&path)?;
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        info!(self.logger(), "Fund statechain UTXO completed");
+        Ok((txid, 1, consignment_bytes, signed_tx_hex))
+    }
 }
 
 #[cfg(test)]
