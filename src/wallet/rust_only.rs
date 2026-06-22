@@ -8,8 +8,14 @@ use rgbstd::Operation as _;
 /// RGB asset-specific information to color a transaction
 #[derive(Debug, Clone)]
 pub struct AssetColoringInfo {
-    /// Map of vouts and asset amounts to color the transaction outputs
+    /// Map of vouts and asset amounts to color the transaction outputs (witness-vout seals: new
+    /// outputs of the tx being colored)
     pub output_map: HashMap<u32, u64>,
+    /// Map of blinded `recipient_id` (a `bcrt:utxob:...` blinded seal, e.g. from `blind_receive`)
+    /// to asset amount. These assign to *existing* outpoints rather than witness vouts - used to pay
+    /// a receiver's existing UTXO (e.g. a statechain UTXO) or route change to a free existing UTXO,
+    /// so a transfer can consume a statechain UTXO and send change back to another statechain UTXO.
+    pub blinded_map: HashMap<String, u64>,
     /// Static blinding to keep the transaction construction deterministic
     pub static_blinding: Option<u64>,
 }
@@ -354,6 +360,46 @@ impl Wallet {
                     }
                 }
             }
+            // Blinded beneficiaries: assign to existing outpoints (a receiver's statechain UTXO via
+            // a blind_receive recipient_id, or change to a free statechain UTXO) instead of a new
+            // witness vout. This is what lets a transfer consume a statechain UTXO and send change
+            // back to another statechain UTXO - "RGB the same way it works on-chain".
+            for (recipient_id, amount) in asset_coloring_info.blinded_map.clone() {
+                if amount == 0 {
+                    continue;
+                }
+                let xchain = XChainNet::<Beneficiary>::from_str(&recipient_id).map_err(|_| {
+                    Error::InvalidColoringInfo {
+                        details: format!("invalid blinded recipient_id: {recipient_id}"),
+                    }
+                })?;
+                let secret_seal: SecretSeal = match xchain.into_inner() {
+                    Beneficiary::BlindedSeal(ss) => ss,
+                    _ => {
+                        return Err(Error::InvalidColoringInfo {
+                            details: format!("recipient_id is not a blinded seal: {recipient_id}"),
+                        });
+                    }
+                };
+                sending_amt += amount;
+                let seal: BuilderSeal<GraphSeal> = BuilderSeal::Concealed(secret_seal);
+                beneficiaries.push(seal);
+                match schema {
+                    AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa => {
+                        asset_transition_builder = asset_transition_builder.add_fungible_state(
+                            assignment_name.clone(),
+                            seal,
+                            amount,
+                        )?;
+                    }
+                    AssetSchema::Uda => {
+                        return Err(Error::InvalidColoringInfo {
+                            details: s!("blinded beneficiaries are not supported for UDA in this path"),
+                        });
+                    }
+                }
+            }
+
             if sending_amt > asset_available_amt {
                 return Err(Error::InvalidColoringInfo {
                     details: format!(
@@ -802,6 +848,7 @@ impl Wallet {
                 contract,
                 AssetColoringInfo {
                     output_map: HashMap::from([(0u32, rgb_amount)]),
+                    blinded_map: HashMap::new(),
                     static_blinding: Some(blinding),
                 },
             )]),
