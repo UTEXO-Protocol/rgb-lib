@@ -982,6 +982,33 @@ impl Wallet {
         info!(self.logger(), "Register statechain UTXO completed");
         Ok(txo_idx)
     }
+
+    /// Mark registered UTXO(s) as spent in the DB. Used after a transfer/exit consumes a statechain
+    /// UTXO: the color path spends it on-chain but bypasses DB send-accounting, so the moved
+    /// allocation would otherwise linger (and double-count). `settled()` excludes spent txos, so the
+    /// balance correctly drops to just the change.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn mark_utxos_spent(&self, outpoints: Vec<Outpoint>) -> Result<(), Error> {
+        let txn = self.database().begin_transaction()?;
+        for op in &outpoints {
+            if let Some(src) = txn.get_txo(op)? {
+                let active = DbTxoActMod {
+                    idx: ActiveValue::Unchanged(src.idx),
+                    txid: ActiveValue::Unchanged(src.txid.clone()),
+                    vout: ActiveValue::Unchanged(src.vout),
+                    btc_amount: ActiveValue::Unchanged(src.btc_amount.clone()),
+                    spent: ActiveValue::Set(true),
+                    exists: ActiveValue::Unchanged(src.exists),
+                    pending_witness: ActiveValue::Unchanged(src.pending_witness),
+                };
+                txn.update_txo(active)?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
