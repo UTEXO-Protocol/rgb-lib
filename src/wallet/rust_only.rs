@@ -965,9 +965,20 @@ impl Wallet {
             asset_id: ActiveValue::Set(Some(contract_id.clone())),
             ..Default::default()
         })?;
+        // Model the registration as an incoming *blinded* receive onto the statechain UTXO, so the
+        // standard `list_transfers` (which unwraps `recipient_type` for incoming transfers) renders
+        // it as a ReceiveBlind instead of panicking.
         txn.set_transfer(DbTransferActMod {
             asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
             incoming: ActiveValue::Set(true),
+            recipient_type: ActiveValue::Set(Some(
+                crate::database::enums::RecipientTypeFull::Blind {
+                    unblinded_utxo: Outpoint { txid: txid.clone(), vout },
+                },
+            )),
+            // `list_transfers` derives a (never-read) consignment path from recipient_id for settled
+            // receives, so it must be non-None; the outpoint is a stable, meaningful placeholder.
+            recipient_id: ActiveValue::Set(Some(format!("{txid}:{vout}"))),
             ..Default::default()
         })?;
         txn.set_coloring(DbColoringActMod {
