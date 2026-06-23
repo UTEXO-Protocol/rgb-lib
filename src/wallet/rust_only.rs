@@ -114,13 +114,40 @@ pub fn validate_consignment_offchain(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
 ) -> Result<ValidateConsignmentResult, Error> {
+    validate_consignment_offchain_chain(
+        file_path,
+        &[txid.to_string()],
+        indexer_url,
+        bitcoin_network,
+    )
+}
+
+/// Validate a consignment whose witness is a **chain** of un-broadcast transactions (a multi-level
+/// off-chain split): every txid in `offchain_txids` — the branch from the on-chain root down to the
+/// leaf — is resolved from the consignment's bundled witnesses (as `Tentative`), so an un-broadcast
+/// *ancestor* no longer has to be on-chain. Witnesses outside the set still resolve via the indexer
+/// (already-mined ancestors) or fail (an unexpected witness). [`validate_consignment_offchain`] is the
+/// single-element special case.
+///
+/// <div class="warning">This method is meant for special usage and is normally not needed, use
+/// it only if you know what you're doing</div>
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn validate_consignment_offchain_chain(
+    file_path: &str,
+    offchain_txids: &[String],
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, Error> {
     use rgbstd::validation::ValidationError;
 
     let consignment = RgbTransfer::load_file(file_path).map_err(|e| Error::Internal {
         details: format!("Failed to load consignment: {e}"),
     })?;
 
-    let witness_id = RgbTxid::from_str(txid).map_err(|_| Error::InvalidTxid)?;
+    let offchain_witness_ids = offchain_txids
+        .iter()
+        .map(|t| RgbTxid::from_str(t).map_err(|_| Error::InvalidTxid))
+        .collect::<Result<Vec<_>, _>>()?;
     let chain_net: ChainNet = bitcoin_network.into();
     let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
     let trusted_typesystem = asset_schema.types();
@@ -128,7 +155,7 @@ pub fn validate_consignment_offchain(
     let fallback_resolver = get_resolver(indexer_url, bitcoin_network)?;
 
     let resolver = crate::utils::OffchainResolver {
-        witness_id,
+        offchain_witness_ids,
         consignment: &consignment,
         fallback: &fallback_resolver,
     };
@@ -545,7 +572,7 @@ impl Wallet {
         runtime.store_secret_seal(graph_seal)?;
 
         let resolver = OffchainResolver {
-            witness_id,
+            offchain_witness_ids: vec![witness_id],
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
@@ -691,7 +718,7 @@ impl Wallet {
 
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
         let resolver = OffchainResolver {
-            witness_id,
+            offchain_witness_ids: vec![witness_id],
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };

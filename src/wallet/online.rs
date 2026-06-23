@@ -1173,7 +1173,7 @@ pub trait WalletOnline: WalletOffline {
             safe_height,
         };
         let resolver = OffchainResolver {
-            witness_id,
+            offchain_witness_ids: vec![witness_id],
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
