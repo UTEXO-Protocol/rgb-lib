@@ -12,6 +12,7 @@ pub mod media;
 pub mod mpc_address;
 pub mod pending_witness_script;
 pub mod reserved_txo;
+pub mod reuse_address_index;
 pub mod token;
 pub mod token_media;
 pub mod transfer;
