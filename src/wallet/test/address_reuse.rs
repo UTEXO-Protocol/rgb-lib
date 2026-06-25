@@ -68,6 +68,40 @@ fn rotate_disabled_errors() {
     assert!(matches!(result, Err(Error::AddressReuseDisabled)));
 }
 
+#[test]
+#[parallel]
+fn rotate_persists_across_reload() {
+    create_test_data_dir();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wallet_data = WalletData {
+        data_dir: get_test_data_dir_string(),
+        bitcoin_network,
+        database_type: DatabaseType::Sqlite,
+        max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+        supported_schemas: AssetSchema::VALUES.to_vec(),
+        reuse_addresses: true,
+    };
+
+    let rotated = {
+        let mut wallet =
+            Wallet::new(wallet_data.clone(), SinglesigKeys::from_keys(&keys, None)).unwrap();
+        let base = wallet.get_address().unwrap();
+        let rotated = wallet.rotate_address(KeychainKind::Internal).unwrap();
+        assert_ne!(rotated, base);
+        assert_eq!(rotated, wallet.get_address().unwrap());
+        rotated
+    };
+
+    let mut wallet = Wallet::new(wallet_data, SinglesigKeys::from_keys(&keys, None)).unwrap();
+    assert_eq!(
+        wallet.get_address().unwrap(),
+        rotated,
+        "rotated pin must persist across wallet reload"
+    );
+}
+
 /// Verify that send_btc and create_utxos change outputs go to the pinned reuse address.
 #[cfg(feature = "electrum")]
 #[test]

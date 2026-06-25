@@ -5,9 +5,25 @@ use super::*;
 #[cfg(feature = "mpc")]
 use crate::database::entities::mpc_address;
 use crate::database::entities::{
-    asset, coloring, media, prelude::*, transfer_transport_endpoint, transport_endpoint, txo,
-    wallet_transaction,
+    asset, coloring, media, prelude::*, reuse_address_index, transfer_transport_endpoint,
+    transport_endpoint, txo, wallet_transaction,
 };
+use bdk_wallet::KeychainKind;
+
+fn keychain_to_u8(keychain: KeychainKind) -> u8 {
+    match keychain {
+        KeychainKind::External => 0,
+        KeychainKind::Internal => 1,
+    }
+}
+
+fn keychain_from_u8(value: u8) -> Option<KeychainKind> {
+    match value {
+        0 => Some(KeychainKind::External),
+        1 => Some(KeychainKind::Internal),
+        _ => None,
+    }
+}
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::database::entities::{batch_transfer, pending_witness_script, reserved_txo};
 
@@ -563,6 +579,34 @@ impl DbTxn {
 
     pub(crate) fn get_backup_info(&self) -> Result<Option<DbBackupInfo>, Error> {
         Ok(block_on(BackupInfo::find().one(self.inner()))?)
+    }
+
+    pub(crate) fn set_reuse_address_index(
+        &self,
+        keychain: KeychainKind,
+        index: u32,
+    ) -> Result<(), Error> {
+        let model = reuse_address_index::ActiveModel {
+            keychain: ActiveValue::Set(keychain_to_u8(keychain)),
+            derivation_index: ActiveValue::Set(index),
+        };
+        let on_conflict = sea_query::OnConflict::column(reuse_address_index::Column::Keychain)
+            .update_column(reuse_address_index::Column::DerivationIndex)
+            .to_owned();
+        block_on(
+            ReuseAddressIndex::insert(model)
+                .on_conflict(on_conflict)
+                .exec(self.inner()),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn get_reuse_address_index(&self) -> Result<HashMap<KeychainKind, u32>, Error> {
+        let rows = block_on(ReuseAddressIndex::find().all(self.inner()))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| keychain_from_u8(row.keychain).map(|k| (k, row.derivation_index)))
+            .collect())
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
