@@ -561,6 +561,11 @@ pub(crate) trait OfflineSigParty {
         self.wlt().list_transfers(asset_id.map(|a| a.to_string()))
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn list_transfers_by_txid(&self, txid: &str) -> Vec<Transfer> {
+        self.wlt().list_transfers_by_txid(txid.to_string()).unwrap()
+    }
+
     fn list_unspents(&mut self, settled_only: bool) -> Vec<Unspent> {
         self.wlt_mut()
             .list_unspents(None, settled_only, true)

@@ -2150,15 +2150,40 @@ pub trait WalletOffline: WalletBackup {
             .filter(|t| t.user_driven)
             .map(|t| t.idx)
             .collect();
+        self.build_transfers(txn, &db_data, &asset_transfer_ids)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn list_transfers_by_txid_impl(&self, txn: &DbTxn, txid: &str) -> Result<Vec<Transfer>, Error> {
+        let Some(batch_transfer) = txn.get_batch_transfer_by_txid(txid)? else {
+            return Ok(vec![]);
+        };
+        let db_data = txn.get_db_data(false)?;
+        let asset_transfer_ids: Vec<i32> = db_data
+            .asset_transfers
+            .iter()
+            .filter(|t| t.batch_transfer_idx == batch_transfer.idx)
+            .filter(|t| t.user_driven)
+            .map(|t| t.idx)
+            .collect();
+        self.build_transfers(txn, &db_data, &asset_transfer_ids)
+    }
+
+    fn build_transfers(
+        &self,
+        txn: &DbTxn,
+        db_data: &crate::database::DbData,
+        asset_transfer_ids: &[i32],
+    ) -> Result<Vec<Transfer>, Error> {
         db_data
             .transfers
-            .into_iter()
+            .iter()
             .filter(|t| asset_transfer_ids.contains(&t.asset_transfer_idx))
             .map(|t| {
                 let (asset_transfer, batch_transfer) =
                     t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
                 let td = self.get_transfer_data(
-                    &t,
+                    t,
                     &asset_transfer,
                     &batch_transfer,
                     &db_data.txos,
@@ -2775,6 +2800,20 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
             txn.check_asset_exists(asset_id.clone())?;
         }
         let transfers = self.list_transfers_impl(&txn, asset_id)?;
+        txn.commit()?;
+        info!(self.logger(), "List transfers completed");
+        Ok(transfers)
+    }
+
+    /// List the RGB [`Transfer`]s committed by the on-chain transaction with the given `txid`.
+    ///
+    /// Resolves the transaction to its batch transfer and returns all user-driven transfers it
+    /// carries, across every asset. An unknown `txid` yields an empty list.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn list_transfers_by_txid(&self, txid: String) -> Result<Vec<Transfer>, Error> {
+        info!(self.logger(), "Listing transfers for txid '{}'...", txid);
+        let txn = self.database().begin_transaction()?;
+        let transfers = self.list_transfers_by_txid_impl(&txn, &txid)?;
         txn.commit()?;
         info!(self.logger(), "List transfers completed");
         Ok(transfers)

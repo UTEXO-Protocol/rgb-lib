@@ -169,6 +169,57 @@ fn success() {
     );
 }
 
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn by_txid() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset = party.issue_asset_nia(None);
+
+    let receive_data = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = party.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+
+    // by-txid returns exactly the transfers of that on-chain tx
+    let by_txid = party.list_transfers_by_txid(&txid);
+    assert!(!by_txid.is_empty());
+    assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
+
+    // and matches the asset-scoped list filtered to that txid
+    let expected: Vec<_> = party
+        .list_transfers(Some(&asset.asset_id))
+        .into_iter()
+        .filter(|t| t.txid == Some(txid.clone()))
+        .collect();
+    let mut by_txid_sorted = by_txid;
+    by_txid_sorted.sort_by_key(|t| t.idx);
+    let mut expected_sorted = expected;
+    expected_sorted.sort_by_key(|t| t.idx);
+    assert_eq!(
+        by_txid_sorted.iter().map(|t| t.idx).collect::<Vec<_>>(),
+        expected_sorted.iter().map(|t| t.idx).collect::<Vec<_>>()
+    );
+
+    // unknown txid yields an empty list
+    let unknown = "0000000000000000000000000000000000000000000000000000000000000000";
+    assert!(party.list_transfers_by_txid(unknown).is_empty());
+}
+
 #[test]
 #[parallel]
 fn fail() {
