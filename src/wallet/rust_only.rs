@@ -718,16 +718,19 @@ impl Wallet {
     pub fn save_new_asset(
         &self,
         consignment: RgbTransfer,
-        offchain_txid: String,
+        offchain_txids: &[String],
     ) -> Result<(), Error> {
         info!(self.logger(), "Saving new asset...");
         let runtime = self.rgb_runtime()?;
 
         let contract_id = consignment.contract_id();
 
-        let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
+        let offchain_witness_ids = offchain_txids
+            .iter()
+            .map(|t| RgbTxid::from_str(t).map_err(|_| Error::InvalidTxid))
+            .collect::<Result<Vec<_>, _>>()?;
         let resolver = OffchainResolver {
-            offchain_witness_ids: vec![witness_id],
+            offchain_witness_ids,
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };

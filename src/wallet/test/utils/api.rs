@@ -1350,7 +1350,7 @@ impl SinglesigParty {
             .unwrap();
         drop(runtime);
 
-        rcv_party.wallet.save_new_asset(consignment, txid).unwrap();
+        rcv_party.wallet.save_new_asset(consignment, &[txid]).unwrap();
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
