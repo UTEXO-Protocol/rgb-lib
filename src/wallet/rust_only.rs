@@ -180,6 +180,7 @@ pub fn validate_consignment_offchain_chain(
                 ),
                 error: None,
                 details: None,
+                contract_id: Some(consignment.contract_id().to_string()),
             })
         }
         Err(ValidationError::InvalidConsignment(failure)) => Ok(ValidateConsignmentResult {
@@ -187,12 +188,14 @@ pub fn validate_consignment_offchain_chain(
             warnings: None,
             error: Some("invalid".to_string()),
             details: Some(failure.to_string()),
+            contract_id: None,
         }),
         Err(ValidationError::ResolverError(e)) => Ok(ValidateConsignmentResult {
             valid: false,
             warnings: None,
             error: Some("resolver".to_string()),
             details: Some(e.to_string()),
+            contract_id: None,
         }),
     }
 }
@@ -209,6 +212,9 @@ pub struct ValidateConsignmentResult {
     pub error: Option<String>,
     /// Error details when invalid.
     pub details: Option<String>,
+    /// Contract (asset) id the consignment is about — read from the consignment itself, so it is
+    /// only meaningful when `valid` is true.
+    pub contract_id: Option<String>,
 }
 
 /// Validate a consignment using the indexer only (witness TX must be visible to the indexer).
@@ -255,6 +261,7 @@ pub fn validate_consignment(
                 ),
                 error: None,
                 details: None,
+                contract_id: Some(consignment.contract_id().to_string()),
             })
         }
         Err(ValidationError::InvalidConsignment(failure)) => Ok(ValidateConsignmentResult {
@@ -262,12 +269,14 @@ pub fn validate_consignment(
             warnings: None,
             error: Some("invalid".to_string()),
             details: Some(failure.to_string()),
+            contract_id: None,
         }),
         Err(ValidationError::ResolverError(e)) => Ok(ValidateConsignmentResult {
             valid: false,
             warnings: None,
             error: Some("resolver".to_string()),
             details: Some(e.to_string()),
+            contract_id: None,
         }),
     }
 }
