@@ -217,6 +217,15 @@ pub struct ValidateConsignmentResult {
     pub contract_id: Option<String>,
 }
 
+/// Load a transfer consignment from a file (for use with [`Wallet::save_new_asset`] and the
+/// offchain validators).
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn load_transfer(file_path: &str) -> Result<RgbTransfer, Error> {
+    RgbTransfer::load_file(file_path).map_err(|e| Error::Internal {
+        details: format!("Failed to load consignment: {e}"),
+    })
+}
+
 /// Validate a consignment using the indexer only (witness TX must be visible to the indexer).
 ///
 /// For transfers where the witness is not on-chain yet, use [`validate_consignment_offchain`].
@@ -744,8 +753,19 @@ impl Wallet {
         let valid_transfer = consignment
             .clone()
             .validate(&resolver, &validation_config)
-            .expect("valid consignment");
+            .map_err(|e| Error::Internal {
+                details: format!("invalid consignment: {e:?}"),
+            })?;
         let valid_contract = valid_transfer.clone().into_valid_contract();
+
+        // Register the contract in the RGB runtime first (as accept_transfer does) — with the
+        // OFFCHAIN resolver, since the witness chain may be un-broadcast.
+        let mut runtime = runtime;
+        runtime
+            .import_contract(valid_contract.clone(), &resolver)
+            .map_err(|e| Error::Internal {
+                details: format!("failure importing received contract: {e}"),
+            })?;
 
         let txn = self.database().begin_transaction()?;
         self.save_new_asset_internal(
