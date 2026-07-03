@@ -8,8 +8,14 @@ use rgbstd::Operation as _;
 /// RGB asset-specific information to color a transaction
 #[derive(Debug, Clone)]
 pub struct AssetColoringInfo {
-    /// Map of vouts and asset amounts to color the transaction outputs
+    /// Map of vouts and asset amounts to color the transaction outputs (witness-vout seals: new
+    /// outputs of the tx being colored)
     pub output_map: HashMap<u32, u64>,
+    /// Map of blinded `recipient_id` (a `bcrt:utxob:...` blinded seal, e.g. from `blind_receive`)
+    /// to asset amount. These assign to *existing* outpoints rather than witness vouts - used to pay
+    /// a receiver's existing UTXO (e.g. a statechain UTXO) or route change to a free existing UTXO,
+    /// so a transfer can consume a statechain UTXO and send change back to another statechain UTXO.
+    pub blinded_map: HashMap<String, u64>,
     /// Static blinding to keep the transaction construction deterministic
     pub static_blinding: Option<u64>,
 }
@@ -108,13 +114,40 @@ pub fn validate_consignment_offchain(
     indexer_url: &str,
     bitcoin_network: BitcoinNetwork,
 ) -> Result<ValidateConsignmentResult, Error> {
+    validate_consignment_offchain_chain(
+        file_path,
+        &[txid.to_string()],
+        indexer_url,
+        bitcoin_network,
+    )
+}
+
+/// Validate a consignment whose witness is a **chain** of un-broadcast transactions (a multi-level
+/// off-chain split): every txid in `offchain_txids` — the branch from the on-chain root down to the
+/// leaf — is resolved from the consignment's bundled witnesses (as `Tentative`), so an un-broadcast
+/// *ancestor* no longer has to be on-chain. Witnesses outside the set still resolve via the indexer
+/// (already-mined ancestors) or fail (an unexpected witness). [`validate_consignment_offchain`] is the
+/// single-element special case.
+///
+/// <div class="warning">This method is meant for special usage and is normally not needed, use
+/// it only if you know what you're doing</div>
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub fn validate_consignment_offchain_chain(
+    file_path: &str,
+    offchain_txids: &[String],
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+) -> Result<ValidateConsignmentResult, Error> {
     use rgbstd::validation::ValidationError;
 
     let consignment = RgbTransfer::load_file(file_path).map_err(|e| Error::Internal {
         details: format!("Failed to load consignment: {e}"),
     })?;
 
-    let witness_id = RgbTxid::from_str(txid).map_err(|_| Error::InvalidTxid)?;
+    let offchain_witness_ids = offchain_txids
+        .iter()
+        .map(|t| RgbTxid::from_str(t).map_err(|_| Error::InvalidTxid))
+        .collect::<Result<Vec<_>, _>>()?;
     let chain_net: ChainNet = bitcoin_network.into();
     let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
     let trusted_typesystem = asset_schema.types();
@@ -122,7 +155,7 @@ pub fn validate_consignment_offchain(
     let fallback_resolver = get_resolver(indexer_url, bitcoin_network)?;
 
     let resolver = crate::utils::OffchainResolver {
-        witness_id,
+        offchain_witness_ids,
         consignment: &consignment,
         fallback: &fallback_resolver,
     };
@@ -354,6 +387,46 @@ impl Wallet {
                     }
                 }
             }
+            // Blinded beneficiaries: assign to existing outpoints (a receiver's statechain UTXO via
+            // a blind_receive recipient_id, or change to a free statechain UTXO) instead of a new
+            // witness vout. This is what lets a transfer consume a statechain UTXO and send change
+            // back to another statechain UTXO - "RGB the same way it works on-chain".
+            for (recipient_id, amount) in asset_coloring_info.blinded_map.clone() {
+                if amount == 0 {
+                    continue;
+                }
+                let xchain = XChainNet::<Beneficiary>::from_str(&recipient_id).map_err(|_| {
+                    Error::InvalidColoringInfo {
+                        details: format!("invalid blinded recipient_id: {recipient_id}"),
+                    }
+                })?;
+                let secret_seal: SecretSeal = match xchain.into_inner() {
+                    Beneficiary::BlindedSeal(ss) => ss,
+                    _ => {
+                        return Err(Error::InvalidColoringInfo {
+                            details: format!("recipient_id is not a blinded seal: {recipient_id}"),
+                        });
+                    }
+                };
+                sending_amt += amount;
+                let seal: BuilderSeal<GraphSeal> = BuilderSeal::Concealed(secret_seal);
+                beneficiaries.push(seal);
+                match schema {
+                    AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa => {
+                        asset_transition_builder = asset_transition_builder.add_fungible_state(
+                            assignment_name.clone(),
+                            seal,
+                            amount,
+                        )?;
+                    }
+                    AssetSchema::Uda => {
+                        return Err(Error::InvalidColoringInfo {
+                            details: s!("blinded beneficiaries are not supported for UDA in this path"),
+                        });
+                    }
+                }
+            }
+
             if sending_amt > asset_available_amt {
                 return Err(Error::InvalidColoringInfo {
                     details: format!(
@@ -499,7 +572,7 @@ impl Wallet {
         runtime.store_secret_seal(graph_seal)?;
 
         let resolver = OffchainResolver {
-            witness_id,
+            offchain_witness_ids: vec![witness_id],
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
@@ -645,7 +718,7 @@ impl Wallet {
 
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
         let resolver = OffchainResolver {
-            witness_id,
+            offchain_witness_ids: vec![witness_id],
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
@@ -731,6 +804,248 @@ impl Wallet {
     /// it only if you know what you're doing</div>
     pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
         self.send_consignment_path(asset_id, transfer_id)
+    }
+
+    /// Build, color and sign the deposit funding transaction that binds an RGB asset to a Mercury
+    /// statechain UTXO. Unlike a standard `send` (which marks the asset as "sent away"), this keeps
+    /// the statechain UTXO re-colorable by the owner (the stash retains the allocation), so the owner
+    /// can later transfer/exit. Spends one wallet UTXO holding `>= rgb_amount` of `contract_id`, pays
+    /// `amount_sat` to the statechain `address`, assigns `rgb_amount` to it via an OP_RETURN opret
+    /// commitment, and signs with this (BDK) wallet. Returns `(txid, vout, consignment, signed_hex)`.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn fund_statechain_utxo(
+        &mut self,
+        address: String,
+        amount_sat: u64,
+        contract_id: String,
+        rgb_amount: u64,
+        fee_rate: u64,
+        blinding: u64,
+    ) -> Result<(String, u32, Vec<u8>, String), Error> {
+        use bdk_wallet::bitcoin::{
+            consensus::encode::serialize_hex, Address as BdkAddr, OutPoint as BdkOut, Txid as BdkTxid,
+        };
+        use rgbstd::containers::FileContent;
+        use std::collections::HashSet;
+        use std::fs;
+
+        info!(self.logger(), "Funding statechain UTXO...");
+        let contract = ContractId::from_str(&contract_id).map_err(|_| Error::Internal {
+            details: format!("invalid contract id: {contract_id}"),
+        })?;
+        let script = BdkAddr::from_str(&address)
+            .map_err(|e| Error::Internal { details: format!("invalid address: {e}") })?
+            .assume_checked()
+            .script_pubkey();
+
+        let unspents = self.list_unspents(None, false, true)?;
+        let mut asset_outpoint = None;
+        for u in unspents {
+            if !u.utxo.colorable || !u.utxo.exists || u.utxo.btc_amount < amount_sat + 1000 {
+                continue;
+            }
+            let has_enough = u.rgb_allocations.iter().any(|a| {
+                a.asset_id.as_deref() == Some(contract_id.as_str())
+                    && matches!(a.assignment, crate::database::enums::Assignment::Fungible(amt) if amt >= rgb_amount)
+            });
+            if has_enough {
+                asset_outpoint = Some(u.utxo.outpoint.clone());
+                break;
+            }
+        }
+        let asset_outpoint = asset_outpoint.ok_or(Error::InsufficientAllocationSlots)?;
+
+        let mut input_outpoints: HashSet<BdkOut> = HashSet::new();
+        input_outpoints.insert(BdkOut {
+            txid: BdkTxid::from_str(&asset_outpoint.txid).map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?,
+            vout: asset_outpoint.vout,
+        });
+
+        let fee_rate_checked = self.check_fee_rate(fee_rate)?;
+        let (mut psbt, _change) =
+            self.prepare_psbt(input_outpoints, &vec![(script, amount_sat)], fee_rate_checked, None)?;
+
+        let coloring_info = ColoringInfo {
+            asset_info_map: HashMap::from([(
+                contract,
+                AssetColoringInfo {
+                    output_map: HashMap::from([(0u32, rgb_amount)]),
+                    blinded_map: HashMap::new(),
+                    static_blinding: Some(blinding),
+                },
+            )]),
+            static_blinding: Some(blinding),
+            nonce: None,
+        };
+        let transfers = self.color_psbt_and_consume(&mut psbt, coloring_info)?;
+
+        let signed_psbt_b64 = self.sign_psbt(psbt.to_string(), None)?;
+        let signed_psbt = Psbt::from_str(&signed_psbt_b64)?;
+        let tx = signed_psbt.extract_tx().map_err(|e| Error::Internal {
+            details: e.to_string(),
+        })?;
+        let txid = tx.compute_txid().to_string();
+        let signed_tx_hex = serialize_hex(&tx);
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_dir =
+            std::env::temp_dir().join(format!("mercury-rgb-fund-{}-{}", std::process::id(), unique));
+        fs::create_dir_all(&tmp_dir)?;
+        let path = tmp_dir.join("consignment");
+        let consignment = transfers.first().ok_or(Error::InvalidConsignment)?;
+        consignment.save_file(&path).map_err(|e| Error::Internal {
+            details: format!("could not serialize consignment: {e}"),
+        })?;
+        let consignment_bytes = fs::read(&path)?;
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        info!(self.logger(), "Fund statechain UTXO completed");
+        Ok((txid, 1, consignment_bytes, signed_tx_hex))
+    }
+
+    /// Register a Mercury statechain UTXO as a wallet-owned, colorable UTXO holding a settled RGB
+    /// allocation - so `rgb-lib` treats it exactly like an on-chain UTXO. A statechain UTXO is a
+    /// MuSig2 aggregate output that BDK does not own and the indexer's wallet sync cannot see; this
+    /// inserts the `txo` plus the `coloring`/`transfer` rows that `get_asset_balance`,
+    /// `list_unspents` and `blind_receive` read, with existence asserted by the statechain rather
+    /// than the blockchain. The matching allocation must already be in the stash (e.g. it was put
+    /// there by `fund_statechain_utxo` on this wallet, or imported from a consignment). Returns the
+    /// txo idx. This is design-doc item 1: statechain UTXOs as first-class colorable wallet UTXOs.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn register_statechain_utxo(
+        &self,
+        txid: String,
+        vout: u32,
+        btc_amount: u64,
+        contract_id: String,
+        rgb_amount: u64,
+        spend_outpoints: Vec<Outpoint>,
+    ) -> Result<i32, Error> {
+        info!(self.logger(), "Registering statechain UTXO...");
+        ContractId::from_str(&contract_id).map_err(|_| Error::Internal {
+            details: format!("invalid contract id: {contract_id}"),
+        })?;
+
+        let txn = self.database().begin_transaction()?;
+
+        // Mark on-chain UTXO(s) consumed by the deposit as spent in the DB. A color deposit spends
+        // them on-chain but bypasses DB send-accounting, leaving a stale (now double-counted)
+        // allocation; clearing it keeps `get_asset_balance` correct as the allocation moves to the
+        // statechain UTXO. (`settled()` excludes spent txos.)
+        for op in &spend_outpoints {
+            if let Some(src) = txn.get_txo(op)? {
+                let active = DbTxoActMod {
+                    idx: ActiveValue::Unchanged(src.idx),
+                    txid: ActiveValue::Unchanged(src.txid.clone()),
+                    vout: ActiveValue::Unchanged(src.vout),
+                    btc_amount: ActiveValue::Unchanged(src.btc_amount.clone()),
+                    spent: ActiveValue::Set(true),
+                    exists: ActiveValue::Unchanged(src.exists),
+                    pending_witness: ActiveValue::Unchanged(src.pending_witness),
+                };
+                txn.update_txo(active)?;
+            }
+        }
+
+        // 1. The colorable wallet UTXO. Existence is proven by the statechain (the SE published the
+        //    key-share / the deposit tx is confirmed), so exists=true even though BDK can't see it.
+        let txo_idx = txn.set_txo(DbTxoActMod {
+            idx: ActiveValue::NotSet,
+            txid: ActiveValue::Set(txid.clone()),
+            vout: ActiveValue::Set(vout),
+            btc_amount: ActiveValue::Set(btc_amount.to_string()),
+            spent: ActiveValue::Set(false),
+            exists: ActiveValue::Set(true),
+            pending_witness: ActiveValue::Set(false),
+        })?;
+
+        // rgb_amount == 0 registers a *free* colorable statechain UTXO (onboarding): a coin to
+        // receive on, with no allocation yet, that `blind_receive` can pick as a seal.
+        if rgb_amount == 0 {
+            txn.commit()?;
+            info!(self.logger(), "Register statechain UTXO completed (free)");
+            return Ok(txo_idx);
+        }
+
+        // 2-4. A settled incoming transfer carrying the allocation, so standard methods surface it.
+        let now = crate::utils::now().unix_timestamp();
+        let batch_transfer_idx = txn.set_batch_transfer(DbBatchTransferActMod {
+            status: ActiveValue::Set(TransferStatus::Settled),
+            created_at: ActiveValue::Set(now),
+            updated_at: ActiveValue::Set(now),
+            min_confirmations: ActiveValue::Set(0),
+            ..Default::default()
+        })?;
+        let asset_transfer_idx = txn.set_asset_transfer(DbAssetTransferActMod {
+            user_driven: ActiveValue::Set(true),
+            batch_transfer_idx: ActiveValue::Set(batch_transfer_idx),
+            asset_id: ActiveValue::Set(Some(contract_id.clone())),
+            ..Default::default()
+        })?;
+        // Model the registration as an incoming *blinded* receive onto the statechain UTXO, so the
+        // standard `list_transfers` (which unwraps `recipient_type` for incoming transfers) renders
+        // it as a ReceiveBlind instead of panicking.
+        txn.set_transfer(DbTransferActMod {
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            incoming: ActiveValue::Set(true),
+            recipient_type: ActiveValue::Set(Some(
+                crate::database::enums::RecipientTypeFull::Blind {
+                    unblinded_utxo: Outpoint { txid: txid.clone(), vout },
+                },
+            )),
+            // `list_transfers` derives a (never-read) consignment path from recipient_id for settled
+            // receives, so it must be non-None; the outpoint is a stable, meaningful placeholder.
+            recipient_id: ActiveValue::Set(Some(format!("{txid}:{vout}"))),
+            ..Default::default()
+        })?;
+        txn.set_coloring(DbColoringActMod {
+            txo_idx: ActiveValue::Set(txo_idx),
+            asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+            r#type: ActiveValue::Set(ColoringType::Receive),
+            assignment: ActiveValue::Set(crate::database::enums::Assignment::Fungible(rgb_amount)),
+            ..Default::default()
+        })?;
+
+        txn.commit()?;
+        info!(self.logger(), "Register statechain UTXO completed");
+        Ok(txo_idx)
+    }
+
+    /// Mark registered UTXO(s) as spent in the DB. Used after a transfer/exit consumes a statechain
+    /// UTXO: the color path spends it on-chain but bypasses DB send-accounting, so the moved
+    /// allocation would otherwise linger (and double-count). `settled()` excludes spent txos, so the
+    /// balance correctly drops to just the change.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn mark_utxos_spent(&self, outpoints: Vec<Outpoint>) -> Result<(), Error> {
+        let txn = self.database().begin_transaction()?;
+        for op in &outpoints {
+            if let Some(src) = txn.get_txo(op)? {
+                let active = DbTxoActMod {
+                    idx: ActiveValue::Unchanged(src.idx),
+                    txid: ActiveValue::Unchanged(src.txid.clone()),
+                    vout: ActiveValue::Unchanged(src.vout),
+                    btc_amount: ActiveValue::Unchanged(src.btc_amount.clone()),
+                    spent: ActiveValue::Set(true),
+                    exists: ActiveValue::Unchanged(src.exists),
+                    pending_witness: ActiveValue::Unchanged(src.pending_witness),
+                };
+                txn.update_txo(active)?;
+            }
+        }
+        txn.commit()?;
+        Ok(())
     }
 }
 

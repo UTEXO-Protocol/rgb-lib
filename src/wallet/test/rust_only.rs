@@ -54,6 +54,7 @@ fn success() {
     output_map.insert(vout, AMOUNT); // sending AMOUNT since color_psbt doesn't support change
     let asset_coloring_info = AssetColoringInfo {
         output_map,
+            blinded_map: std::collections::HashMap::new(),
         static_blinding: Some(blinding),
     };
     let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
@@ -352,6 +353,7 @@ fn color_psbt_uda() {
     output_map.insert(0u32, 1u64); // UDA: assign to vout 0, amount 1
     let asset_coloring_info = AssetColoringInfo {
         output_map,
+            blinded_map: std::collections::HashMap::new(),
         static_blinding: None,
     };
     let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
@@ -460,6 +462,7 @@ fn color_psbt_fail() {
     let fake_cid = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E";
     let asset_coloring_info = AssetColoringInfo {
         output_map: output_map.clone(),
+            blinded_map: std::collections::HashMap::new(),
         static_blinding: Some(blinding),
     };
     let asset_info_map: HashMap<ContractId, AssetColoringInfo> =
@@ -478,6 +481,7 @@ fn color_psbt_fail() {
     let fake_o_map: HashMap<u32, u64> = HashMap::from_iter([(666, AMOUNT)]);
     let asset_coloring_info = AssetColoringInfo {
         output_map: fake_o_map,
+            blinded_map: std::collections::HashMap::new(),
         static_blinding: Some(blinding),
     };
     let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(
@@ -497,6 +501,7 @@ fn color_psbt_fail() {
     let fake_o_map = output_map.keys().map(|k| (*k, 999u64)).collect();
     let asset_coloring_info = AssetColoringInfo {
         output_map: fake_o_map,
+            blinded_map: std::collections::HashMap::new(),
         static_blinding: Some(blinding),
     };
     let asset_info_map: HashMap<ContractId, AssetColoringInfo> = HashMap::from_iter([(

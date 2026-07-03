@@ -1039,7 +1039,12 @@ pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRunti
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) struct OffchainResolver<'a, 'cons, const TRANSFER: bool> {
-    pub(crate) witness_id: RgbTxid,
+    /// Witness ids to resolve from the consignment's bundled witnesses (as `Tentative`/offchain)
+    /// instead of the indexer — i.e. the un-broadcast branch. This is a single txid for a plain
+    /// off-chain transfer, or the whole chain (root-spend, …, leaf) for a multi-level off-chain
+    /// split. Any witness id NOT in this set falls back to the indexer (so already-mined ancestors
+    /// still resolve normally and a wrong/unexpected witness still fails validation).
+    pub(crate) offchain_witness_ids: Vec<RgbTxid>,
     pub(crate) consignment: &'cons Consignment<TRANSFER>,
     pub(crate) fallback: &'a AnyResolver,
 }
@@ -1047,7 +1052,7 @@ pub(crate) struct OffchainResolver<'a, 'cons, const TRANSFER: bool> {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER> {
     fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
-        if witness_id != self.witness_id {
+        if !self.offchain_witness_ids.contains(&witness_id) {
             return self.fallback.resolve_witness(witness_id);
         }
         self.consignment
