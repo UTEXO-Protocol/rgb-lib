@@ -636,6 +636,56 @@ impl Wallet {
         ))
     }
 
+    /// Off-chain validate `consignment` against the un-broadcast branch `offchain_txids` and
+    /// return the fungible amount the consignment assigns to the receiver's OWN witness outpoint
+    /// (`witness_txid`:`vout`). This is the consignment-derived amount: a receiver books it
+    /// instead of trusting any sender-supplied value. Mirrors the resolver/validation setup of
+    /// [`validate_consignment_offchain_chain`] and reuses the same seal extractor as
+    /// [`Self::accept_transfer`]; nothing is persisted.
+    pub fn offchain_assigned_amount(
+        &self,
+        consignment: RgbTransfer,
+        offchain_txids: &[String],
+        witness_txid: &str,
+        vout: u32,
+    ) -> Result<u64, Error> {
+        let offchain_witness_ids = offchain_txids
+            .iter()
+            .map(|t| RgbTxid::from_str(t).map_err(|_| Error::InvalidTxid))
+            .collect::<Result<Vec<_>, _>>()?;
+        let resolver = OffchainResolver {
+            offchain_witness_ids,
+            consignment: &consignment,
+            fallback: self.blockchain_resolver(),
+        };
+        let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
+        let trusted_typesystem = asset_schema.types();
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem,
+            ..Default::default()
+        };
+        match consignment.clone().validate(&resolver, &validation_config) {
+            Ok(_) => {}
+            Err(ValidationError::InvalidConsignment(_)) => return Err(Error::InvalidConsignment),
+            Err(ValidationError::ResolverError(e)) => {
+                return Err(Error::Network {
+                    details: e.to_string(),
+                })
+            }
+        };
+        let witness_id = RgbTxid::from_str(witness_txid).map_err(|_| Error::InvalidTxid)?;
+        let received =
+            self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
+        Ok(received
+            .into_values()
+            .map(|a| match a {
+                Assignment::Fungible(n) | Assignment::InflationRight(n) => n,
+                _ => 0,
+            })
+            .sum())
+    }
+
     /// Consume an RGB fascia.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
