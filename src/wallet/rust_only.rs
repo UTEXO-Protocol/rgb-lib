@@ -677,10 +677,15 @@ impl Wallet {
         let witness_id = RgbTxid::from_str(witness_txid).map_err(|_| Error::InvalidTxid)?;
         let received =
             self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
+        // Count ONLY the spendable fungible balance. An InflationRight is the *right to mint* more
+        // supply, not spendable tokens — booking it as received balance would let a sender who holds
+        // an inflation right hand the receiver a consignment that inflates their apparent balance out
+        // of nothing (breaks token conservation, INV-12/INV-13). Inflation rights move only through
+        // the dedicated mint/inflate path, never as a payment amount.
         Ok(received
             .into_values()
             .map(|a| match a {
-                Assignment::Fungible(n) | Assignment::InflationRight(n) => n,
+                Assignment::Fungible(n) => n,
                 _ => 0,
             })
             .sum())
