@@ -712,6 +712,57 @@ fn create_consignments_success() {
     assert!(consignment_path.is_file());
 }
 
+// The send consignment is derived from begin-time data (fascia, beneficiaries
+// and the unsigned witness txid), so it must be byte-identical whether built
+// from the unsigned or the signed PSBT.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn send_consignment_stable_across_signing() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset = party.issue_asset_nia(None);
+    let receive_data = rcv_party.blind_receive_asset_expiry(None, None);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(10),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+
+    let unsigned_psbt = party.send_begin_result(&recipient_map).unwrap().psbt;
+
+    let txid = Psbt::from_str(&unsigned_psbt)
+        .unwrap()
+        .unsigned_tx
+        .compute_txid()
+        .to_string();
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid);
+
+    // consignment from the unsigned PSBT
+    party
+        .wallet
+        .create_consignments(unsigned_psbt.clone())
+        .unwrap();
+    let consignment_from_unsigned = std::fs::read(&consignment_path).unwrap();
+    assert!(!consignment_from_unsigned.is_empty());
+
+    // consignment regenerated from the signed PSBT
+    let signed_psbt = party.wallet.sign_psbt(unsigned_psbt, None).unwrap();
+    party.wallet.create_consignments(signed_psbt).unwrap();
+    let consignment_from_signed = std::fs::read(&consignment_path).unwrap();
+
+    assert_eq!(consignment_from_unsigned, consignment_from_signed);
+}
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[test]
 #[parallel]
