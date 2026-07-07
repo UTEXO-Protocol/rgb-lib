@@ -366,6 +366,7 @@ dictionary AssignmentsCollection {
 
 dictionary InvoiceData {
   string recipient_id;
+  string proxy_recipient_id;
   AssetSchema? asset_schema;
   string? asset_id;
   Assignment assignment;
@@ -576,6 +577,7 @@ dictionary Transfer {
   TransferKind kind;
   string? txid;
   string? recipient_id;
+  string? proxy_recipient_id;
   Outpoint? receive_utxo;
   Outpoint? change_utxo;
   u64? expiration_timestamp;
