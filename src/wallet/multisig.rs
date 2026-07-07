@@ -2211,6 +2211,19 @@ impl MultisigWallet {
             PostData::BeginOperationData(begin_operation_data) => {
                 let fascia_path = begin_operation_data.transfer_dir.join(FASCIA_FILE);
                 files.push((FileType::Fascia, FileSource::Path(fascia_path)));
+                // the send consignment is fully determined by begin-time data, so
+                // attach it already now to let cosigners access it from the hub
+                if matches!(operation_type, OperationType::SendRgb) {
+                    let (_, transfer_dir, info_contents, fascia) =
+                        self.get_transfer_end_data(&begin_operation_data.psbt)?;
+                    self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
+                    for asset_id in info_contents.transfers.keys() {
+                        let consignment_path = self
+                            .get_asset_transfer_dir(&transfer_dir, asset_id)
+                            .join(CONSIGNMENT_FILE);
+                        files.push((FileType::Consignment, FileSource::Path(consignment_path)));
+                    }
+                }
                 let transfer_metadata_bytes =
                     serde_json::to_vec(&begin_operation_data.info_batch_transfer)
                         .expect("serializable");

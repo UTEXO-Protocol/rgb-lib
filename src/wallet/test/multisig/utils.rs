@@ -1424,6 +1424,22 @@ pub(super) fn inspect_burn(
     assert_eq!(burn_transitions.len(), 1);
 }
 
+pub(super) fn check_send_op_has_consignment(wallet: &MultisigParty, op_idx: i32) {
+    let (_, files) = wallet.get_op_and_files(op_idx);
+    let consignments: Vec<_> = files
+        .iter()
+        .filter(|f| matches!(f.r#type, FileType::Consignment))
+        .collect();
+    assert!(
+        !consignments.is_empty(),
+        "send operation should expose a consignment on the hub"
+    );
+    for consignment in consignments {
+        let size = fs::metadata(&consignment.filepath).unwrap().len();
+        assert!(size > 0, "posted consignment must be non-empty");
+    }
+}
+
 pub(super) fn inspect_send(
     wallet: &MultisigParty,
     op_init: &InitOperationResult,
