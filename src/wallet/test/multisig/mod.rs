@@ -288,6 +288,7 @@ fn success() {
         }],
     )]);
     let op_init = wlt_1.send_init(recipient_map);
+    check_send_op_has_consignment(&wlt_1, op_init.operation_idx);
     let bt_before = wlt_2.bak_ts();
     operation_complete::<SendRgbHandler>(
         op_init.operation_idx,
