@@ -321,3 +321,25 @@ jobs:
               "version": "${{ steps.version.outputs.version }}",
               "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
             }
+
+      - name: Trigger rust-lightning bump
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_RUST_LIGHTNING_PAT }}
+          repository: UTEXO-Protocol/rust-lightning
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}"
+            }
+
+      - name: Trigger rgb-lightning-node bump
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.RGB_LIB_RLN_PAT }}
+          repository: UTEXO-Protocol/rgb-lightning-node
+          event-type: rgb-lib-release
+          client-payload: |
+            {
+              "version": "${{ steps.version.outputs.version }}"
+            }
