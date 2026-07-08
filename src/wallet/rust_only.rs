@@ -453,14 +453,50 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     pub fn create_consignments(&self, psbt: String) -> Result<(), Error> {
+        self.create_consignments_impl(psbt).map(|_| ())
+    }
+
+    /// Create consignments for a PSBT created with the [`send_begin`](Wallet::send_begin) method,
+    /// returning the filesystem path of the consignment for the transferred asset.
+    ///
+    /// This requires the PSBT to transfer exactly one asset; it returns an error otherwise, so a
+    /// caller verifying the consignment before signing never verifies only a subset of a
+    /// multi-asset batch.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn create_consignments_return_path(&self, psbt: String) -> Result<String, Error> {
+        let mut consignment_paths = self.create_consignments_impl(psbt)?;
+        if consignment_paths.len() != 1 {
+            return Err(Error::Internal {
+                details: format!(
+                    "expected exactly one asset transfer, found {}",
+                    consignment_paths.len()
+                ),
+            });
+        }
+        Ok(consignment_paths.remove(0))
+    }
+
+    fn create_consignments_impl(&self, psbt: String) -> Result<Vec<String>, Error> {
         info!(self.logger(), "Creating consignments...");
 
         let psbt = Psbt::from_str(&psbt)?;
-        let (_, transfer_dir, info_contents, fascia) = self.get_transfer_end_data(&psbt)?;
+        let (txid, transfer_dir, info_contents, fascia) = self.get_transfer_end_data(&psbt)?;
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
 
+        let consignment_paths = info_contents
+            .transfers
+            .keys()
+            .map(|asset_id| {
+                self.get_send_consignment_path(asset_id, &txid)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+
         info!(self.logger(), "Create consignments completed");
-        Ok(())
+        Ok(consignment_paths)
     }
 
     /// Accept an RGB transfer using a TXID to retrieve its consignment.

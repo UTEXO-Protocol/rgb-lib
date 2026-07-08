@@ -460,6 +460,15 @@ pub(crate) fn finalize_psbt(
     Ok(wallet.finalize_psbt(signed_psbt, None)?)
 }
 
+pub(crate) fn create_consignments(
+    wallet: &COpaqueStruct,
+    psbt: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let psbt = ptr_to_string(psbt);
+    Ok(wallet.create_consignments_return_path(psbt)?)
+}
+
 pub(crate) fn generate_keys(
     bitcoin_network: *const c_char,
     witness_version: *const c_char,

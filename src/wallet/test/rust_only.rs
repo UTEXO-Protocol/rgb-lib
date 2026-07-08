@@ -763,6 +763,99 @@ fn send_consignment_stable_across_signing() {
     assert_eq!(consignment_from_unsigned, consignment_from_signed);
 }
 
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn create_consignments_return_path_success() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset = party.issue_asset_nia(None);
+    let receive_data = rcv_party.blind_receive_asset_expiry(None, None);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(10),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let psbt = party.send_begin_result(&recipient_map).unwrap().psbt;
+
+    let txid = Psbt::from_str(&psbt)
+        .unwrap()
+        .extract_tx()
+        .unwrap()
+        .compute_txid()
+        .to_string();
+    let expected_path = party
+        .wallet
+        .get_asset_transfer_dir(
+            party.wallet.get_transfers_dir().join(&txid),
+            &asset.asset_id,
+        )
+        .join(CONSIGNMENT_FILE);
+    let public_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid);
+    assert_eq!(public_path, expected_path);
+
+    let returned_path = party
+        .wallet
+        .create_consignments_return_path(psbt.clone())
+        .unwrap();
+
+    assert_eq!(returned_path, expected_path.to_string_lossy());
+    assert!(expected_path.is_file());
+
+    assert!(party.wallet.create_consignments(psbt).is_ok());
+    assert!(expected_path.is_file());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn create_consignments_return_path_multi_asset_fails() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset_nia = party.issue_asset_nia(None);
+    let asset_cfa = party.issue_asset_cfa(Some(&[AMOUNT * 2]), Some(FILE_STR.to_string()));
+    let receive_data_nia = rcv_party.blind_receive();
+    let receive_data_cfa = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([
+        (
+            asset_nia.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(10),
+                recipient_id: receive_data_nia.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+        (
+            asset_cfa.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(10),
+                recipient_id: receive_data_cfa.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+    ]);
+    let psbt = party.send_begin_result(&recipient_map).unwrap().psbt;
+
+    assert!(party.wallet.create_consignments(psbt.clone()).is_ok());
+
+    let result = party.wallet.create_consignments_return_path(psbt);
+    assert_matches!(result, Err(Error::Internal { details: _ }));
+}
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[test]
 #[parallel]
