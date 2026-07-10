@@ -660,7 +660,6 @@ pub(crate) fn append_recipient_nonce(url: &str, nonce: &[u8]) -> String {
 
 /// Extract the `rid_nonce` query parameter from a transport endpoint URL.
 /// Returns `(bare_url_with_other_params, nonce_bytes_if_present)`.
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn extract_recipient_nonce(url: &str) -> (String, Option<Vec<u8>>) {
     let Some(qpos) = url.find('?') else {
         return (url.to_string(), None);

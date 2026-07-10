@@ -1098,6 +1098,11 @@ impl Invoice {
         let recipient_id = decoded.beneficiary.to_string();
         let transport_endpoints: Vec<String> =
             decoded.transports.iter().map(|t| t.to_string()).collect();
+        let nonce = transport_endpoints
+            .iter()
+            .find_map(|ep| crate::utils::extract_recipient_nonce(ep).1)
+            .unwrap_or_default();
+        let proxy_recipient_id = crate::utils::derive_proxy_recipient_id(&recipient_id, &nonce);
 
         let layer_1 = decoded.beneficiary.layer1();
         let network = match layer_1 {
@@ -1113,6 +1118,7 @@ impl Invoice {
             invoice_string,
             invoice_data: InvoiceData {
                 recipient_id,
+                proxy_recipient_id,
                 asset_schema,
                 asset_id,
                 assignment,
@@ -1141,6 +1147,10 @@ impl Invoice {
 pub struct InvoiceData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
     pub recipient_id: String,
+    /// Per-invoice unique ID, derived from the recipient ID and the invoice `rid_nonce`;
+    /// equals `recipient_id` when no nonce is present
+    #[serde(default)]
+    pub proxy_recipient_id: String,
     /// RGB schema
     pub asset_schema: Option<AssetSchema>,
     /// RGB asset ID
@@ -1256,6 +1266,10 @@ pub struct Transfer {
     pub txid: Option<String>,
     /// Recipient ID (blinded UTXO or Bitcoin script) of an incoming transfer
     pub recipient_id: Option<String>,
+    /// Per-invoice unique ID, derived from the recipient ID and the invoice `rid_nonce`;
+    /// equals `recipient_id` when no nonce is present
+    #[serde(default)]
+    pub proxy_recipient_id: Option<String>,
     /// UTXO of an incoming transfer
     pub receive_utxo: Option<Outpoint>,
     /// Change UTXO of an outgoing transfer
@@ -1278,6 +1292,21 @@ impl DbTransfer {
         td: TransferData,
         transport_endpoints: Vec<TransferTransportEndpoint>,
     ) -> Transfer {
+        // Receive transfers persist the nonce in recipient_type; send transfers
+        // carry it in the invoice transport endpoint URLs.
+        let nonce = match &self.recipient_type {
+            Some(RecipientTypeFull::Witness {
+                recipient_nonce, ..
+            }) if !recipient_nonce.is_empty() => recipient_nonce.clone(),
+            _ => transport_endpoints
+                .iter()
+                .find_map(|te| crate::utils::extract_recipient_nonce(&te.endpoint).1)
+                .unwrap_or_default(),
+        };
+        let proxy_recipient_id = self
+            .recipient_id
+            .as_ref()
+            .map(|rid| crate::utils::derive_proxy_recipient_id(rid, &nonce));
         Transfer {
             idx: self.idx,
             batch_transfer_idx: td.batch_transfer_idx,
@@ -1289,6 +1318,7 @@ impl DbTransfer {
             kind: td.kind,
             txid: td.txid,
             recipient_id: self.recipient_id.clone(),
+            proxy_recipient_id,
             receive_utxo: td.receive_utxo,
             change_utxo: td.change_utxo,
             expiration_timestamp: td.expiration_timestamp.map(|t| t as u64),
