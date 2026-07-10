@@ -97,6 +97,9 @@ pub(crate) const SCHEMA_ID_IFA: &str =
 pub(crate) const RGB_STATE_ASSET_OWNER: &str = "assetOwner";
 pub(crate) const RGB_STATE_INFLATION_ALLOWANCE: &str = "inflationAllowance";
 pub(crate) const RGB_GLOBAL_ISSUED_SUPPLY: &str = "issuedSupply";
+pub(crate) const RGB_GLOBAL_LINKED_FROM_CONTRACT: &str = "linkedFromContract";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_GLOBAL_LINKED_TO_CONTRACT: &str = "linkedToContract";
 pub(crate) const RGB_GLOBAL_REJECT_LIST_URL: &str = "rejectListUrl";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_ALLOWED_INFLATION: &str = "allowedInflation";

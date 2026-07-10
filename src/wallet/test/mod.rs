@@ -363,6 +363,7 @@ mod issue_asset_cfa;
 mod issue_asset_ifa;
 mod issue_asset_nia;
 mod issue_asset_uda;
+mod link_ifa;
 mod list_assets;
 mod list_pending_vanilla_txs;
 mod list_transactions;

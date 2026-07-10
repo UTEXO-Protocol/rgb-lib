@@ -223,6 +223,13 @@ pub enum Error {
     #[error("Invalid consignment")]
     InvalidConsignment,
 
+    /// The provided contracts cannot be linked
+    #[error("Invalid contract link: {details}")]
+    InvalidContractLink {
+        /// Error details
+        details: String,
+    },
+
     /// The provided cosigner is invalid
     #[error("Invalid cosigner: {details}")]
     InvalidCosigner {

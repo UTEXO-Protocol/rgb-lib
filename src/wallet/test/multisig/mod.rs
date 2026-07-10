@@ -1369,6 +1369,7 @@ fn offline() {
         vec![1],
         vec![1],
         None,
+        None,
     );
     assert_matches!(result, Err(Error::Offline));
 

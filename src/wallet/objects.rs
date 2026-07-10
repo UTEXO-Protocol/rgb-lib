@@ -633,6 +633,9 @@ pub struct AssetIFA {
     pub media: Option<Media>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Link-right outpoint created at issuance
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_right_outpoint: Option<Outpoint>,
 }
 
 impl AssetIFA {
@@ -688,6 +691,7 @@ impl AssetIFA {
             balance,
             media,
             reject_list_url: asset.reject_list_url.clone(),
+            link_right_outpoint: None,
         })
     }
 }
@@ -764,9 +768,12 @@ impl IssuedAssetDetails for AssetIFA {
         txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
-        _issue_data: &IssueData,
+        issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
+        let mut asset_details =
+            Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)?;
+        asset_details.link_right_outpoint = issue_data.link_right_outpoint.clone();
+        Ok(asset_details)
     }
 }
 
@@ -795,6 +802,7 @@ pub struct IssueData {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) contract_path: PathBuf,
     pub(crate) issue_utxos: HashMap<i32, Vec<Assignment>>,
+    pub(crate) link_right_outpoint: Option<Outpoint>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -897,6 +905,8 @@ pub enum TypeOfTransition {
     Transfer,
     /// Burn transition (burning existing tokens)
     Burn,
+    /// Link transition (linking the contract to a child contract)
+    Link,
 }
 
 impl TypeOfTransition {
@@ -906,6 +916,7 @@ impl TypeOfTransition {
             Self::Inflate => "inflate",
             Self::Transfer => "transfer",
             Self::Burn => "burn",
+            Self::Link => "link",
         }
     }
 }
@@ -1224,6 +1235,8 @@ pub enum TransferKind {
     Inflation,
     /// A burn transfer
     Burn,
+    /// A transfer that consumes the contract's link-right seal
+    Link,
 }
 
 #[derive(Debug, Clone)]
@@ -1918,6 +1931,8 @@ pub struct InfoAssetTransfer {
     pub main_transition: TypeOfTransition,
     pub beneficiaries_blinded: Vec<SecretSeal>,
     pub beneficiaries_witness: Vec<ExplicitSeal<RgbTxid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_contract_id: Option<ContractId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

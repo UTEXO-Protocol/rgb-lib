@@ -4,6 +4,7 @@
 
 use super::*;
 use rgbstd::Operation as _;
+use rgbstd::contract::LinkableSchemaWrapper;
 
 const SCHEMAS_SUPPORTING_BURN: [database::enums::AssetSchema; 1] = [AssetSchema::Ifa];
 const SCHEMAS_SUPPORTING_INFLATION: [database::enums::AssetSchema; 1] = [AssetSchema::Ifa];
@@ -2239,14 +2240,28 @@ pub trait WalletOnline: WalletOffline {
                 transfer_info.main_transition.clone().type_name(),
             )?;
             for (outpoint, opout, state) in all_opout_state_vec {
-                let mut should_add_as_input = !rejected.contains(&opout);
-                if should_add_as_input {
-                    should_add_as_input = inputs_added.opout_contributes(
-                        &opout,
-                        &state,
-                        &transfer_info.assignments_needed,
-                    );
-                }
+                let should_add_as_input = match transfer_info.main_transition {
+                    TypeOfTransition::Link => {
+                        if opout.ty != OS_LINK || !matches!(state, AllocatedState::Void) {
+                            return Err(Error::InvalidAssignment);
+                        }
+                        if rejected.contains(&opout) {
+                            return Err(Error::InvalidAssignment);
+                        }
+                        true
+                    }
+                    _ => {
+                        if opout.ty == OS_LINK {
+                            return Err(Error::InvalidAssignment);
+                        }
+                        !rejected.contains(&opout)
+                            && inputs_added.opout_contributes(
+                                &opout,
+                                &state,
+                                &transfer_info.assignments_needed,
+                            )
+                    }
+                };
                 if !should_add_as_input {
                     extra_state
                         .entry(transfer_info.asset_info.contract_id)
@@ -2360,6 +2375,19 @@ pub trait WalletOnline: WalletOffline {
                         .unwrap()
                         .add_metadata(RGB_METADATA_BURNED_INFLATION, Amount::from(0u64))
                         .unwrap();
+                }
+                TypeOfTransition::Link => {
+                    let linked_to_contract_id =
+                        transfer_info
+                            .linked_to_contract_id
+                            .ok_or_else(|| Error::Internal {
+                                details: s!("missing child contract ID for link transition"),
+                            })?;
+                    asset_transition_builder = asset_transition_builder
+                        .add_global_state(RGB_GLOBAL_LINKED_TO_CONTRACT, linked_to_contract_id)
+                        .map_err(|e| Error::Internal {
+                            details: e.to_string(),
+                        })?;
                 }
                 _ => {}
             }
@@ -2730,6 +2758,18 @@ pub trait WalletOnline: WalletOffline {
             };
             let asset_transfer_idx = txn.set_asset_transfer(asset_transfer)?;
 
+            if transfer_info.main_transition == TypeOfTransition::Link {
+                let transfer = DbTransferActMod {
+                    asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
+                    requested_assignment: ActiveValue::Set(Some(Assignment::LinkRight)),
+                    incoming: ActiveValue::Set(false),
+                    recipient_id: ActiveValue::Set(None),
+                    recipient_type: ActiveValue::Set(None),
+                    ..Default::default()
+                };
+                txn.set_transfer(transfer)?;
+            }
+
             for (outpoint, assignments) in &transfer_info.assignments_spent {
                 let outpoint: Outpoint = (*outpoint).into();
                 let txo_idx = match txn.get_txo(&outpoint)? {
@@ -2853,6 +2893,7 @@ pub trait WalletOnline: WalletOffline {
                         None,
                         recipient.assignment,
                     ),
+                    TypeOfTransition::Link => (None, None, Assignment::LinkRight),
                 };
 
                 let transfer = DbTransferActMod {
@@ -3326,6 +3367,7 @@ pub trait WalletOnline: WalletOffline {
                     assignments_needed,
                     assignments_spent: HashMap::new(),
                     main_transition,
+                    linked_to_contract_id: None,
                     beneficiaries_blinded: vec![],
                     beneficiaries_witness: vec![],
                 };
@@ -3597,6 +3639,7 @@ pub trait WalletOnline: WalletOffline {
             assignments_needed,
             assignments_spent: HashMap::new(),
             main_transition: TypeOfTransition::Inflate,
+            linked_to_contract_id: None,
             beneficiaries_blinded: vec![],
             beneficiaries_witness: vec![],
         };
@@ -3748,6 +3791,7 @@ pub trait WalletOnline: WalletOffline {
             assignments_needed,
             assignments_spent: HashMap::new(),
             main_transition: TypeOfTransition::Burn,
+            linked_to_contract_id: None,
             beneficiaries_blinded: vec![],
             beneficiaries_witness: vec![],
         };
@@ -3797,6 +3841,174 @@ pub trait WalletOnline: WalletOffline {
             &info_contents,
             TransferStatus::WaitingConfirmations,
             fascia,
+            false,
+        )?;
+
+        Ok(OperationResult {
+            txid,
+            batch_transfer_idx,
+            entropy: info_contents.entropy,
+        })
+    }
+
+    fn link_ifa_begin_impl(
+        &mut self,
+        txn: &DbTxn,
+        parent_contract_id: String,
+        child_contract_id: String,
+        link_right_outpoint: Outpoint,
+        fee_rate: u64,
+        min_confirmations: u8,
+        dry_run: bool,
+    ) -> Result<BeginOperationData, Error> {
+        let parent_asset = txn.check_asset_exists(parent_contract_id.clone())?;
+        if parent_asset.schema != AssetSchema::Ifa {
+            return Err(Error::UnsupportedSchema {
+                asset_schema: parent_asset.schema,
+            });
+        }
+        let child_asset = txn.check_asset_exists(child_contract_id.clone())?;
+        if child_asset.schema != AssetSchema::Ifa {
+            return Err(Error::UnsupportedSchema {
+                asset_schema: child_asset.schema,
+            });
+        }
+
+        let parent_contract_id = ContractId::from_str(&parent_asset.id).expect("valid contract ID");
+        let child_contract_id = ContractId::from_str(&child_asset.id).expect("valid contract ID");
+        let parent_contract_id_str = parent_contract_id.to_string();
+        let child_contract_id_str = child_contract_id.to_string();
+
+        let (fee_rate_checked, unspents, input_unspents, mut runtime) =
+            self.get_transfer_begin_data(txn, fee_rate)?;
+
+        let child_linked_from = runtime
+            .contract_wrapper::<InflatableFungibleAsset>(child_contract_id)?
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?;
+        if child_linked_from != Some(parent_contract_id) {
+            return Err(Error::InvalidContractLink {
+                details: s!("child contract does not declare the parent as linkedFromContract"),
+            });
+        }
+
+        let link_right_unspent = input_unspents
+            .iter()
+            .find(|u| u.utxo.outpoint() == link_right_outpoint)
+            .cloned()
+            .ok_or(Error::InvalidAssignment)?;
+
+        let parent_link_right_assignments =
+            runtime.contract_assignments_for(parent_contract_id, [link_right_outpoint.clone()])?;
+        let mut found_link_right_assignment = false;
+        for assignments_by_output in parent_link_right_assignments.values() {
+            for (assigned_output, allocated_state) in assignments_by_output {
+                if assigned_output.ty != OS_LINK || !matches!(allocated_state, AllocatedState::Void)
+                {
+                    return Err(Error::InvalidAssignment);
+                }
+                if found_link_right_assignment {
+                    return Err(Error::InvalidAssignment);
+                }
+                found_link_right_assignment = true;
+            }
+        }
+        if !found_link_right_assignment {
+            return Err(Error::InvalidAssignment);
+        }
+
+        let transfer_info =
+            InfoAssetTransfer {
+                asset_info: AssetInfo {
+                    contract_id: parent_contract_id,
+                    reject_list_url: parent_asset.reject_list_url,
+                },
+                recipients: vec![],
+                asset_spend: AssetSpend {
+                    input_outpoints: vec![link_right_outpoint.clone()],
+                    assignments_collected: AssignmentsCollection::default(),
+                    input_btc_amt: link_right_unspent.utxo.btc_amount.parse::<u64>().map_err(
+                        |e| Error::Internal {
+                            details: e.to_string(),
+                        },
+                    )?,
+                },
+                change: AssignmentsCollection::default(),
+                original_assignments_needed: AssignmentsCollection::default(),
+                assignments_needed: AssignmentsCollection::default(),
+                assignments_spent: HashMap::new(),
+                main_transition: TypeOfTransition::Link,
+                linked_to_contract_id: Some(child_contract_id),
+                beneficiaries_blinded: vec![],
+                beneficiaries_witness: vec![],
+            };
+        let mut transfer_info_map: BTreeMap<String, InfoAssetTransfer> =
+            BTreeMap::from([(parent_contract_id_str.clone(), transfer_info)]);
+
+        let transfer_dir = self.setup_transfer_directory(vec![
+            parent_contract_id_str,
+            child_contract_id_str,
+            link_right_outpoint.to_string(),
+        ])?;
+
+        let mut rejected = HashSet::new();
+        let witness_recipients: Vec<(ScriptBuf, u64)> = vec![];
+
+        Ok(
+            match self.prepare_transfer_psbt(
+                txn,
+                &mut transfer_info_map,
+                transfer_dir.clone(),
+                true,
+                unspents,
+                &input_unspents,
+                &witness_recipients,
+                fee_rate_checked,
+                min_confirmations,
+                None,
+                &mut runtime,
+                &mut rejected,
+                dry_run,
+                None,
+            )? {
+                PrepareTransferPsbtResult::Retry => {
+                    unreachable!("link transition has no retry logic")
+                }
+                PrepareTransferPsbtResult::Success(begin_operation_data) => *begin_operation_data,
+            },
+        )
+    }
+
+    fn link_ifa_end_impl(
+        &mut self,
+        txn: &DbTxn,
+        signed_psbt: &Psbt,
+    ) -> Result<OperationResult, Error> {
+        let (txid, _transfer_dir, info_contents, fascia) =
+            self.get_transfer_end_data(signed_psbt)?;
+
+        let mut runtime = self.rgb_runtime()?;
+        self.broadcast_and_update_rgb(txn, &mut runtime, signed_psbt, fascia)?;
+
+        for (parent_contract_id, transfer_info) in &info_contents.transfers {
+            if let Some(child_contract_id) = transfer_info.linked_to_contract_id {
+                let parent_contract_id =
+                    ContractId::from_str(parent_contract_id).expect("valid contract ID");
+                runtime
+                    .validate_contracts_link::<InflatableFungibleAsset, InflatableFungibleAsset>(
+                        parent_contract_id,
+                        child_contract_id,
+                    )?;
+            }
+        }
+
+        let batch_transfer_idx = self.update_or_save_transfers(
+            txn,
+            txid.clone(),
+            &info_contents,
+            TransferStatus::WaitingConfirmations,
             false,
         )?;
 

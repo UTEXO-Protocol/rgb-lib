@@ -1475,6 +1475,9 @@ impl MultisigWallet {
     ///
     /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
     /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// If `linked_from_contract_id` is provided, the issued child contract's
+    /// `linkedFromContract` genesis global is populated with the parent contract ID.
     pub fn issue_asset_ifa(
         &self,
         online: Online,
@@ -1484,11 +1487,19 @@ impl MultisigWallet {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        linked_from_contract_id: Option<String>,
     ) -> Result<AssetIFA, Error> {
         info!(self.logger(), "Issuing IFA...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
+        let linked_from_contract_id = linked_from_contract_id
+            .map(|linked_from_contract_id| {
+                ContractId::from_str(&linked_from_contract_id).map_err(|e| Error::Internal {
+                    details: e.to_string(),
+                })
+            })
+            .transpose()?;
         let issue_data = self.create_ifa_contract(
             &txn,
             ticker,
@@ -1497,6 +1508,7 @@ impl MultisigWallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            linked_from_contract_id,
         )?;
         let res = self.upload_and_process_issuance(&txn, &issue_data, vec![])?;
         txn.commit()?;
@@ -1761,6 +1773,7 @@ impl MultisigWallet {
             valid_contract,
             contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         };
 
         self.import_and_save_contract(txn, &issue_data, &mut runtime)?;

@@ -515,6 +515,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -662,6 +663,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -773,6 +775,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -785,6 +788,7 @@ pub trait WalletOffline: WalletBackup {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        linked_from_contract_id: Option<ContractId>,
     ) -> Result<IssueData, Error> {
         let asset_schema = &AssetSchema::Ifa;
 
@@ -850,6 +854,11 @@ pub trait WalletOffline: WalletBackup {
                 )
                 .expect("invalid rejectListUrl");
         }
+        if let Some(linked_from_contract_id) = linked_from_contract_id {
+            builder = builder
+                .add_global_state(RGB_GLOBAL_LINKED_FROM_CONTRACT, linked_from_contract_id)
+                .expect("invalid linkedFromContract");
+        }
 
         let mut issue_utxos: HashMap<i32, Vec<Assignment>> = HashMap::new();
         let mut exclude_outpoints: Vec<Outpoint> = vec![];
@@ -883,6 +892,16 @@ pub trait WalletOffline: WalletBackup {
                 .expect("invalid global state data");
         }
 
+        let link_right_utxo =
+            self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
+        issue_utxos
+            .entry(link_right_utxo.idx)
+            .or_default()
+            .push(Assignment::LinkRight);
+        builder = builder
+            .add_rights_raw(OS_LINK, self.get_builder_seal(link_right_utxo.clone()))
+            .expect("invalid link right state");
+
         debug!(self.logger(), "Issuing: {issue_utxos:?}");
 
         let (asset_id, _contract_path, valid_contract) = self.issue_contract(builder)?;
@@ -910,6 +929,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: Some(link_right_utxo.outpoint()),
         })
     }
 
@@ -2024,8 +2044,11 @@ pub trait WalletOffline: WalletBackup {
                     RecipientTypeFull::Witness { .. } => TransferKind::ReceiveWitness,
                 }
             }
+        } else if transfer.recipient_id.is_none()
+            && transfer.requested_assignment == Some(Assignment::LinkRight)
+        {
+            TransferKind::Link
         } else if transfer.recipient_id.is_none() {
-            // burn is the only outgoing transfer with no recipient
             TransferKind::Burn
         } else if filtered_coloring
             .clone()
@@ -2065,7 +2088,10 @@ pub trait WalletOffline: WalletBackup {
         };
         let change_utxo = match kind {
             TransferKind::ReceiveBlind | TransferKind::ReceiveWitness => None,
-            TransferKind::Send | TransferKind::Inflation | TransferKind::Burn => {
+            TransferKind::Send
+            | TransferKind::Inflation
+            | TransferKind::Burn
+            | TransferKind::Link => {
                 let change_txo_idx: Vec<i32> = filtered_coloring
                     .filter(|c| c.r#type == ColoringType::Change)
                     .map(|c| c.txo_idx)
@@ -2082,12 +2108,16 @@ pub trait WalletOffline: WalletBackup {
         };
 
         let consignment_path = match (&kind, batch_transfer.status) {
-            (TransferKind::Send | TransferKind::Inflation | TransferKind::Burn, _) => {
-                Some(self.send_consignment_path(
-                    &asset_transfer.asset_id.clone().unwrap(),
-                    &batch_transfer.txid.clone().unwrap(),
-                ))
-            }
+            (
+                TransferKind::Send
+                | TransferKind::Inflation
+                | TransferKind::Burn
+                | TransferKind::Link,
+                _,
+            ) => Some(self.send_consignment_path(
+                &asset_transfer.asset_id.clone().unwrap(),
+                &batch_transfer.txid.clone().unwrap(),
+            )),
             (
                 TransferKind::ReceiveBlind | TransferKind::ReceiveWitness,
                 TransferStatus::WaitingCounterparty,
@@ -2110,7 +2140,10 @@ pub trait WalletOffline: WalletBackup {
         .map(|p| p.to_string_lossy().to_string());
 
         let psbt_path = match &kind {
-            TransferKind::Send | TransferKind::Inflation | TransferKind::Burn => batch_transfer
+            TransferKind::Send
+            | TransferKind::Inflation
+            | TransferKind::Burn
+            | TransferKind::Link => batch_transfer
                 .txid
                 .as_ref()
                 .map(|txid| self.get_transfer_dir(txid).join(UNSIGNED_PSBT_FILE))
@@ -2517,6 +2550,7 @@ pub trait WalletOffline: WalletBackup {
                     TS_TRANSFER => TypeOfTransition::Transfer,
                     TS_INFLATION => TypeOfTransition::Inflate,
                     TS_BURN => TypeOfTransition::Burn,
+                    TS_LINK => TypeOfTransition::Link,
                     _ => {
                         return Err(Error::RgbInspection {
                             details: format!(
