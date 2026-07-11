@@ -469,6 +469,15 @@ pub(crate) fn create_consignments(
     Ok(wallet.create_consignments_return_path(psbt)?)
 }
 
+pub(crate) fn string_free(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = CString::from_raw(ptr);
+    }
+}
+
 pub(crate) fn generate_keys(
     bitcoin_network: *const c_char,
     witness_version: *const c_char,

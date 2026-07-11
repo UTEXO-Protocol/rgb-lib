@@ -634,12 +634,7 @@ pub extern "C" fn rgblib_create_consignments(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_string_free(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-    unsafe {
-        let _ = CString::from_raw(ptr);
-    }
+    string_free(ptr)
 }
 
 #[unsafe(no_mangle)]
