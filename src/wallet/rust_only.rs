@@ -459,9 +459,11 @@ impl Wallet {
     /// Create consignments for a PSBT created with the [`send_begin`](Wallet::send_begin) method,
     /// returning the filesystem path of the consignment for the transferred asset.
     ///
-    /// This requires the PSBT to transfer exactly one asset; it returns an error otherwise, so a
-    /// caller verifying the consignment before signing never verifies only a subset of a
-    /// multi-asset batch.
+    /// This requires the PSBT to send exactly one asset to a recipient; it returns an error
+    /// otherwise, so a caller verifying the consignment before signing never verifies only a
+    /// subset of a multi-recipient batch. This counts only recipient-directed transfers: other
+    /// assets sharing the spent UTXOs may still move as change allocations back to the sender in
+    /// the same transaction.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
