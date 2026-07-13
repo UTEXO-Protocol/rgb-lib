@@ -795,6 +795,45 @@ pub struct LocalAssetData {
     pub(crate) added_at: i64,
 }
 
+/// Controls how an IFA contract is issued.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub enum IfaIssuanceType {
+    /// Legacy IFA issuance without a link-right UTXO reservation or parent contract declaration.
+    #[default]
+    Legacy,
+    /// IFA issuance that reserves a link-right UTXO but does not declare a parent contract.
+    LinkRightOnly,
+    /// IFA issuance that declares the parent contract and optionally reserves a link-right UTXO.
+    LinkedFromParent {
+        /// Parent contract ID.
+        contract_id: String,
+        /// Whether issuance should create a link-right UTXO.
+        #[serde(default)]
+        request_link_right: bool,
+    },
+}
+
+impl IfaIssuanceType {
+    pub(crate) fn into_ifa_link_data(self) -> Result<(bool, Option<ContractId>), Error> {
+        Ok(match self {
+            Self::Legacy => (false, None),
+            Self::LinkRightOnly => (true, None),
+            Self::LinkedFromParent {
+                contract_id,
+                request_link_right,
+            } => (
+                request_link_right,
+                Some(
+                    ContractId::from_str(&contract_id).map_err(|e| Error::Internal {
+                        details: e.to_string(),
+                    })?,
+                ),
+            ),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IssueData {
     pub(crate) asset_data: LocalAssetData,

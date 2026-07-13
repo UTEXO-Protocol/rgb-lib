@@ -789,6 +789,7 @@ pub trait WalletOffline: WalletBackup {
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
         linked_from_contract_id: Option<ContractId>,
+        create_link_right: bool,
     ) -> Result<IssueData, Error> {
         let asset_schema = &AssetSchema::Ifa;
 
@@ -892,15 +893,20 @@ pub trait WalletOffline: WalletBackup {
                 .expect("invalid global state data");
         }
 
-        let link_right_utxo =
-            self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
-        issue_utxos
-            .entry(link_right_utxo.idx)
-            .or_default()
-            .push(Assignment::LinkRight);
-        builder = builder
-            .add_rights_raw(OS_LINK, self.get_builder_seal(link_right_utxo.clone()))
-            .expect("invalid link right state");
+        let link_right_outpoint = if create_link_right {
+            let link_right_utxo =
+                self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
+            issue_utxos
+                .entry(link_right_utxo.idx)
+                .or_default()
+                .push(Assignment::LinkRight);
+            builder = builder
+                .add_rights_raw(OS_LINK, self.get_builder_seal(link_right_utxo.clone()))
+                .expect("invalid link right state");
+            Some(link_right_utxo.outpoint())
+        } else {
+            None
+        };
 
         debug!(self.logger(), "Issuing: {issue_utxos:?}");
 
@@ -929,7 +935,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
-            link_right_outpoint: Some(link_right_utxo.outpoint()),
+            link_right_outpoint,
         })
     }
 

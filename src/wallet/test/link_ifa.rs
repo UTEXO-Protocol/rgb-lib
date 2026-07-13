@@ -2,7 +2,18 @@ use super::*;
 
 #[cfg(feature = "electrum")]
 fn issue_link_ifa_assets(party: &mut SinglesigParty) -> (AssetIFA, AssetIFA) {
-    let parent = party.issue_asset_ifa(Some(&[AMOUNT]), Some(&[AMOUNT]), None);
+    let parent = party
+        .wallet
+        .issue_asset_ifa(
+            TICKER.to_string(),
+            NAME.to_string(),
+            PRECISION,
+            vec![AMOUNT],
+            vec![AMOUNT],
+            None,
+            Some(IfaIssuanceType::LinkRightOnly),
+        )
+        .expect("parent issuance should succeed");
     party.create_utxos_default();
     let child = party
         .wallet
@@ -13,7 +24,10 @@ fn issue_link_ifa_assets(party: &mut SinglesigParty) -> (AssetIFA, AssetIFA) {
             vec![AMOUNT],
             vec![AMOUNT],
             None,
-            Some(parent.asset_id.clone()),
+            Some(IfaIssuanceType::LinkedFromParent {
+                contract_id: parent.asset_id.clone(),
+                request_link_right: false,
+            }),
         )
         .expect("child issuance should succeed");
     (parent, child)

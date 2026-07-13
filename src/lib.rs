@@ -90,7 +90,10 @@ pub use crate::{
     error::Error,
     keys::{generate_keys, restore_keys},
     utils::{BitcoinNetwork, block_on},
-    wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
+    wallet::{
+        IfaIssuanceType, RecipientType, TransactionType, TransferKind, Wallet,
+        backup::restore_backup,
+    },
 };
 #[cfg(feature = "mpc")]
 pub use mpc::MpcWalletProvider;
