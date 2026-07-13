@@ -7,7 +7,6 @@ fn success() {
     initialize();
 
     let mut party = get_funded_party!();
-    party.create_utxos(false, Some(1), None, FEE_RATE, None);
 
     let before_timestamp = now().unix_timestamp();
     let bak_info_before = party.db_backup_info();
@@ -91,8 +90,8 @@ fn noissue_someinflation() {
             .iter()
             .any(|a| a.asset_id == Some(asset.asset_id.clone()))
     });
-    assert_eq!(unspents_asset.clone().count(), 2);
-    let unspents_inflation = unspents_asset.clone().filter(|u| {
+    assert_eq!(unspents_asset.clone().count(), 1);
+    let unspents_inflation = unspents_asset.filter(|u| {
         u.rgb_allocations
             .iter()
             .all(|a| a.assignment == Assignment::InflationRight(AMOUNT))
@@ -105,12 +104,6 @@ fn noissue_someinflation() {
         })
         .flat_map(|u| u.rgb_allocations.clone());
     assert_eq!(allocations_inflation.count(), 1);
-    let unspents_link = unspents_asset.filter(|u| {
-        u.rgb_allocations
-            .iter()
-            .all(|a| a.assignment == Assignment::LinkRight)
-    });
-    assert_eq!(unspents_link.count(), 1);
 }
 
 #[cfg(feature = "electrum")]
@@ -176,7 +169,6 @@ fn no_issue_on_pending_send() {
 
     // prepare UTXOs
     party.create_utxos(true, Some(2), Some(5000), FEE_RATE, None);
-    party.create_utxos(false, Some(1), None, FEE_RATE, None);
 
     // issue 1st asset
     let asset_1 = party.issue_asset_ifa(None, None, None);
@@ -240,8 +232,8 @@ fn no_issue_on_pending_send() {
     let result = party.issue_asset_ifa_result(Some(&[AMOUNT * 2]), Some(&[]), None);
     assert_matches!(result, Err(Error::InsufficientAllocationSlots));
 
-    // create 2 more UTXOs + issue 2nd asset
-    party.create_utxos(false, Some(2), None, FEE_RATE, None);
+    // create 1 more UTXO + issue 2nd asset
+    party.create_utxos(false, Some(1), None, FEE_RATE, None);
     let asset_2 = party.issue_asset_ifa(Some(&[AMOUNT * 2]), Some(&[]), None);
     party.show_unspent_colorings("after 2nd issuance");
     // get 2nd issuance UTXO
@@ -265,8 +257,7 @@ fn no_issue_on_pending_send() {
     rcv_party.wait_for_refresh(None);
     party.wait_for_refresh(Some(&asset_1.asset_id));
 
-    // create 2 more UTXOs + issue 3rd asset
-    party.create_utxos(false, Some(2), None, FEE_RATE, None);
+    // issue 3rd asset
     let asset_3 = party.issue_asset_ifa(Some(&[AMOUNT * 3]), Some(&[]), None);
     party.show_unspent_colorings("after 3rd issuance");
     // get 3rd issuance UTXO
@@ -284,6 +275,10 @@ fn no_issue_on_pending_send() {
     assert_ne!(
         unspent_3_fungible.utxo.outpoint,
         unspent_1_fungible.utxo.outpoint
+    );
+    assert_eq!(
+        unspent_3_fungible.utxo.outpoint,
+        unspent_2_fungible.utxo.outpoint
     );
 }
 

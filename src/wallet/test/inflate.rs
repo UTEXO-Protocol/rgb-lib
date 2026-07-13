@@ -9,7 +9,6 @@ fn success() {
     // wallets
     let mut party = get_funded_party!();
     let mut rcv_party = get_funded_party!();
-    party.create_utxos(false, Some(1), None, FEE_RATE, None);
 
     // issue
     let issue_amounts = [AMOUNT, AMOUNT];
@@ -30,7 +29,7 @@ fn success() {
         .into_iter()
         .filter(|u| u.utxo.colorable)
         .collect();
-    assert_eq!(unspents.len(), 6);
+    assert_eq!(unspents.len(), 5);
     assert!(unspents.iter().all(|u| u.rgb_allocations.len() == 1));
 
     // inflate
