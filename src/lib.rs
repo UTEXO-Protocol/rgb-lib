@@ -194,7 +194,10 @@ use rgbstd::{
     Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, Opout,
     OutputSeal, OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition, TypeSystem,
     containers::{BuilderSeal, Kit, ValidContract, ValidKit, ValidTransfer},
-    contract::{AllocatedState, ContractBuilder, IssuerWrapper, SchemaWrapper, TransitionBuilder},
+    contract::{
+        AllocatedState, ContractBuilder, IssuerWrapper, LinkableSchemaWrapper, SchemaWrapper,
+        TransitionBuilder,
+    },
     info::SchemaInfo,
     invoice::{InvoiceState, Pay2Vout},
     persistence::{MemContract, MemContractState, StashReadProvider, Stock, fs::FsBinStore},

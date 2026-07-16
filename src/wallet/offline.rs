@@ -1346,6 +1346,12 @@ pub trait WalletOffline: WalletBackup {
     fn get_asset_metadata_impl(&self, txn: &DbTxn, asset_id: String) -> Result<Metadata, Error> {
         let asset = txn.check_asset_exists(asset_id.clone())?;
 
+        let (linked_from_asset_id, linked_to_asset_id) = if asset.schema == AssetSchema::Ifa {
+            self.asset_link_ifa_data(&asset_id)?
+        } else {
+            (None, None)
+        };
+
         let initial_supply = asset.initial_supply.parse::<u64>().unwrap();
         let max_supply = if let Some(max_supply) = asset.max_supply {
             max_supply.parse::<u64>().unwrap()
@@ -1404,6 +1410,8 @@ pub trait WalletOffline: WalletBackup {
             details: asset.details,
             token,
             reject_list_url: asset.reject_list_url,
+            linked_from_asset_id,
+            linked_to_asset_id,
         })
     }
 
@@ -1860,7 +1868,7 @@ pub trait WalletOffline: WalletBackup {
                             .iter()
                             .filter(|a| a.schema == schema)
                             .map(|a| {
-                                AssetIFA::get_asset_details(
+                                let mut asset = AssetIFA::get_asset_details(
                                     txn,
                                     self,
                                     a,
@@ -1870,7 +1878,12 @@ pub trait WalletOffline: WalletBackup {
                                     colorings.clone(),
                                     txos.clone(),
                                     medias.clone(),
-                                )
+                                )?;
+                                let (linked_from_asset_id, linked_to_asset_id) =
+                                    self.asset_link_ifa_data(&asset.asset_id)?;
+                                asset.linked_from_asset_id = linked_from_asset_id;
+                                asset.linked_to_asset_id = linked_to_asset_id;
+                                Ok(asset)
                             })
                             .collect::<Result<Vec<AssetIFA>, Error>>()?,
                     );
@@ -2739,6 +2752,30 @@ pub trait WalletOffline: WalletBackup {
             consignment.save_file(&consignment_path)?;
         }
         Ok(())
+    }
+
+    fn asset_link_ifa_data(
+        &self,
+        asset_id: &str,
+    ) -> Result<(Option<String>, Option<String>), Error> {
+        let contract_id = ContractId::from_str(asset_id).map_err(|e| Error::Internal {
+            details: e.to_string(),
+        })?;
+        let runtime = self.rgb_runtime()?;
+        let contract = runtime.contract_wrapper::<InflatableFungibleAsset>(contract_id)?;
+        let linked_from_asset_id = contract
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        let linked_to_asset_id = contract
+            .link_to()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        Ok((linked_from_asset_id, linked_to_asset_id))
     }
 }
 

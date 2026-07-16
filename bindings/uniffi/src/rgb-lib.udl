@@ -229,6 +229,8 @@ dictionary AssetIFA {
   Media? media;
   string? reject_list_url;
   Outpoint? link_right_outpoint;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
 };
 
 [Remote]
@@ -434,6 +436,8 @@ dictionary Metadata {
   string? details;
   Token? token;
   string? reject_list_url;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
 };
 
 [Remote]

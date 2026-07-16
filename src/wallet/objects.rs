@@ -385,6 +385,12 @@ pub struct Metadata {
     pub token: Option<Token>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Parent asset ID declared by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
 }
 
 /// A Non-Inflatable Asset.
@@ -636,6 +642,12 @@ pub struct AssetIFA {
     /// Link-right outpoint created at issuance
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_right_outpoint: Option<Outpoint>,
+    /// Parent asset ID declared by this contract at genesis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked to this contract by the link_ifa transition
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
 }
 
 impl AssetIFA {
@@ -692,6 +704,8 @@ impl AssetIFA {
             media,
             reject_list_url: asset.reject_list_url.clone(),
             link_right_outpoint: None,
+            linked_from_asset_id: None,
+            linked_to_asset_id: None,
         })
     }
 }
@@ -772,7 +786,20 @@ impl IssuedAssetDetails for AssetIFA {
     ) -> Result<Self, Error> {
         let mut asset_details =
             Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)?;
+        let contract = IfaWrapper::with(issue_data.valid_contract.contract_data());
         asset_details.link_right_outpoint = issue_data.link_right_outpoint.clone();
+        asset_details.linked_from_asset_id = contract
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        asset_details.linked_to_asset_id = contract
+            .link_to()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
         Ok(asset_details)
     }
 }

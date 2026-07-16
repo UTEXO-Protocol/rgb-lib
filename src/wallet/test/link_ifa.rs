@@ -61,6 +61,21 @@ fn success() {
     let mut party = get_funded_party!();
     let (parent, child) = issue_link_ifa_assets(&mut party);
 
+    assert_eq!(parent.linked_from_asset_id, None);
+    assert_eq!(parent.linked_to_asset_id, None);
+    assert_eq!(child.linked_from_asset_id, Some(parent.asset_id.clone()));
+    assert_eq!(child.linked_to_asset_id, None);
+
+    let parent_metadata = party.get_asset_metadata(&parent.asset_id);
+    let child_metadata = party.get_asset_metadata(&child.asset_id);
+    assert_eq!(parent_metadata.linked_from_asset_id, None);
+    assert_eq!(parent_metadata.linked_to_asset_id, None);
+    assert_eq!(
+        child_metadata.linked_from_asset_id,
+        Some(parent.asset_id.clone())
+    );
+    assert_eq!(child_metadata.linked_to_asset_id, None);
+
     let result = party
         .wallet
         .link_ifa(
@@ -77,6 +92,42 @@ fn success() {
         .expect("link should succeed");
 
     assert!(!result.txid.is_empty());
+
+    let parent_metadata = party.get_asset_metadata(&parent.asset_id);
+    let child_metadata = party.get_asset_metadata(&child.asset_id);
+    assert_eq!(parent_metadata.linked_from_asset_id, None);
+    assert_eq!(
+        parent_metadata.linked_to_asset_id,
+        Some(child.asset_id.clone())
+    );
+    assert_eq!(
+        child_metadata.linked_from_asset_id,
+        Some(parent.asset_id.clone())
+    );
+    assert_eq!(child_metadata.linked_to_asset_id, None);
+
+    let ifa_assets = party
+        .wallet
+        .list_assets(vec![AssetSchema::Ifa])
+        .expect("IFA assets should be listed")
+        .ifa
+        .expect("IFA assets should be present");
+    let listed_parent = ifa_assets
+        .iter()
+        .find(|asset| asset.asset_id == parent.asset_id)
+        .expect("parent asset should be listed");
+    let listed_child = ifa_assets
+        .iter()
+        .find(|asset| asset.asset_id == child.asset_id)
+        .expect("child asset should be listed");
+    assert_eq!(
+        listed_parent.linked_to_asset_id,
+        Some(child.asset_id.clone())
+    );
+    assert_eq!(
+        listed_child.linked_from_asset_id,
+        Some(parent.asset_id.clone())
+    );
 }
 
 #[cfg(feature = "electrum")]
