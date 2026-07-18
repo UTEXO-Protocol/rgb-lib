@@ -528,6 +528,7 @@ impl Wallet {
             expiration_timestamp.map(|t| t as i64),
             transport_endpoints,
             RecipientType::Blind,
+            None,
         )?;
         let batch_transfer_idx =
             self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
@@ -587,6 +588,7 @@ impl Wallet {
             expiration_timestamp.map(|t| t as i64),
             transport_endpoints,
             RecipientType::Witness,
+            None,
         )?;
         let batch_transfer_idx =
             self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
@@ -594,6 +596,51 @@ impl Wallet {
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Witness receive completed");
+        Ok(ReceiveData {
+            invoice: receive_data_internal.invoice_string,
+            recipient_id: receive_data_internal.recipient_id,
+            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            batch_transfer_idx,
+        })
+    }
+
+    /// Register an incoming witness transfer to a fixed Bitcoin `script_pubkey`.
+    ///
+    /// This mirrors [`witness_receive`](Wallet::witness_receive) but uses an external script
+    /// (e.g. a P2TR HTLC output) instead of generating a new wallet address. The script is stored
+    /// as a pending witness script so sync can attach incoming RGB transfers once the funding tx
+    /// confirms.
+    pub fn script_witness_receive(
+        &mut self,
+        script_pubkey: ScriptBuf,
+        asset_id: Option<String>,
+        assignment: Assignment,
+        expiration_timestamp: Option<u64>,
+        transport_endpoints: Vec<String>,
+        min_confirmations: u8,
+    ) -> Result<ReceiveData, Error> {
+        info!(
+            self.logger(),
+            "Receiving via external witness script for asset '{:?}' with expiration '{:?}'...",
+            asset_id,
+            expiration_timestamp,
+        );
+        let txn = self.database().begin_transaction()?;
+        let receive_data_internal = self.create_receive_data(
+            &txn,
+            asset_id,
+            assignment,
+            expiration_timestamp.map(|t| t as i64),
+            transport_endpoints,
+            RecipientType::Witness,
+            Some(script_pubkey),
+        )?;
+        let batch_transfer_idx =
+            self.store_receive_transfer(&txn, &receive_data_internal, min_confirmations)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Script witness receive completed");
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,

@@ -948,6 +948,7 @@ pub trait WalletOffline: WalletBackup {
         expiration_timestamp: Option<i64>,
         transport_endpoints: Vec<String>,
         recipient_type: RecipientType,
+        witness_script_override: Option<ScriptBuf>,
     ) -> Result<ReceiveDataInternal, Error> {
         let (beneficiary, recipient_type_full, blind_seal, script_pubkey) = match recipient_type {
             RecipientType::Blind => {
@@ -971,7 +972,11 @@ pub trait WalletOffline: WalletBackup {
                 (beneficiary, recipient_type_full, Some(blind_seal), None)
             }
             RecipientType::Witness => {
-                let script_pubkey = self.get_new_address()?.script_pubkey();
+                let script_pubkey = if let Some(script_pubkey) = witness_script_override {
+                    script_pubkey
+                } else {
+                    self.get_new_address()?.script_pubkey()
+                };
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
                 // Per-invoice nonce is only needed when address reuse is on:
                 // without reuse, each witness_receive draws a fresh script, so

@@ -1,6 +1,9 @@
 #[macro_use]
 mod utils;
 
+#[cfg(feature = "electrum")]
+mod security_gaps;
+
 use super::*;
 use utils::*;
 

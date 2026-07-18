@@ -831,3 +831,41 @@ fn validate_consignment_offchain_file_not_found() {
 
     assert_matches!(result, Err(Error::Internal { details: _ }));
 }
+
+/// `inspect_rgb_transfer` gap: no PSBT cosigner / signature policy check.
+///
+/// A colored PSBT with matching fascia and stash is accepted even when it has
+/// not been signed. Update this test when signature validation is added.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn inspect_rgb_transfer_does_not_validate_psbt_signatures() {
+    initialize();
+
+    let mut party_send = get_funded_party!();
+    let mut recv_party = get_funded_party!();
+    let asset = party_send.issue_asset_nia(None);
+    let receive_data = recv_party.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(AMOUNT),
+            recipient_id: receive_data.recipient_id,
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let send_result = party_send.send_begin_result(&recipient_map).unwrap();
+
+    // PSBT deliberately left unsigned (no `sign_psbt` call).
+    let inspection = party_send
+        .wallet
+        .inspect_rgb_transfer(
+            send_result.psbt,
+            send_result.details.fascia_path,
+            send_result.details.entropy,
+        )
+        .unwrap();
+    assert_eq!(inspection.operations.len(), 1);
+    assert_eq!(inspection.operations[0].asset_id, asset.asset_id);
+}
