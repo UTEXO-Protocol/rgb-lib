@@ -201,8 +201,7 @@ fn mainnet_success_electrum() {
                 bitcoin_network,
                 database_type: DatabaseType::Sqlite,
                 max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                // IFA not supported on mainnet
-                supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+                supported_schemas: AssetSchema::VALUES.to_vec(),
                 reuse_addresses: false,
             },
             SinglesigKeys::from_keys(&keys, None),
@@ -233,8 +232,7 @@ fn mainnet_success_esplora() {
                 bitcoin_network,
                 database_type: DatabaseType::Sqlite,
                 max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                // IFA not supported on mainnet
-                supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
+                supported_schemas: AssetSchema::VALUES.to_vec(),
                 reuse_addresses: false,
             },
             SinglesigKeys::from_keys(&keys, None),
@@ -673,9 +671,5 @@ fn supported_schemas() {
         },
         SinglesigKeys::from_keys(&keys_mainnet, None),
     );
-    // IFA on mainnet not allowed
-    assert!(result.is_err());
-    if let Err(e) = result {
-        assert_matches!(e, Error::CannotUseIfaOnMainnet);
-    }
+    assert!(result.is_ok());
 }

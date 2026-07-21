@@ -632,11 +632,7 @@ impl MpcWallet {
             &logger,
         )?;
 
-        setup_rgb(
-            &wallet_dir,
-            wallet_data.supported_schemas.clone(),
-            bitcoin_network,
-        )?;
+        setup_rgb(&wallet_dir, wallet_data.supported_schemas.clone())?;
 
         let database = setup_db(&wallet_dir)?;
 

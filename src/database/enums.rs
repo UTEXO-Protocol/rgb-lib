@@ -15,7 +15,9 @@ pub enum AssetSchema {
     /// CFA schema
     #[sea_orm(num_value = 3)]
     Cfa = 3,
-    /// IFA schema
+    /// IFA schema.
+    ///
+    /// Not production-ready yet — use with caution.
     #[sea_orm(num_value = 4)]
     Ifa = 4,
 }
