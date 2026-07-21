@@ -175,6 +175,9 @@ required-features = ["electrum"]
 name = "phase_b_wallet"
 required-features = ["electrum"]
 
+[[example]]
+name = "create_multisig_2of4"
+
 [profile.reldebug]
 inherits = "release"
 debug = 1
