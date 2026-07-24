@@ -172,10 +172,6 @@ name = "local_wallet"
 required-features = ["electrum"]
 
 [[example]]
-name = "phase_b_wallet"
-required-features = ["electrum"]
-
-[[example]]
 name = "create_multisig_2of4"
 
 [profile.reldebug]
