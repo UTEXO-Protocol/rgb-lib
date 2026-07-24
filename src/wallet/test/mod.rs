@@ -374,7 +374,7 @@ mod rust_only;
 mod send;
 mod send_btc;
 mod sign_psbt;
-mod swaply_htlc_lock;
+// mod swaply_htlc_lock; // missing on this branch; unrelated to shared-cosigner test
 mod sync;
 #[cfg(feature = "vss")]
 mod vss;

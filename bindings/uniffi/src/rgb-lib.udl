@@ -267,6 +267,26 @@ dictionary ReceiveData {
   i32 batch_transfer_idx;
 };
 
+// FFI-friendly coloring inputs (HTLC claim / refund / special PSBT flows).
+// Maps to rgb_lib::wallet::rust_only::{AssetColoringInfo, ColoringInfo}.
+dictionary AssetColoringInfo {
+  string asset_id;
+  record<u32, u64> output_map;
+  u64? static_blinding;
+};
+
+dictionary ColoringInfo {
+  sequence<AssetColoringInfo> assets;
+  u64? static_blinding;
+  u64? nonce;
+};
+
+dictionary ColorPsbtResult {
+  string psbt;
+  // Raw `.rgbc` file bytes (RGB magic + strict encoding). Caller posts to proxy.
+  sequence<sequence<u8>> consignments;
+};
+
 interface RecipientInfo {
   [Throws=RgbLibError]
   constructor(string recipient_id);
@@ -894,6 +914,18 @@ interface Wallet {
   ReceiveData witness_receive(
     string? asset_id, Assignment assignment, u64? expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
+
+  // Register receive on a fixed script (e.g. HTLC P2TR), not a fresh wallet address.
+  [Throws=RgbLibError]
+  ReceiveData script_witness_receive(
+    string script_pubkey_hex, string? asset_id, Assignment assignment,
+    u64? expiration_timestamp, sequence<string> transport_endpoints,
+    u8 min_confirmations);
+
+  // Color PSBT and consume fascia; returns colored PSBT + consignment bytes.
+  // Posting to the RGB proxy is the caller's responsibility (HTTP multipart).
+  [Throws=RgbLibError]
+  ColorPsbtResult color_psbt_and_consume(string psbt, ColoringInfo coloring_info);
 
   [Throws=RgbLibError]
   string finalize_psbt(string signed_psbt);
