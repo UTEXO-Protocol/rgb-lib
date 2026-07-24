@@ -127,6 +127,17 @@ pub enum Error {
         details: String,
     },
 
+    /// The consistency check failed on a wallet that was just restored from a VSS backup,
+    /// meaning the backup itself is inconsistent or older than other wallet state
+    #[error(
+        "The restored VSS backup is inconsistent ({details}). The backup is likely stale or was \
+         taken mid-operation; restore a newer backup or recover from the original wallet data."
+    )]
+    RestoredBackupInconsistent {
+        /// Error details
+        details: String,
+    },
+
     /// An error was received from the indexer
     #[error("Indexer error: {details}")]
     Indexer {

@@ -13,6 +13,7 @@ use super::*;
 // - Disruptive scenarios that stop docker services are `#[serial]`.
 
 mod autobackup;
+mod backup_gaps;
 mod disruptive;
 mod migration;
 mod negative;
