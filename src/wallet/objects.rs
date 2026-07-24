@@ -391,6 +391,10 @@ pub struct Metadata {
     /// Child asset ID linked by IFA contract
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_to_asset_id: Option<String>,
+    /// Outpoint currently holding the asset's unspent link right; None when the right was never
+    /// created, was already consumed by a link or is not held by this wallet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unspent_link_right_outpoint: Option<Outpoint>,
 }
 
 /// A Non-Inflatable Asset.
@@ -639,9 +643,10 @@ pub struct AssetIFA {
     pub media: Option<Media>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
-    /// Link-right outpoint created at issuance
+    /// Outpoint where the link right was allocated at issuance (may have been moved or consumed
+    /// since; see `Metadata::unspent_link_right_outpoint` for the current location)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub link_right_outpoint: Option<Outpoint>,
+    pub issuance_link_right_outpoint: Option<Outpoint>,
     /// Parent asset ID declared by this contract at genesis
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_from_asset_id: Option<String>,
@@ -673,6 +678,12 @@ impl AssetIFA {
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
+        let issuance_link_right_outpoint = txn.get_issuance_link_right_outpoint(
+            &asset.id,
+            asset_transfers.clone(),
+            colorings.clone(),
+            txos.clone(),
+        )?;
         let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
@@ -703,7 +714,7 @@ impl AssetIFA {
             balance,
             media,
             reject_list_url: asset.reject_list_url.clone(),
-            link_right_outpoint: None,
+            issuance_link_right_outpoint,
             linked_from_asset_id: None,
             linked_to_asset_id: None,
         })
@@ -787,7 +798,7 @@ impl IssuedAssetDetails for AssetIFA {
         let mut asset_details =
             Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)?;
         let contract = IfaWrapper::with(issue_data.valid_contract.contract_data());
-        asset_details.link_right_outpoint = issue_data.link_right_outpoint.clone();
+        asset_details.issuance_link_right_outpoint = issue_data.link_right_outpoint.clone();
         asset_details.linked_from_asset_id = contract
             .link_from()
             .map_err(|e| Error::Internal {

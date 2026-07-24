@@ -87,6 +87,7 @@ interface RgbLibError {
   InvalidRecipientMap();
   InvalidRecipientNetwork();
   InvalidRejectListUrl(string details);
+  InvalidRightOutpoint(string details);
   InvalidTicker(string details);
   InvalidTransportEndpoint(string details);
   InvalidTransportEndpoints(string details);
@@ -228,7 +229,7 @@ dictionary AssetIFA {
   Balance balance;
   Media? media;
   string? reject_list_url;
-  Outpoint? link_right_outpoint;
+  Outpoint? issuance_link_right_outpoint;
   string? linked_from_asset_id;
   string? linked_to_asset_id;
 };
@@ -438,6 +439,7 @@ dictionary Metadata {
   string? reject_list_url;
   string? linked_from_asset_id;
   string? linked_to_asset_id;
+  Outpoint? unspent_link_right_outpoint;
 };
 
 [Remote]

@@ -373,6 +373,13 @@ pub enum Error {
         details: String,
     },
 
+    /// The provided outpoint does not hold a spendable right
+    #[error("Invalid right outpoint: {details}")]
+    InvalidRightOutpoint {
+        /// Error details
+        details: String,
+    },
+
     /// The provided asset ticker is invalid
     #[error("Invalid ticker: {details}")]
     InvalidTicker {

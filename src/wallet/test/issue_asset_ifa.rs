@@ -492,7 +492,7 @@ fn legacy_mode_has_no_link_right() {
         )
         .expect("legacy issuance should succeed");
 
-    assert!(asset.link_right_outpoint.is_none());
+    assert!(asset.issuance_link_right_outpoint.is_none());
 
     let unspents = party.list_unspents(false);
     let unspents_asset = unspents.iter().filter(|u| {

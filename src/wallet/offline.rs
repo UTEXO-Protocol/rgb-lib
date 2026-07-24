@@ -135,6 +135,11 @@ pub trait WalletOffline: WalletBackup {
             .filter(|u| !u.utxo.pending_witness)
             .filter(|u| !exclude_utxos.contains(&u.utxo.outpoint()))
             .filter(|u| {
+                u.rgb_allocations
+                    .iter()
+                    .all(|a| a.assignment != Assignment::LinkRight)
+            })
+            .filter(|u| {
                 (u.rgb_allocations.len() as u32) + u.pending_blinded <= max_allocs
                     && !u.rgb_allocations.iter().any(|a| {
                         !a.incoming && (a.status.initiated() || a.status.waiting_counterparty())
@@ -894,16 +899,19 @@ pub trait WalletOffline: WalletBackup {
         }
 
         let link_right_outpoint = if create_link_right {
-            let link_right_utxo =
+            let utxo_with_no_prior_rgb_allocations =
                 self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
             issue_utxos
-                .entry(link_right_utxo.idx)
+                .entry(utxo_with_no_prior_rgb_allocations.idx)
                 .or_default()
                 .push(Assignment::LinkRight);
             builder = builder
-                .add_rights_raw(OS_LINK, self.get_builder_seal(link_right_utxo.clone()))
+                .add_rights_raw(
+                    OS_LINK,
+                    self.get_builder_seal(utxo_with_no_prior_rgb_allocations.clone()),
+                )
                 .expect("invalid link right state");
-            Some(link_right_utxo.outpoint())
+            Some(utxo_with_no_prior_rgb_allocations.outpoint())
         } else {
             None
         };
@@ -1346,11 +1354,20 @@ pub trait WalletOffline: WalletBackup {
     fn get_asset_metadata_impl(&self, txn: &DbTxn, asset_id: String) -> Result<Metadata, Error> {
         let asset = txn.check_asset_exists(asset_id.clone())?;
 
-        let (linked_from_asset_id, linked_to_asset_id) = if asset.schema == AssetSchema::Ifa {
-            self.asset_link_ifa_data(&asset_id)?
-        } else {
-            (None, None)
-        };
+        let (linked_from_asset_id, linked_to_asset_id, unspent_link_right_outpoint) =
+            if asset.schema == AssetSchema::Ifa {
+                let (linked_from_asset_id, linked_to_asset_id) =
+                    self.asset_link_ifa_data(&asset_id)?;
+                let unspent_link_right_outpoint = txn.get_unspent_link_right_outpoint(&asset_id)?;
+
+                (
+                    linked_from_asset_id,
+                    linked_to_asset_id,
+                    unspent_link_right_outpoint,
+                )
+            } else {
+                (None, None, None)
+            };
 
         let initial_supply = asset.initial_supply.parse::<u64>().unwrap();
         let max_supply = if let Some(max_supply) = asset.max_supply {
@@ -1412,6 +1429,7 @@ pub trait WalletOffline: WalletBackup {
             reject_list_url: asset.reject_list_url,
             linked_from_asset_id,
             linked_to_asset_id,
+            unspent_link_right_outpoint,
         })
     }
 

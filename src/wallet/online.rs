@@ -2122,24 +2122,57 @@ pub trait WalletOnline: WalletOffline {
         change_utxo_option: &mut Option<DbTxo>,
         input_outpoints: &[Outpoint],
         unspents: &[LocalUnspent],
+        reserved_destination_outpoints: &mut HashSet<Outpoint>,
     ) -> Result<BlindSeal<TxPtr>, Error> {
         Ok(if let Some(btc_change) = btc_change {
             GraphSeal::new_random_vout(btc_change.vout)
         } else {
             if change_utxo_option.is_none() {
-                let change_utxo =
-                    self.get_utxo(txn, input_outpoints, Some(unspents), true, None)?;
+                let mut excluded_destination_outpoints = input_outpoints.to_vec();
+                excluded_destination_outpoints
+                    .extend(reserved_destination_outpoints.iter().cloned());
+                let change_utxo = self.get_utxo(
+                    txn,
+                    &excluded_destination_outpoints,
+                    Some(unspents),
+                    true,
+                    None,
+                )?;
                 debug!(
                     self.logger(),
                     "Change outpoint '{}'",
                     change_utxo.outpoint().to_string()
                 );
+                reserved_destination_outpoints.insert(change_utxo.outpoint());
                 *change_utxo_option = Some(change_utxo);
             }
             let change_utxo = change_utxo_option.clone().unwrap();
             let blind_seal = self.get_blind_seal(change_utxo).transmutate();
             GraphSeal::from(blind_seal)
         })
+    }
+
+    fn get_seal_for_utxo_without_prior_rgb_allocations(
+        &self,
+        txn: &DbTxn,
+        input_outpoints: &[Outpoint],
+        unspents: &[LocalUnspent],
+        reserved_destination_outpoints: &mut HashSet<Outpoint>,
+    ) -> Result<BlindSeal<TxPtr>, Error> {
+        let mut excluded_destination_outpoints = input_outpoints.to_vec();
+        excluded_destination_outpoints.extend(reserved_destination_outpoints.iter().cloned());
+        let utxo_with_no_prior_rgb_allocations = self.get_utxo(
+            txn,
+            &excluded_destination_outpoints,
+            Some(unspents),
+            false,
+            Some(0),
+        )?;
+        reserved_destination_outpoints.insert(utxo_with_no_prior_rgb_allocations.outpoint());
+        Ok(GraphSeal::from(
+            self.get_blind_seal(utxo_with_no_prior_rgb_allocations)
+                .transmutate(),
+        ))
     }
 
     fn check_dag(
@@ -2213,6 +2246,7 @@ pub trait WalletOnline: WalletOffline {
         let mut asset_beneficiaries = bmap![];
         let mut extra_state = HashMap::<ContractId, Vec<(OutPoint, Opout, AllocatedState)>>::new();
         let mut input_opouts: HashMap<ContractId, HashMap<Opout, AllocatedState>> = HashMap::new();
+        let mut reserved_destination_outpoints = HashSet::new();
         for (asset_id, transfer_info) in transfer_info_map.iter_mut() {
             let asset_utxos = transfer_info.asset_spend.input_outpoints.iter().cloned();
             let mut all_opout_state_vec = Vec::new();
@@ -2235,6 +2269,7 @@ pub trait WalletOnline: WalletOffline {
 
             let mut inputs_added = AssignmentsCollection::default();
             let mut uda_state = None;
+            let mut link_right_input_count = 0;
             let mut asset_transition_builder = runtime.transition_builder(
                 transfer_info.asset_info.contract_id,
                 transfer_info.main_transition.clone().type_name(),
@@ -2242,19 +2277,30 @@ pub trait WalletOnline: WalletOffline {
             for (outpoint, opout, state) in all_opout_state_vec {
                 let should_add_as_input = match transfer_info.main_transition {
                     TypeOfTransition::Link => {
-                        if opout.ty != OS_LINK || !matches!(state, AllocatedState::Void) {
-                            return Err(Error::InvalidAssignment);
+                        if opout.ty != OS_LINK
+                            || !matches!(state, AllocatedState::Void)
+                            || rejected.contains(&opout)
+                            || link_right_input_count != 0
+                        {
+                            return Err(Error::Internal {
+                                details: format!(
+                                    "unexpected opout state on link transition input {outpoint}"
+                                ),
+                            });
                         }
-                        if rejected.contains(&opout) {
-                            return Err(Error::InvalidAssignment);
-                        }
+                        link_right_input_count += 1;
                         true
                     }
                     _ => {
-                        if opout.ty == OS_LINK {
-                            return Err(Error::InvalidAssignment);
+                        if opout.ty == OS_LINK && !matches!(state, AllocatedState::Void) {
+                            return Err(Error::Internal {
+                                details: format!(
+                                    "link right with non-void state on input {outpoint}"
+                                ),
+                            });
                         }
-                        !rejected.contains(&opout)
+                        opout.ty != OS_LINK
+                            && !rejected.contains(&opout)
                             && inputs_added.opout_contributes(
                                 &opout,
                                 &state,
@@ -2284,6 +2330,14 @@ pub trait WalletOnline: WalletOffline {
                     .entry(transfer_info.asset_info.contract_id)
                     .or_default()
                     .insert(opout, state);
+            }
+
+            if transfer_info.main_transition == TypeOfTransition::Link
+                && link_right_input_count != 1
+            {
+                return Err(Error::Internal {
+                    details: s!("link transition built without exactly one link right input"),
+                });
             }
 
             let mut beneficiaries = vec![];
@@ -2338,6 +2392,7 @@ pub trait WalletOnline: WalletOffline {
                     &mut change_utxo_option,
                     &input_outpoints,
                     unspents.as_slice(),
+                    &mut reserved_destination_outpoints,
                 )?;
                 if change.fungible > 0 {
                     asset_transition_builder = asset_transition_builder.add_fungible_state(
@@ -2425,13 +2480,23 @@ pub trait WalletOnline: WalletOffline {
                 let transition_type = schema.default_transition_for_assignment(&opout.ty);
                 let mut extra_builder = runtime.transition_builder_raw(cid, transition_type)?;
                 let assignment = Assignment::from_opout_and_state(opout, &state);
-                let seal = self.get_change_seal(
-                    txn,
-                    &btc_change,
-                    &mut change_utxo_option,
-                    &input_outpoints,
-                    unspents.as_slice(),
-                )?;
+                let seal = if opout.ty == OS_LINK {
+                    self.get_seal_for_utxo_without_prior_rgb_allocations(
+                        txn,
+                        &input_outpoints,
+                        unspents.as_slice(),
+                        &mut reserved_destination_outpoints,
+                    )?
+                } else {
+                    self.get_change_seal(
+                        txn,
+                        &btc_change,
+                        &mut change_utxo_option,
+                        &input_outpoints,
+                        unspents.as_slice(),
+                        &mut reserved_destination_outpoints,
+                    )?
+                };
                 extra_builder = extra_builder
                     .add_input(opout, state.clone())?
                     .add_owned_state_raw(opout.ty, seal, state)?;
@@ -3894,29 +3959,75 @@ pub trait WalletOnline: WalletOffline {
             });
         }
 
+        let unspent_link_right_location_hint = || -> Result<String, Error> {
+            Ok(
+                match txn.get_unspent_link_right_outpoint(&parent_asset.id)? {
+                    Some(current_outpoint) => {
+                        format!("the unspent link right is currently at {current_outpoint}")
+                    }
+                    None => s!("no unspent link right is currently held for this asset"),
+                },
+            )
+        };
+
         let link_right_unspent = input_unspents
             .iter()
             .find(|u| u.utxo.outpoint() == link_right_outpoint)
             .cloned()
-            .ok_or(Error::InvalidAssignment)?;
+            .ok_or_else(|| {
+                unspent_link_right_location_hint().map_or_else(
+                    |e| e,
+                    |hint| Error::InvalidRightOutpoint {
+                        details: format!(
+                            "outpoint {link_right_outpoint} not found among spendable UTXOs; {hint}"
+                        ),
+                    },
+                )
+            })?;
+
+        let active_link_right_allocations: Vec<_> = link_right_unspent
+            .rgb_allocations
+            .iter()
+            .filter(|allocation| !allocation.status.failed())
+            .collect();
+        if active_link_right_allocations.len() != 1
+            || active_link_right_allocations[0].asset_id.as_deref()
+                != Some(parent_asset.id.as_str())
+            || active_link_right_allocations[0].assignment != Assignment::LinkRight
+        {
+            let hint = unspent_link_right_location_hint()?;
+            return Err(Error::InvalidRightOutpoint {
+                details: format!(
+                    "UTXO {link_right_outpoint} does not hold the parent's link right as its sole active allocation; {hint}"
+                ),
+            });
+        }
 
         let parent_link_right_assignments =
             runtime.contract_assignments_for(parent_contract_id, [link_right_outpoint.clone()])?;
         let mut found_link_right_assignment = false;
         for assignments_by_output in parent_link_right_assignments.values() {
             for (assigned_output, allocated_state) in assignments_by_output {
-                if assigned_output.ty != OS_LINK || !matches!(allocated_state, AllocatedState::Void)
-                {
-                    return Err(Error::InvalidAssignment);
+                if assigned_output.ty == OS_LINK {
+                    if !matches!(allocated_state, AllocatedState::Void)
+                        || found_link_right_assignment
+                    {
+                        return Err(Error::Internal {
+                            details: format!(
+                                "RGB stash reports a malformed or duplicated link right at {link_right_outpoint}"
+                            ),
+                        });
+                    }
+                    found_link_right_assignment = true;
                 }
-                if found_link_right_assignment {
-                    return Err(Error::InvalidAssignment);
-                }
-                found_link_right_assignment = true;
             }
         }
         if !found_link_right_assignment {
-            return Err(Error::InvalidAssignment);
+            return Err(Error::Internal {
+                details: format!(
+                    "wallet database reports a link right at {link_right_outpoint} but the RGB stash has none"
+                ),
+            });
         }
 
         let transfer_info =
@@ -3990,19 +4101,123 @@ pub trait WalletOnline: WalletOffline {
             self.get_transfer_end_data(signed_psbt)?;
 
         let mut runtime = self.rgb_runtime()?;
-        self.broadcast_and_update_rgb(txn, &mut runtime, signed_psbt, fascia)?;
 
-        for (parent_contract_id, transfer_info) in &info_contents.transfers {
-            if let Some(child_contract_id) = transfer_info.linked_to_contract_id {
+        {
+            for (parent_asset_id, asset_transfer_info) in &info_contents.transfers {
+                let Some(expected_child_contract_id) = asset_transfer_info.linked_to_contract_id
+                else {
+                    continue;
+                };
+
                 let parent_contract_id =
-                    ContractId::from_str(parent_contract_id).expect("valid contract ID");
-                runtime
-                    .validate_contracts_link::<InflatableFungibleAsset, InflatableFungibleAsset>(
-                        parent_contract_id,
-                        child_contract_id,
-                    )?;
+                    ContractId::from_str(parent_asset_id).expect("valid parent asset ID");
+
+                let child_contract = runtime
+                    .contract_wrapper::<InflatableFungibleAsset>(expected_child_contract_id)?;
+                let child_linked_from =
+                    child_contract
+                        .link_from()
+                        .map_err(|error| Error::InvalidContractLink {
+                            details: format!(
+                                "could not read linkedFromContract from child contract {}: {}",
+                                expected_child_contract_id, error
+                            ),
+                        })?;
+                if child_linked_from != Some(parent_contract_id) {
+                    return Err(Error::InvalidContractLink {
+                        details: format!(
+                            "child contract {} does not declare parent contract {} as linkedFromContract",
+                            expected_child_contract_id, parent_contract_id
+                        ),
+                    });
+                }
+
+                let parent_contract_bundle =
+                    fascia.bundles().get(&parent_contract_id).ok_or_else(|| {
+                        Error::InvalidContractLink {
+                            details: format!(
+                                "fascia does not contain a bundle for parent contract {}",
+                                parent_contract_id
+                            ),
+                        }
+                    })?;
+
+                let mut link_transition = None;
+                for known_transition in &parent_contract_bundle.known_transitions {
+                    if known_transition.transition.transition_type == TS_LINK {
+                        if link_transition.is_some() {
+                            return Err(Error::InvalidContractLink {
+                                details: format!(
+                                    "fascia contains multiple link transitions for parent contract {}",
+                                    parent_contract_id
+                                ),
+                            });
+                        }
+                        link_transition = Some(&known_transition.transition);
+                    }
+                }
+
+                let link_transition =
+                    link_transition.ok_or_else(|| Error::InvalidContractLink {
+                        details: format!(
+                            "fascia does not contain a link transition for parent contract {}",
+                            parent_contract_id
+                        ),
+                    })?;
+
+                let linked_to_contract_values = link_transition
+                    .globals()
+                    .get(&GS_LINKED_TO_CONTRACT)
+                    .ok_or_else(|| Error::InvalidContractLink {
+                        details: format!(
+                            "link transition for parent contract {} has no linkedToContract global",
+                            parent_contract_id
+                        ),
+                    })?;
+
+                let mut linked_to_contract_values = linked_to_contract_values.iter();
+                let linked_to_contract_value = linked_to_contract_values.next().ok_or_else(
+                    || Error::InvalidContractLink {
+                        details: format!(
+                            "link transition for parent contract {} has no linkedToContract value",
+                            parent_contract_id
+                        ),
+                    },
+                )?;
+
+                if linked_to_contract_values.next().is_some() {
+                    return Err(Error::InvalidContractLink {
+                        details: format!(
+                            "link transition for parent contract {} has multiple linkedToContract values",
+                            parent_contract_id
+                        ),
+                    });
+                }
+
+                let actual_child_contract_id = ContractId::copy_from_slice(
+                    linked_to_contract_value.as_slice(),
+                )
+                .map_err(|_| Error::InvalidContractLink {
+                    details: format!(
+                        "link transition for parent contract {} contains an invalid linkedToContract value",
+                        parent_contract_id
+                    ),
+                })?;
+
+                if actual_child_contract_id != expected_child_contract_id {
+                    return Err(Error::InvalidContractLink {
+                        details: format!(
+                            "fascia links parent contract {} to child contract {}, expected {}",
+                            parent_contract_id,
+                            actual_child_contract_id,
+                            expected_child_contract_id
+                        ),
+                    });
+                }
             }
         }
+
+        self.broadcast_and_update_rgb(txn, &mut runtime, signed_psbt, fascia)?;
 
         let batch_transfer_idx = self.update_or_save_transfers(
             txn,

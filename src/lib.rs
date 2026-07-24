@@ -226,7 +226,7 @@ use rgbstd::{
     validation::{OpoutsDagData, Validity, Warning},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
+use schemata::{CfaWrapper, GS_LINKED_TO_CONTRACT, NiaWrapper, UdaWrapper};
 use schemata::{
     CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
     OS_INFLATION, OS_LINK, TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
