@@ -565,6 +565,29 @@ pub trait WalletOnline: WalletOffline {
     fn check_consistency(&mut self, txn: &DbTxn, runtime: &RgbRuntime) -> Result<(), Error> {
         info!(self.logger(), "Doing a consistency check...");
 
+        let result = self.check_consistency_inner(txn, runtime);
+        #[cfg(feature = "vss")]
+        {
+            let marker = self
+                .wallet_dir()
+                .join(crate::wallet::vss::VSS_RESTORE_MARKER);
+            match &result {
+                // Attribute the failure to the just-restored backup.
+                Err(Error::Inconsistency { details }) if marker.exists() => {
+                    return Err(Error::RestoredBackupInconsistent {
+                        details: details.clone(),
+                    });
+                }
+                Ok(()) => {
+                    let _ = std::fs::remove_file(marker);
+                }
+                Err(_) => {}
+            }
+        }
+        result
+    }
+
+    fn check_consistency_inner(&mut self, txn: &DbTxn, runtime: &RgbRuntime) -> Result<(), Error> {
         self.wallet_specific_consistency_checks(txn)?;
 
         let asset_ids: Vec<String> = runtime

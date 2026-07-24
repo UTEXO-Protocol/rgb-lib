@@ -121,6 +121,7 @@ interface RgbLibError {
   RecipientIDDuplicated();
   RejectListService(string details);
   RestClientBuild(string details);
+  RestoredBackupInconsistent(string details);
   RgbInspection(string details);
   TooHighInflationAmounts();
   TooHighIssuanceAmounts();
@@ -849,6 +850,7 @@ dictionary VssBackupInfo {
   boolean backup_exists;
   i64? server_version;
   boolean backup_required;
+  string? last_auto_backup_error;
 };
 
 interface VssBackupClient {
