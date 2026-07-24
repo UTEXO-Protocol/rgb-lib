@@ -5,6 +5,7 @@
 use super::*;
 use rgbstd::Operation as _;
 use rgbstd::contract::LinkableSchemaWrapper;
+use schemata::GS_LINKED_TO_CONTRACT;
 
 const SCHEMAS_SUPPORTING_BURN: [database::enums::AssetSchema; 1] = [AssetSchema::Ifa];
 const SCHEMAS_SUPPORTING_INFLATION: [database::enums::AssetSchema; 1] = [AssetSchema::Ifa];
