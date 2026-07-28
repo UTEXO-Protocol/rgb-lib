@@ -460,6 +460,9 @@ impl Wallet {
     ///
     /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
     /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// `issuance_type` controls whether a link-right UTXO is created and whether the genesis
+    /// contract declares a parent contract.
     pub fn issue_asset_ifa(
         &self,
         ticker: String,
@@ -468,8 +471,11 @@ impl Wallet {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        issuance_type: Option<IfaIssuanceType>,
     ) -> Result<AssetIFA, Error> {
         info!(self.logger(), "Issuing IFA...");
+        let (create_link_right, linked_from_contract_id) =
+            issuance_type.unwrap_or_default().into_ifa_link_data()?;
         let txn = self.database().begin_transaction()?;
         let issue_data = self.create_ifa_contract(
             &txn,
@@ -479,6 +485,8 @@ impl Wallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            linked_from_contract_id,
+            create_link_right,
         )?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
         self.update_backup_info(&txn, false)?;
@@ -1284,6 +1292,44 @@ impl Wallet {
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         info!(self.logger(), "Burn (end) completed");
+        Ok(res)
+    }
+
+    /// Link parent contract to child contract by consuming the parent's link-right single-use seal.
+    pub fn link_ifa(
+        &mut self,
+        online: Online,
+        parent_contract_id: String,
+        child_contract_id: String,
+        link_right_outpoint: Outpoint,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<OperationResult, Error> {
+        info!(
+            self.logger(),
+            "Linking parent IFA contract ID '{}' to child contract ID '{}' using the link-right outpoint {}...",
+            parent_contract_id,
+            child_contract_id,
+            link_right_outpoint,
+        );
+        self.check_xprv()?;
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let mut begin_op_data = self.link_ifa_begin_impl(
+            &txn,
+            parent_contract_id,
+            child_contract_id,
+            link_right_outpoint,
+            fee_rate,
+            min_confirmations,
+            true,
+        )?;
+        self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
+        let res = self.link_ifa_end_impl(&txn, &begin_op_data.psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Contract link completed");
         Ok(res)
     }
 }

@@ -3,6 +3,8 @@
 //! This module defines some utility methods and structures.
 
 use super::*;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use rgbstd::contract::LinkableIssuerWrapper;
 
 const TIMESTAMP_FORMAT: &[time::format_description::BorrowedFormatItem] = time::macros::format_description!(
     "[year]-[month]-[day]T[hour repr:24]:[minute]:[second].[subsecond digits:3]+00"
@@ -969,6 +971,18 @@ impl RgbRuntime {
     ) -> Result<(), InternalError> {
         self.stock.upsert_witness(witness_id, witness_ord)?;
         Ok(())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn validate_contracts_link<Parent: LinkableIssuerWrapper, Child: LinkableIssuerWrapper>(
+        &self,
+        parent_contract_id: ContractId,
+        child_contract_id: ContractId,
+    ) -> Result<(), Error> {
+        self.stock
+            .validate_contracts_link::<Parent, Child>(parent_contract_id, child_contract_id)
+            .map_err(InternalError::from)
+            .map_err(Error::from)
     }
 }
 

@@ -93,6 +93,7 @@ pub enum Assignment {
     Fungible { amount: u64 },
     NonFungible,
     InflationRight { amount: u64 },
+    LinkRight,
     Any,
 }
 impl From<RgbLibAssignment> for Assignment {
@@ -101,6 +102,7 @@ impl From<RgbLibAssignment> for Assignment {
             RgbLibAssignment::Fungible(amount) => Assignment::Fungible { amount },
             RgbLibAssignment::NonFungible => Assignment::NonFungible,
             RgbLibAssignment::InflationRight(amount) => Assignment::InflationRight { amount },
+            RgbLibAssignment::LinkRight => Assignment::LinkRight,
             RgbLibAssignment::Any => Assignment::Any,
         }
     }
@@ -111,6 +113,7 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::Fungible { amount } => RgbLibAssignment::Fungible(amount),
             Assignment::NonFungible => RgbLibAssignment::NonFungible,
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
+            Assignment::LinkRight => RgbLibAssignment::LinkRight,
             Assignment::Any => RgbLibAssignment::Any,
         }
     }
@@ -1364,6 +1367,7 @@ impl Wallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            None,
         )
     }
 
@@ -1849,6 +1853,7 @@ impl MultisigWallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            None,
         )
     }
 

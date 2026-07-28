@@ -824,6 +824,49 @@ impl DbTxn {
         Ok(txos.into_iter().filter(|t| !t.spent).collect())
     }
 
+    pub(crate) fn get_issuance_link_right_outpoint(
+        &self,
+        asset_id: &str,
+        asset_transfers: Option<Vec<DbAssetTransfer>>,
+        colorings: Option<Vec<DbColoring>>,
+        txos: Option<Vec<DbTxo>>,
+    ) -> Result<Option<Outpoint>, Error> {
+        let asset_transfers = asset_transfers
+            .map(Ok)
+            .unwrap_or_else(|| self.iter_asset_transfers())?;
+        let colorings = colorings.map(Ok).unwrap_or_else(|| self.iter_colorings())?;
+        let txos = txos.map(Ok).unwrap_or_else(|| self.iter_txos())?;
+        let issuance_link_right_coloring = colorings.iter().find(|coloring| {
+            coloring.r#type == ColoringType::Issue
+                && coloring.assignment == Assignment::LinkRight
+                && asset_transfers.iter().any(|asset_transfer| {
+                    asset_transfer.idx == coloring.asset_transfer_idx
+                        && asset_transfer.asset_id.as_deref() == Some(asset_id)
+                })
+        });
+        Ok(issuance_link_right_coloring
+            .and_then(|coloring| txos.iter().find(|txo| txo.idx == coloring.txo_idx))
+            .map(|txo| txo.outpoint()))
+    }
+
+    pub(crate) fn get_unspent_link_right_outpoint(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<Outpoint>, Error> {
+        let unspent_txos = self.get_unspent_txos(vec![])?;
+        let unspents = self.get_rgb_allocations(unspent_txos, None, None, None, None)?;
+        Ok(unspents
+            .iter()
+            .find(|unspent| {
+                unspent.rgb_allocations.iter().any(|allocation| {
+                    allocation.asset_id.as_deref() == Some(asset_id)
+                        && allocation.assignment == Assignment::LinkRight
+                        && allocation.settled()
+                })
+            })
+            .map(|unspent| unspent.utxo.outpoint()))
+    }
+
     pub(crate) fn get_asset_balance(
         &self,
         asset_id: String,

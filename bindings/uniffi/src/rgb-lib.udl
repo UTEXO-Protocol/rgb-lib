@@ -64,6 +64,7 @@ interface RgbLibError {
   InvalidBitcoinNetwork(string network);
   InvalidColoringInfo(string details);
   InvalidConsignment();
+  InvalidContractLink(string details);
   InvalidCosigner(string details);
   InvalidDetails(string details);
   InvalidElectrum(string details);
@@ -86,6 +87,7 @@ interface RgbLibError {
   InvalidRecipientMap();
   InvalidRecipientNetwork();
   InvalidRejectListUrl(string details);
+  InvalidRightOutpoint(string details);
   InvalidTicker(string details);
   InvalidTransportEndpoint(string details);
   InvalidTransportEndpoints(string details);
@@ -227,6 +229,9 @@ dictionary AssetIFA {
   Balance balance;
   Media? media;
   string? reject_list_url;
+  Outpoint? issuance_link_right_outpoint;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
 };
 
 [Remote]
@@ -355,6 +360,7 @@ interface Assignment {
   Fungible(u64 amount);
   NonFungible();
   InflationRight(u64 amount);
+  LinkRight();
   Any();
 };
 
@@ -431,6 +437,9 @@ dictionary Metadata {
   string? details;
   Token? token;
   string? reject_list_url;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
+  Outpoint? unspent_link_right_outpoint;
 };
 
 [Remote]
@@ -517,6 +526,7 @@ enum TransferKind {
   "Send",
   "Inflation",
   "Burn",
+  "Link",
 };
 
 [Remote]
@@ -781,6 +791,7 @@ enum TypeOfTransition {
   "Inflate",
   "Transfer",
   "Burn",
+  "Link",
 };
 
 [Remote]

@@ -385,6 +385,16 @@ pub struct Metadata {
     pub token: Option<Token>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Parent asset ID declared by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
+    /// Outpoint currently holding the asset's unspent link right; None when the right was never
+    /// created, was already consumed by a link or is not held by this wallet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unspent_link_right_outpoint: Option<Outpoint>,
 }
 
 /// A Non-Inflatable Asset.
@@ -633,6 +643,16 @@ pub struct AssetIFA {
     pub media: Option<Media>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Outpoint where the link right was allocated at issuance (may have been moved or consumed
+    /// since; see `Metadata::unspent_link_right_outpoint` for the current location)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_link_right_outpoint: Option<Outpoint>,
+    /// Parent asset ID declared by this contract at genesis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked to this contract by the link_ifa transition
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
 }
 
 impl AssetIFA {
@@ -658,6 +678,12 @@ impl AssetIFA {
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
+        let issuance_link_right_outpoint = txn.get_issuance_link_right_outpoint(
+            &asset.id,
+            asset_transfers.clone(),
+            colorings.clone(),
+            txos.clone(),
+        )?;
         let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
@@ -688,6 +714,9 @@ impl AssetIFA {
             balance,
             media,
             reject_list_url: asset.reject_list_url.clone(),
+            issuance_link_right_outpoint,
+            linked_from_asset_id: None,
+            linked_to_asset_id: None,
         })
     }
 }
@@ -764,9 +793,25 @@ impl IssuedAssetDetails for AssetIFA {
         txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
-        _issue_data: &IssueData,
+        issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
+        let mut asset_details =
+            Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)?;
+        let contract = IfaWrapper::with(issue_data.valid_contract.contract_data());
+        asset_details.issuance_link_right_outpoint = issue_data.link_right_outpoint.clone();
+        asset_details.linked_from_asset_id = contract
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        asset_details.linked_to_asset_id = contract
+            .link_to()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        Ok(asset_details)
     }
 }
 
@@ -788,6 +833,45 @@ pub struct LocalAssetData {
     pub(crate) added_at: i64,
 }
 
+/// Controls how an IFA contract is issued.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub enum IfaIssuanceType {
+    /// Legacy IFA issuance without a link-right UTXO reservation or parent contract declaration.
+    #[default]
+    Legacy,
+    /// IFA issuance that reserves a link-right UTXO but does not declare a parent contract.
+    LinkRightOnly,
+    /// IFA issuance that declares the parent contract and optionally reserves a link-right UTXO.
+    LinkedFromParent {
+        /// Parent contract ID.
+        contract_id: String,
+        /// Whether issuance should create a link-right UTXO.
+        #[serde(default)]
+        request_link_right: bool,
+    },
+}
+
+impl IfaIssuanceType {
+    pub(crate) fn into_ifa_link_data(self) -> Result<(bool, Option<ContractId>), Error> {
+        Ok(match self {
+            Self::Legacy => (false, None),
+            Self::LinkRightOnly => (true, None),
+            Self::LinkedFromParent {
+                contract_id,
+                request_link_right,
+            } => (
+                request_link_right,
+                Some(
+                    ContractId::from_str(&contract_id).map_err(|e| Error::Internal {
+                        details: e.to_string(),
+                    })?,
+                ),
+            ),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IssueData {
     pub(crate) asset_data: LocalAssetData,
@@ -795,6 +879,7 @@ pub struct IssueData {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) contract_path: PathBuf,
     pub(crate) issue_utxos: HashMap<i32, Vec<Assignment>>,
+    pub(crate) link_right_outpoint: Option<Outpoint>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -897,6 +982,8 @@ pub enum TypeOfTransition {
     Transfer,
     /// Burn transition (burning existing tokens)
     Burn,
+    /// Link transition (linking the contract to a child contract)
+    Link,
 }
 
 impl TypeOfTransition {
@@ -906,6 +993,7 @@ impl TypeOfTransition {
             Self::Inflate => "inflate",
             Self::Transfer => "transfer",
             Self::Burn => "burn",
+            Self::Link => "link",
         }
     }
 }
@@ -1224,6 +1312,8 @@ pub enum TransferKind {
     Inflation,
     /// A burn transfer
     Burn,
+    /// A transfer that consumes the contract's link-right seal
+    Link,
 }
 
 #[derive(Debug, Clone)]
@@ -1918,6 +2008,8 @@ pub struct InfoAssetTransfer {
     pub main_transition: TypeOfTransition,
     pub beneficiaries_blinded: Vec<SecretSeal>,
     pub beneficiaries_witness: Vec<ExplicitSeal<RgbTxid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_contract_id: Option<ContractId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
