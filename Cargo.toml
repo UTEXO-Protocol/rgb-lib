@@ -120,7 +120,6 @@ once_cell = { version = "1.21.3", default-features = false }
 regex = { version = "1.12", default-features = false }
 serial_test = { version = "3.4.0", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-swaply-btc-htlc-rust = { path = "../swaply-btc-htlc-rust", features = ["rgb"] }
 secp256k1 = { version = "0.31.1", features = ["rand", "global-context"] }
 bitcoin = { version = "0.32.7", features = ["rand-std"] }
 
@@ -172,7 +171,15 @@ name = "local_wallet"
 required-features = ["electrum"]
 
 [[example]]
+name = "mainnet_issue_nia"
+required-features = ["electrum"]
+
+[[example]]
 name = "create_multisig_2of4"
+
+[[example]]
+name = "multisig_balance"
+required-features = ["electrum"]
 
 [profile.reldebug]
 inherits = "release"

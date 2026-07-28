@@ -561,15 +561,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitcoinconsensus"
-version = "0.106.0+26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e12cba9cce5043cdda968e07b9df6d05ec6b0b38aa27a9a40bb575cf3e521ae9"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3322,7 +3313,6 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-term",
- "swaply-btc-htlc-rust",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -4501,20 +4491,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "swaply-btc-htlc-rust"
-version = "0.1.0"
-dependencies = [
- "bitcoin",
- "bitcoinconsensus",
- "hex",
- "rand 0.9.4",
- "rgb-invoicing",
- "rgb-lib",
- "secp256k1 0.31.1",
- "thiserror 2.0.18",
-]
 
 [[package]]
 name = "syn"

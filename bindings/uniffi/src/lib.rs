@@ -19,9 +19,12 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 }
 
 use rgb_lib::{
-    AssetSchema, Assignment as RgbLibAssignment, CloseMethod, Error as RgbLibError, TransferStatus,
-    TransportType, WalletTransactionType,
-    bdk_wallet::bitcoin::secp256k1::SecretKey,
+    AssetSchema, Assignment as RgbLibAssignment, CloseMethod, ContractId, Error as RgbLibError,
+    FileContent, TransferStatus, TransportType, WalletTransactionType,
+    bdk_wallet::bitcoin::{
+        Psbt, ScriptBuf,
+        secp256k1::SecretKey,
+    },
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
@@ -45,6 +48,9 @@ use rgb_lib::{
         TransferTransportEndpoint, TransportEndpoint as RgbLibTransportEndpoint, TypeOfTransition,
         Unspent as RgbLibUnspent, UserRole, Utxo, Wallet as RgbLibWallet, WalletData,
         WalletDescriptors, WitnessData,
+        rust_only::{
+            AssetColoringInfo as RgbAssetColoringInfo, ColoringInfo as RgbColoringInfo,
+        },
         vss::{
             VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
             VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
@@ -115,6 +121,49 @@ impl From<Assignment> for RgbLibAssignment {
         }
     }
 }
+
+/// FFI coloring input for a single asset (see `rgb_lib::wallet::rust_only::AssetColoringInfo`).
+pub struct AssetColoringInfo {
+    pub asset_id: String,
+    pub output_map: HashMap<u32, u64>,
+    pub static_blinding: Option<u64>,
+}
+
+/// FFI coloring info for `color_psbt_and_consume`.
+pub struct ColoringInfo {
+    pub assets: Vec<AssetColoringInfo>,
+    pub static_blinding: Option<u64>,
+    pub nonce: Option<u64>,
+}
+
+/// Colored PSBT plus serialized consignment payloads (caller posts to proxy).
+pub struct ColorPsbtResult {
+    pub psbt: String,
+    pub consignments: Vec<Vec<u8>>,
+}
+
+fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, RgbLibError> {
+    let mut asset_info_map = HashMap::new();
+    for asset in coloring_info.assets {
+        let contract_id =
+            ContractId::from_str(&asset.asset_id).map_err(|e| RgbLibError::InvalidColoringInfo {
+                details: format!("invalid asset_id '{}': {e}", asset.asset_id),
+            })?;
+        asset_info_map.insert(
+            contract_id,
+            RgbAssetColoringInfo {
+                output_map: asset.output_map,
+                static_blinding: asset.static_blinding,
+            },
+        );
+    }
+    Ok(RgbColoringInfo {
+        asset_info_map,
+        static_blinding: coloring_info.static_blinding,
+        nonce: coloring_info.nonce,
+    })
+}
+
 pub struct InvoiceData {
     pub recipient_id: String,
     pub asset_schema: Option<AssetSchema>,
@@ -1072,6 +1121,56 @@ impl Wallet {
             transport_endpoints,
             min_confirmations,
         )
+    }
+
+    fn script_witness_receive(
+        &self,
+        script_pubkey_hex: String,
+        asset_id: Option<String>,
+        assignment: Assignment,
+        expiration_timestamp: Option<u64>,
+        transport_endpoints: Vec<String>,
+        min_confirmations: u8,
+    ) -> Result<ReceiveData, RgbLibError> {
+        let script_pubkey = ScriptBuf::from_hex(&script_pubkey_hex).map_err(|e| {
+            RgbLibError::InvalidRecipientData {
+                details: format!("invalid script_pubkey_hex: {e}"),
+            }
+        })?;
+        self._get_wallet().script_witness_receive(
+            script_pubkey,
+            asset_id,
+            assignment.into(),
+            expiration_timestamp,
+            transport_endpoints,
+            min_confirmations,
+        )
+    }
+
+    fn color_psbt_and_consume(
+        &self,
+        psbt: String,
+        coloring_info: ColoringInfo,
+    ) -> Result<ColorPsbtResult, RgbLibError> {
+        let mut psbt = Psbt::from_str(&psbt)?;
+        let coloring = to_rgb_coloring_info(coloring_info)?;
+        let transfers = self
+            ._get_wallet()
+            .color_psbt_and_consume(&mut psbt, coloring)?;
+
+        let mut consignments = Vec::with_capacity(transfers.len());
+        for transfer in &transfers {
+            let mut buf = Vec::new();
+            transfer.save(&mut buf).map_err(|e| RgbLibError::Internal {
+                details: format!("serialize consignment: {e}"),
+            })?;
+            consignments.push(buf);
+        }
+
+        Ok(ColorPsbtResult {
+            psbt: psbt.to_string(),
+            consignments,
+        })
     }
 
     fn finalize_psbt(&self, signed_psbt: String) -> Result<String, RgbLibError> {
