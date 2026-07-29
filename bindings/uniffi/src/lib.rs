@@ -25,10 +25,10 @@ use rgb_lib::{
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
-        Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
-        AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult, BurnDetails,
-        Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
-        InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
+        Address as RgbLibAddress, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA, AssetNIA,
+        AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult,
+        BurnDetails, Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo,
+        InflateBeginResult, InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
@@ -115,6 +115,20 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
             Assignment::LinkRight => RgbLibAssignment::LinkRight,
             Assignment::Any => RgbLibAssignment::Any,
+        }
+    }
+}
+pub enum AssetFilter {
+    Any,
+    NoAsset,
+    Id { asset_id: String },
+}
+impl From<AssetFilter> for RgbLibAssetFilter {
+    fn from(orig: AssetFilter) -> Self {
+        match orig {
+            AssetFilter::Any => RgbLibAssetFilter::Any,
+            AssetFilter::NoAsset => RgbLibAssetFilter::NoAsset,
+            AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
         }
     }
 }
@@ -1383,10 +1397,14 @@ impl Wallet {
         self._get_wallet().list_transactions(online, skip_sync)
     }
 
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, RgbLibError> {
+    fn list_transfers(
+        &self,
+        filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(asset_id)?
+            .list_transfers(filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())
@@ -1869,10 +1887,14 @@ impl MultisigWallet {
         self._get_wallet().list_transactions(online, skip_sync)
     }
 
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, RgbLibError> {
+    fn list_transfers(
+        &self,
+        filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(asset_id)?
+            .list_transfers(filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())

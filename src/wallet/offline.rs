@@ -2210,29 +2210,26 @@ pub trait WalletOffline: WalletBackup {
     fn list_transfers_impl(
         &self,
         txn: &DbTxn,
-        asset_id: Option<String>,
+        filter: AssetFilter,
+        txid: Option<String>,
     ) -> Result<Vec<Transfer>, Error> {
-        let db_data = txn.get_db_data(false)?;
-        let asset_transfer_ids: Vec<i32> = db_data
-            .asset_transfers
-            .iter()
-            .filter(|t| t.asset_id == asset_id)
-            .filter(|t| t.user_driven)
-            .map(|t| t.idx)
-            .collect();
-        self.build_transfers(txn, &db_data, &asset_transfer_ids)
-    }
-
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn list_transfers_by_txid_impl(&self, txn: &DbTxn, txid: &str) -> Result<Vec<Transfer>, Error> {
-        let Some(batch_transfer) = txn.get_batch_transfer_by_txid(txid)? else {
-            return Ok(vec![]);
+        let batch_transfer_idx = match txid {
+            Some(txid) => match txn.get_batch_transfer_by_txid(&txid)? {
+                Some(batch_transfer) => Some(batch_transfer.idx),
+                None => return Ok(vec![]),
+            },
+            None => None,
         };
         let db_data = txn.get_db_data(false)?;
         let asset_transfer_ids: Vec<i32> = db_data
             .asset_transfers
             .iter()
-            .filter(|t| t.batch_transfer_idx == batch_transfer.idx)
+            .filter(|t| match &filter {
+                AssetFilter::Any => true,
+                AssetFilter::NoAsset => t.asset_id.is_none(),
+                AssetFilter::Id(asset_id) => t.asset_id.as_ref() == Some(asset_id),
+            })
+            .filter(|t| batch_transfer_idx.is_none_or(|idx| t.batch_transfer_idx == idx))
             .filter(|t| t.user_driven)
             .map(|t| t.idx)
             .collect();
@@ -2883,32 +2880,23 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
 
     /// List the RGB [`Transfer`]s known to the wallet.
     ///
-    /// When an `asset_id` is not provided, return transfers that are not connected to a specific
-    /// asset.
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, Error> {
+    /// `filter` selects transfers by asset. When a `txid` is provided, restrict the result to the
+    /// transfers committed by the on-chain transaction with that ID; an unknown `txid` yields an
+    /// empty list.
+    fn list_transfers(
+        &self,
+        filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, Error> {
         info!(
             self.logger(),
-            "Listing transfers for asset '{:?}'...", asset_id
+            "Listing transfers for filter '{:?}' and txid '{:?}'...", filter, txid
         );
         let txn = self.database().begin_transaction()?;
-        if let Some(asset_id) = &asset_id {
+        if let AssetFilter::Id(asset_id) = &filter {
             txn.check_asset_exists(asset_id.clone())?;
         }
-        let transfers = self.list_transfers_impl(&txn, asset_id)?;
-        txn.commit()?;
-        info!(self.logger(), "List transfers completed");
-        Ok(transfers)
-    }
-
-    /// List the RGB [`Transfer`]s committed by the on-chain transaction with the given `txid`.
-    ///
-    /// Resolves the transaction to its batch transfer and returns all user-driven transfers it
-    /// carries, across every asset. An unknown `txid` yields an empty list.
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn list_transfers_by_txid(&self, txid: String) -> Result<Vec<Transfer>, Error> {
-        info!(self.logger(), "Listing transfers for txid '{}'...", txid);
-        let txn = self.database().begin_transaction()?;
-        let transfers = self.list_transfers_by_txid_impl(&txn, &txid)?;
+        let transfers = self.list_transfers_impl(&txn, filter, txid)?;
         txn.commit()?;
         info!(self.logger(), "List transfers completed");
         Ok(transfers)
