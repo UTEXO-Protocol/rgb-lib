@@ -1332,6 +1332,18 @@ pub struct TransferData {
     pub(crate) psbt_path: Option<String>,
 }
 
+/// An asset filter for listing transfers.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub enum AssetFilter {
+    /// Match transfers of any asset, including those not connected to one
+    Any,
+    /// Match only transfers not connected to a specific asset
+    NoAsset,
+    /// Match only transfers of the asset with the given ID
+    Id(String),
+}
+
 /// An RGB transfer.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
