@@ -112,7 +112,9 @@ pub(crate) fn setup_db<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbLibDatabase, 
         .min_connections(0)
         .connect_timeout(Duration::from_secs(8))
         .idle_timeout(Duration::from_secs(8))
-        .max_lifetime(Duration::from_secs(8));
+        .max_lifetime(Duration::from_secs(8))
+        // sqlx logs each statement, which is too verbose at the default info level
+        .sqlx_logging_level(log::LevelFilter::Debug);
     let db_cnn = block_on(Database::connect(opt));
     let connection = db_cnn?;
     block_on(Migrator::up(&connection, None))?;

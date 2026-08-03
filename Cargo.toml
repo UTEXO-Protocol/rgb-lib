@@ -38,6 +38,7 @@ chacha20poly1305 = { version = "0.10.1", default-features = false, features = [
 tokio = { version = "1", default-features = false, features = ["rt"] }
 generic-array = "=0.14.7"  # temporary pin while waiting for chacha20poly1305 update
 hex = { version = "0.4.3", default-features = false }
+log = { version = "0.4", default-features = false }
 rand = { version = "0.10.0", default-features = false, features = [
     "thread_rng",
 ] }
@@ -147,6 +148,8 @@ vss = ["vss-client", "hkdf", "dep:sha2"]
 mpc = []
 dfns = ["mpc", "dep:p256", "dep:ed25519-dalek", "dep:sha2"]
 camel_case = ["default"]
+# Disable the file-based log output: no log file is created, log records go to stdout instead
+no_file_log = []
 
 [[example]]
 name = "vss_example"
