@@ -164,11 +164,6 @@ required-features = ["dfns", "electrum"]
 name = "bdk_peer"
 required-features = ["electrum"]
 
-[[example]]
-name = "mainnet_issue_nia"
-required-features = ["electrum"]
-
-
 [profile.reldebug]
 inherits = "release"
 debug = 1
