@@ -167,15 +167,8 @@ name = "bdk_peer"
 required-features = ["electrum"]
 
 [[example]]
-name = "local_wallet"
-required-features = ["electrum"]
-
-[[example]]
 name = "mainnet_issue_nia"
 required-features = ["electrum"]
-
-[[example]]
-name = "create_multisig_2of4"
 
 [[example]]
 name = "multisig_balance"
