@@ -25,6 +25,17 @@ pub struct ColoringInfo {
     pub nonce: Option<u64>,
 }
 
+/// Result of importing an RGB contract without receiving asset allocations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportAssetContractResult {
+    /// Imported contract ID.
+    pub asset_id: String,
+    /// Whether the wallet already knew this contract before the call.
+    pub already_imported: bool,
+    /// Metadata derived from the validated contract.
+    pub metadata: Metadata,
+}
+
 /// Map of contract ID and list of its beneficiaries
 pub type AssetBeneficiariesMap = BTreeMap<ContractId, Vec<BuilderSeal<GraphSeal>>>;
 
@@ -241,6 +252,99 @@ pub fn validate_consignment(
 
 /// Rust-only APIs of the wallet.
 impl Wallet {
+    /// Export an RGB contract known to this wallet.
+    ///
+    /// The returned consignment contains contract identity and history, but no transfer to a new
+    /// owner. It can be distributed as public contract metadata and imported with
+    /// [`import_asset_contract`](Wallet::import_asset_contract).
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    pub fn export_asset_contract(&self, asset_id: String) -> Result<RgbContract, Error> {
+        let contract_id = ContractId::from_str(&asset_id).map_err(|error| Error::Internal {
+            details: format!("invalid asset ID: {error}"),
+        })?;
+        self.rgb_runtime()?
+            .export_contract(contract_id)
+            .map_err(Error::from)
+    }
+
+    /// Validate and import an RGB contract without importing any asset allocations.
+    ///
+    /// This registers the contract and its metadata in the wallet. It does not transfer ownership
+    /// and the imported asset therefore starts with a zero balance. Re-importing a known contract
+    /// is idempotent and returns the existing metadata.
+    ///
+    /// Contract attachments are not embedded in a contract consignment. Contracts declaring
+    /// attachments must be imported through a flow that supplies and verifies those files.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    pub fn import_asset_contract(
+        &self,
+        contract: RgbContract,
+    ) -> Result<ImportAssetContractResult, Error> {
+        let contract_id = contract.contract_id();
+        let asset_id = contract_id.to_string();
+
+        match self.get_asset_metadata(asset_id.clone()) {
+            Ok(metadata) => {
+                return Ok(ImportAssetContractResult {
+                    asset_id,
+                    already_imported: true,
+                    metadata,
+                });
+            }
+            Err(Error::AssetNotFound { .. }) => {}
+            Err(error) => return Err(error),
+        }
+
+        let asset_schema: AssetSchema = contract.schema_id().try_into()?;
+        self.check_schema_support(&asset_schema)?;
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem: asset_schema.types(),
+            ..Default::default()
+        };
+        let valid_contract = contract
+            .validate(&DumbResolver, &validation_config)
+            .map_err(|_| Error::InvalidConsignment)?;
+
+        if !self
+            .extract_attachments(&valid_contract, asset_schema)
+            .is_empty()
+        {
+            return Err(Error::InvalidAttachments {
+                details: "contract import requires the declared attachment files".to_string(),
+            });
+        }
+
+        let mut runtime = self.rgb_runtime()?;
+        if runtime.export_contract(contract_id).is_err() {
+            runtime.import_contract(valid_contract.clone(), &DumbResolver)?;
+        }
+
+        let txn = self.database().begin_transaction()?;
+        self.save_new_asset_internal(
+            &txn,
+            &runtime,
+            contract_id,
+            asset_schema,
+            valid_contract,
+            None,
+        )?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        drop(runtime);
+        self.trigger_auto_backup();
+
+        Ok(ImportAssetContractResult {
+            asset_id: asset_id.clone(),
+            already_imported: false,
+            metadata: self.get_asset_metadata(asset_id)?,
+        })
+    }
+
     /// Color a PSBT.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
