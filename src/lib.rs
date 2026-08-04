@@ -76,7 +76,10 @@ pub use bdk_wallet::bitcoin;
 pub use rgbinvoice::RgbTransport;
 pub use rgbstd::{
     ChainNet, ContractId, Txid as RgbTxid,
-    containers::{ConsignmentExt, Fascia, FileContent, PubWitness, Transfer as RgbTransfer},
+    containers::{
+        ConsignmentExt, Contract as RgbContract, Fascia, FileContent, PubWitness,
+        Transfer as RgbTransfer,
+    },
     persistence::UpdateRes,
     schema::SchemaId,
     txout::CloseMethod,

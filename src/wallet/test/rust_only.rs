@@ -297,6 +297,44 @@ fn save_new_asset_success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn import_asset_contract_success() {
+    initialize();
+
+    let mut issuer = get_funded_party!();
+    let recipient = get_empty_party!();
+    let asset = issuer.issue_asset_nia(None);
+    let contract = issuer
+        .wallet
+        .export_asset_contract(asset.asset_id.clone())
+        .unwrap();
+
+    let imported = recipient
+        .wallet
+        .import_asset_contract(contract.clone())
+        .unwrap();
+    assert_eq!(imported.asset_id, asset.asset_id);
+    assert!(!imported.already_imported);
+    assert_eq!(imported.metadata.asset_schema, AssetSchema::Nia);
+    assert_eq!(imported.metadata.name, NAME);
+    assert_eq!(imported.metadata.precision, PRECISION);
+    assert_eq!(imported.metadata.ticker.as_deref(), Some(TICKER));
+    assert_eq!(
+        recipient
+            .wallet
+            .get_asset_balance(asset.asset_id.clone())
+            .unwrap(),
+        Balance::default()
+    );
+
+    let repeated = recipient.wallet.import_asset_contract(contract).unwrap();
+    assert_eq!(repeated.asset_id, asset.asset_id);
+    assert!(repeated.already_imported);
+    assert_eq!(repeated.metadata, imported.metadata);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn color_psbt_uda() {
     initialize();
 
