@@ -1,7 +1,11 @@
-//! Rust-only functionality.
+//! Extra wallet helpers for special flows (color PSBT, post consignment, indexer checks).
 //!
-//! This module defines additional utility methods that are not exposed via FFI.
-
+//! Includes submarine / HTLC helpers (`color_psbt_for_outpoints*`,
+//! `fetch_consignment_by_recipient_id`, `accept_transfer_from_consignment`) that operate on
+//! escrow outpoints without treating them as wallet UTXOs.
+//!
+//! UniFFI exports [`Wallet::color_psbt_and_consume`] (consignment bytes). Proxy
+//! `post_consignment` stays rust-only / HTTP in the client — not part of the UniFFI surface.
 use super::*;
 use rgbstd::Operation as _;
 
@@ -250,6 +254,50 @@ impl Wallet {
         psbt: &mut Psbt,
         coloring_info: ColoringInfo,
     ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
+        let prev_outputs = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|txin| txin.previous_output)
+            .collect::<HashSet<OutPoint>>();
+        self.color_psbt_with_prevouts(psbt, coloring_info, prev_outputs)
+    }
+
+    /// Color a PSBT using a provided set of input outpoints.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    pub fn color_psbt_for_outpoints(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<OutPoint>,
+    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
+        let override_set: HashSet<OutPoint> = input_outpoints.into_iter().collect();
+        if override_set.is_empty() {
+            return Err(Error::InvalidColoringInfo {
+                details: s!("input_outpoints is empty"),
+            });
+        }
+        let psbt_inputs: HashSet<OutPoint> = psbt
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|txin| txin.previous_output)
+            .collect();
+        if !override_set.is_subset(&psbt_inputs) {
+            return Err(Error::InvalidColoringInfo {
+                details: s!("input_outpoints must be a subset of PSBT inputs"),
+            });
+        }
+        self.color_psbt_with_prevouts(psbt, coloring_info, override_set)
+    }
+
+    fn color_psbt_with_prevouts(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+        prev_outputs: HashSet<OutPoint>,
+    ) -> Result<(Fascia, AssetBeneficiariesMap), Error> {
         info!(self.logger(), "Coloring PSBT...");
         let mut transaction = match psbt.clone().extract_tx() {
             Ok(tx) => tx,
@@ -279,13 +327,6 @@ impl Wallet {
         }
 
         let runtime = self.rgb_runtime()?;
-
-        let prev_outputs = psbt
-            .unsigned_tx
-            .input
-            .iter()
-            .map(|txin| txin.previous_output)
-            .collect::<HashSet<OutPoint>>();
 
         let mut all_transitions: HashMap<ContractId, Transition> = HashMap::new();
         let mut asset_beneficiaries: AssetBeneficiariesMap = bmap![];
@@ -448,6 +489,51 @@ impl Wallet {
         Ok(transfers)
     }
 
+    /// Color a PSBT with a provided set of input outpoints and consume the resulting fascia.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    pub fn color_psbt_for_outpoints_and_consume(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<OutPoint>,
+    ) -> Result<Vec<RgbTransfer>, Error> {
+        info!(self.logger(), "Coloring PSBT and consuming...");
+        let (fascia, asset_beneficiaries) =
+            self.color_psbt_for_outpoints(psbt, coloring_info.clone(), input_outpoints)?;
+
+        let witness_txid = psbt.get_txid();
+
+        let mut runtime = self.rgb_runtime()?;
+        runtime.consume_fascia(fascia, None)?;
+
+        let mut transfers = vec![];
+        for (contract_id, beneficiaries) in asset_beneficiaries {
+            let mut beneficiaries_witness = vec![];
+            let mut beneficiaries_blinded = vec![];
+            for builder_seal in beneficiaries {
+                match builder_seal {
+                    BuilderSeal::Revealed(seal) => {
+                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
+                        beneficiaries_witness.push(explicit_seal);
+                    }
+                    BuilderSeal::Concealed(secret_seal) => {
+                        beneficiaries_blinded.push(secret_seal);
+                    }
+                };
+            }
+            transfers.push(runtime.transfer(
+                contract_id,
+                beneficiaries_witness,
+                beneficiaries_blinded,
+                Some(witness_txid),
+            )?);
+        }
+
+        info!(self.logger(), "Color PSBT and consume completed");
+        Ok(transfers)
+    }
+
     /// Create consignments for a PSBT created with the [`send_begin`](Wallet::send_begin) method.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -485,6 +571,32 @@ impl Wallet {
             .map_err(InternalError::from)?;
         let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
 
+        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding)
+    }
+
+    /// Accept an RGB transfer from a pre-fetched consignment.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn accept_transfer_from_consignment(
+        &mut self,
+        consignment: RgbTransfer,
+        txid: String,
+        vout: u32,
+        blinding: u64,
+    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
+        let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
+        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn accept_transfer_with_consignment(
+        &mut self,
+        consignment: RgbTransfer,
+        witness_id: RgbTxid,
+        vout: u32,
+        blinding: u64,
+    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
         let schema_id = consignment.schema_id().to_string();
         let asset_schema: AssetSchema = schema_id.try_into()?;
         self.check_schema_support(&asset_schema)?;
@@ -543,6 +655,69 @@ impl Wallet {
             consignment,
             received_rgb_assignments.into_values().collect(),
         ))
+    }
+
+    /// Inspect arbitrary outpoints for assignments of a given contract.
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn contract_assignments_for_outpoints(
+        &self,
+        contract_id: ContractId,
+        outpoints: Vec<Outpoint>,
+    ) -> Result<HashMap<Outpoint, Vec<Assignment>>, Error> {
+        let btc_outpoints: Vec<OutPoint> = outpoints
+            .iter()
+            .map(|o| {
+                let txid =
+                    crate::bitcoin::Txid::from_str(&o.txid).map_err(|_| Error::InvalidTxid)?;
+                Ok(OutPoint {
+                    txid,
+                    vout: o.vout,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+
+        let runtime = self.rgb_runtime()?;
+        let state = runtime.contract_assignments_for(contract_id, btc_outpoints)?;
+
+        let mut res: HashMap<Outpoint, Vec<Assignment>> = HashMap::new();
+        for (seal, opout_state_map) in state {
+            let outpoint = Outpoint {
+                txid: seal.txid.to_string(),
+                vout: seal.vout.into_u32(),
+            };
+            let mut assignments = Vec::with_capacity(opout_state_map.len());
+            for (opout, state) in opout_state_map {
+                assignments.push(Assignment::from_opout_and_state(opout, &state));
+            }
+            res.insert(outpoint, assignments);
+        }
+
+        Ok(res)
+    }
+
+    /// Fetch an RGB consignment by recipient_id (proxy lookup key).
+    ///
+    /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn fetch_consignment_by_recipient_id(
+        &self,
+        recipient_id: String,
+        consignment_endpoint: RgbTransport,
+    ) -> Result<(RgbTransfer, String, u32), Error> {
+        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
+        let consignment_res = self.get_consignment(&proxy_url, recipient_id)?;
+        let vout = consignment_res.vout.ok_or_else(|| Error::Internal {
+            details: s!("missing vout in consignment response"),
+        })?;
+
+        let consignment_bytes = general_purpose::STANDARD
+            .decode(consignment_res.consignment)
+            .map_err(InternalError::from)?;
+        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
+
+        Ok((consignment, consignment_res.txid, vout))
     }
 
     /// Consume an RGB fascia.

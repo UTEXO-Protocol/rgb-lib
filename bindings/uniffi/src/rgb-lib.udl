@@ -915,13 +915,6 @@ interface Wallet {
     string? asset_id, Assignment assignment, u64? expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
-  // Register receive on a fixed script (e.g. HTLC P2TR), not a fresh wallet address.
-  [Throws=RgbLibError]
-  ReceiveData script_witness_receive(
-    string script_pubkey_hex, string? asset_id, Assignment assignment,
-    u64? expiration_timestamp, sequence<string> transport_endpoints,
-    u8 min_confirmations);
-
   // Color PSBT and consume fascia; returns colored PSBT + consignment bytes.
   // Posting to the RGB proxy is the caller's responsibility (HTTP multipart).
   [Throws=RgbLibError]
