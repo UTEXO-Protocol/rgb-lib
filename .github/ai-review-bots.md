@@ -28,6 +28,7 @@ How it works:
 - Action: `anthropics/claude-code-action@v1`.
 - GitHub permissions required by this workflow: `pull-requests: write`, `issues: write`.
 - Auth mode: GitHub App + OIDC + `ANTHROPIC_API_KEY`.
+- Tooling: workflow grants `gh pr view/diff/comment` access so the review is posted back to the PR.
 
 Usage:
 
