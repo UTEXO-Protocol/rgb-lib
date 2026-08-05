@@ -3,13 +3,19 @@ name: AI Review - Claude
 on:
   pull_request:
     types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (for manual reruns)"
+        required: true
+        type: string
 
 jobs:
   claude-review:
-    if: contains(github.event.pull_request.labels.*.name, 'ai-review/claude') || contains(github.event.pull_request.labels.*.name, 'claude-review')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ai-review/claude') || contains(github.event.pull_request.labels.*.name, 'claude-review')
     runs-on: ubuntu-latest
     concurrency:
-      group: ai-review-claude-pr-${{ github.event.pull_request.number }}
+      group: ai-review-claude-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
       cancel-in-progress: true
     permissions:
       contents: read
@@ -30,7 +36,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
 
             Please review this pull request and provide feedback on:
             - Code quality and best practices

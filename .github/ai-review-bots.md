@@ -24,6 +24,7 @@ Workflow file: `.github/workflows/claude-code-review.yml`
 How it works:
 
 - Trigger: PR has `ai-review/claude` (or legacy `claude-review`) and receives new commits.
+- Optional manual trigger: `workflow_dispatch` with a PR number input.
 - Action: `anthropics/claude-code-action@v1`.
 - Secret required: `CLAUDE_CODE_OAUTH_TOKEN`.
 
@@ -31,6 +32,12 @@ Usage:
 
 1. Add label `ai-review/claude` to the PR.
 2. Push updates to the PR branch to trigger another pass.
+3. For forced reruns, open Actions -> `AI Review - Claude` -> `Run workflow` and set `pr_number`.
+
+Important first-run note:
+
+- If this workflow is introduced in the same PR, the action can be skipped due to workflow validation.
+- That is expected. Merge once to default branch, then it will run normally on later PRs.
 
 ## 2) Codex review via GitHub App
 
