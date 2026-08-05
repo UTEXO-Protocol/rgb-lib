@@ -140,12 +140,6 @@ pub enum ColoringType {
     Change = 4,
 }
 
-impl IntoActiveValue<ColoringType> for ColoringType {
-    fn into_active_value(self) -> ActiveValue<ColoringType> {
-        ActiveValue::Set(self)
-    }
-}
-
 /// The type of an RGB recipient.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum RecipientTypeFull {
@@ -456,6 +450,8 @@ impl Nullable for Assignment {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::IntoActiveValue;
+
     use super::*;
 
     #[test]
