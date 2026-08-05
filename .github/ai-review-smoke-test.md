@@ -7,3 +7,4 @@ Use this checklist to verify AI review workflows after setup:
 3. Confirm workflow `AI Review - Claude` starts.
 4. Verify Claude posts review feedback as a PR comment.
 5. Re-run once to ensure repeatable execution on synchronize events.
+6. Confirm no `is_error:true` appears in Action logs.
