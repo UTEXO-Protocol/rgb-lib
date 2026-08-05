@@ -7,7 +7,7 @@ providers:
     workflow: .github/workflows/claude-code-review.yml
     label: ai-review/claude
     status: enabled
-    secret: CLAUDE_CODE_OAUTH_TOKEN
+    secret: ANTHROPIC_API_KEY
 
   - id: codex
     mode: github_app
