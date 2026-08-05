@@ -1,0 +1,23 @@
+version: 1
+label_prefix: ai-review/
+
+providers:
+  - id: claude
+    mode: github_actions
+    workflow: .github/workflows/claude-code-review.yml
+    label: ai-review/claude
+    status: enabled
+    secret: CLAUDE_CODE_OAUTH_TOKEN
+
+  - id: codex
+    mode: github_app
+    app: chatgpt-codex-connector
+    trigger_comment: "@codex review"
+    status: enabled
+
+  - id: kimi
+    mode: github_actions
+    workflow: .github/workflows/kimi-code-review.yml
+    label: ai-review/kimi
+    status: planned
+    notes: "Fill when Kimi GitHub Action or API flow is chosen."
