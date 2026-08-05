@@ -9,3 +9,4 @@ Use this checklist to verify AI review workflows after setup:
 5. Re-run once to ensure repeatable execution on synchronize events.
 6. Confirm no `is_error:true` appears in Action logs.
 7. Confirm PR comment is posted by Claude without manual fallback.
+8. Confirm label-gated reruns continue to work after merge to `dev`.
