@@ -12,3 +12,4 @@ Use this checklist to verify AI review workflows after setup:
 8. Confirm label-gated reruns continue to work after merge to `dev`.
 9. Confirm full output logs are only needed for temporary debugging.
 10. Confirm `ANTHROPIC_API_KEY` auth succeeds without 401 errors.
+11. Confirm Claude posts review output directly into the PR discussion.
