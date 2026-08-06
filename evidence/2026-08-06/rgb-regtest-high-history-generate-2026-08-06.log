@@ -1,0 +1,904 @@
+   Compiling rgb-lib v0.3.0-beta.6 (/Users/hardik/Projects/rgb-protocol-perf-lab)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.85s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-fe0909cde6c6d98d)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/6b6e7833"
+waited 0.000021 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036738574
+mined on bitcoind in 0.559993 s
+waited 1.5886719 s to mine after grace on bitcoind
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/baacb73b"
+waited 0.000007 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036741191
+mined on bitcoind in 0.540705 s
+waited 1.587379 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000002 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036744130
+mined on bitcoind in 0.65919304 s
+waited 1.696954 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=1 txid=b50c177bf8c2c70d1b351a505fd6e7bf7af841a00a28601a862101df1767ef6e elapsed_ms=2223
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036746318
+mined on bitcoind in 0.436966 s
+waited 1.472976 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=2 txid=3287800427cf1929ccde913a149391d91d5bdca790fb0e2224454603d75a1d91 elapsed_ms=1965
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036748289
+mined on bitcoind in 0.556926 s
+waited 1.595772 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=3 txid=0589bf9ee35777969829335f958e7a9bf953f5ab9b83ab539c4d235d19e962cd elapsed_ms=2108
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036750410
+mined on bitcoind in 0.42984 s
+waited 1.466565 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=4 txid=89859533b7678f68f648b6e813a89157d42f02193e0708e2a719aa51665587fc elapsed_ms=2004
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036752439
+mined on bitcoind in 0.43174598 s
+waited 1.466333 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=5 txid=0098cfa72ba17c06c32932ee4448326398640cd991b6310c0dfd230cc46c0af0 elapsed_ms=2040
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036754503
+mined on bitcoind in 0.434988 s
+waited 1.470364 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=6 txid=e3d4e6ac2d2723a61ad9987beef12c5d10a8b2eecbd3063fee25d3eb12a5beff elapsed_ms=2075
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036756602
+mined on bitcoind in 0.40301502 s
+waited 1.442702 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=7 txid=5cb134ad09337c9e40c6a37c8456a80e9d85bede40eda5cc4e2d8bfb81176935 elapsed_ms=2079
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036758701
+mined on bitcoind in 0.334531 s
+waited 1.371354 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=8 txid=3ee2b6e359492b4d6e23f4b1c750006fb13022def314ba65620e61a6a298f2fa elapsed_ms=2097
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036760856
+mined on bitcoind in 0.33001798 s
+waited 1.365304 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=9 txid=c79d0c324a005fc84e6b38250c423eb77ded809c0dc9fb40b616e27caf82fdfa elapsed_ms=2118
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036762957
+mined on bitcoind in 0.66075003 s
+waited 1.688828 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=10 txid=8626983906e8ce51e1b703a6487cf9cfaf8c7d769420f2602e76dafb3d8efa5f elapsed_ms=2413
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036765424
+mined on bitcoind in 0.330492 s
+waited 1.371004 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=11 txid=19423d8057326e01de1ebaeccdb6c2987f7cbcfcb6cc04ed2b39147854216f72 elapsed_ms=2171
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036767610
+mined on bitcoind in 0.533571 s
+waited 1.578143 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=12 txid=d0978c07cd9108eb77d67b9f63524f96f2c4dc01597dc09020f7da196f5df1cd elapsed_ms=2404
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036770020
+mined on bitcoind in 0.674656 s
+waited 1.711332 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=13 txid=e2ad539ceeee6c7ca6c339c75ded328f6f7d76a9063ff5c7a35b16435490bde0 elapsed_ms=2558
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036772600
+mined on bitcoind in 0.562582 s
+waited 1.606624 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=14 txid=cddd260b2b40e811076ada773d3d171c0bb288b5903622eb41efd5a9eb0a658e elapsed_ms=2479
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036775104
+mined on bitcoind in 0.661185 s
+waited 1.697763 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=15 txid=efff3cb2a2a236c87d9dba16e06ea67307a23214902217045d795eafde485ca1 elapsed_ms=2619
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036777736
+mined on bitcoind in 0.546096 s
+waited 1.580765 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=16 txid=b534025d46b268107443da97752c3348e7f1675b95cce949f79e3372c028d729 elapsed_ms=2527
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036780311
+mined on bitcoind in 0.55412 s
+waited 1.5931859 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=17 txid=cea4e363bcebf667270602cdce18a1af25b23d71b6d859668fe171095c7f4c3c elapsed_ms=2594
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036782904
+mined on bitcoind in 0.43438098 s
+waited 1.473577 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=18 txid=655e7d40e3925a8247342a254453a1aa7c43da6cb5de86acc755d055905e07c4 elapsed_ms=2478
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036785421
+mined on bitcoind in 0.43736702 s
+waited 1.478547 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=19 txid=6aea8d82e59d67c8f7460dada3670492e030cd06b30b615fc3ff352519e57347 elapsed_ms=2570
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036788070
+mined on bitcoind in 0.340619 s
+waited 1.3736119 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=20 txid=3e57d2ef7cdd008694a8517bc4fe0aadf0cec66f70dd6fac691a4fc27431b6fd elapsed_ms=2537
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036790626
+mined on bitcoind in 0.338411 s
+waited 1.3763981 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=21 txid=509a3ab36c567f974562f10282d0c0a75314ddc1a6a1611353a6952d97f740ec elapsed_ms=2554
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036793123
+mined on bitcoind in 0.342154 s
+waited 1.374438 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=22 txid=17f681b997e3f391c941358acf01d2a03d211c126707aa65acfda04d47dc0e85 elapsed_ms=2518
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036795665
+mined on bitcoind in 0.427846 s
+waited 1.467351 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=23 txid=80736c32de6b5675c769c78d4a217ad1f42066ebf43d9e6ffbe22a0c25aac5df elapsed_ms=2640
+test wallet::test::high_history_perf::generate_high_history_fixture has been running for over 60 seconds
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036798317
+mined on bitcoind in 0.333761 s
+waited 1.355737 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=24 txid=c886c51c41761867737cd71e80b2f24238873d939d9ae98e77f82b1a42cb2a19 elapsed_ms=2548
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036800910
+mined on bitcoind in 0.3375 s
+waited 1.372574 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=25 txid=52c648310cd6d54f1a7e7930809a560e6e8deb4e0f1ac978e5021dbbbd4c94d8 elapsed_ms=2610
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036803619
+mined on bitcoind in 0.54516196 s
+waited 1.5893741 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=26 txid=baa9bd3f641873c2406d85a265e714433396a3841a0d319769e3b6bea16c1829 elapsed_ms=2936
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036806535
+mined on bitcoind in 0.675156 s
+waited 1.711967 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=27 txid=aa721e58103a60e9326b3548b413e98e5c78dc4b1e9c8484d838136a03df11fe elapsed_ms=3071
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036809601
+mined on bitcoind in 0.661158 s
+waited 1.6920891 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=28 txid=c733caf997d47e4588161a8fdbc3ba0a03201fb70a9c11c4445171a8b65c95a9 elapsed_ms=3050
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036812723
+mined on bitcoind in 0.552814 s
+waited 1.580376 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=29 txid=e08f4299772763c85ba12a7fdd250de5f24f9b1becdf9fb20ce8c743a62e1d2d elapsed_ms=3022
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036815708
+mined on bitcoind in 0.558176 s
+waited 1.599849 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=30 txid=f1d1358b1ea6c71d05adf02a0c0ca942b04b4e6442d4dcf91e7a0915645c1f66 elapsed_ms=3016
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036818744
+mined on bitcoind in 0.555483 s
+waited 1.585788 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=31 txid=adf5a33236fb44e729a32a9c24921eb31c5c66ca2f22fad639b1d2f73fe04dbb elapsed_ms=3056
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036821829
+mined on bitcoind in 0.532468 s
+waited 1.568445 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=32 txid=f5610b3f187609fdfbe1c0836fe2c00a837bbf4e4712577cebdd81a39ee09f94 elapsed_ms=3032
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036824889
+mined on bitcoind in 0.54924 s
+waited 1.5891299 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=33 txid=b11e11b68f9d7f7f9440ff663deb360a5cfff349066d624d0a039981776156ca elapsed_ms=3087
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036828004
+mined on bitcoind in 0.439238 s
+waited 1.472587 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=34 txid=3688dfe194487589943ecdb8eecdb8e9dd1337aa11dfae3ac864e03d91dbcfaa elapsed_ms=3025
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000006 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036831064
+mined on bitcoind in 0.43290898 s
+waited 1.468385 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=35 txid=d3f6759a8d57195b73495ce9babf45248308c6fae6b4c734bb496458ab94937f elapsed_ms=3090
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036834193
+mined on bitcoind in 0.419055 s
+waited 1.457383 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=36 txid=3656e3402be6b23b91bdaf84e430df5106e6459e863a507639ab36600e91f87e elapsed_ms=3116
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036837289
+mined on bitcoind in 0.298625 s
+waited 1.336952 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=37 txid=2372ba98744f95e7a6dc539184d6fcdade0cd92908ac8b0f74d2afb537d886f9 elapsed_ms=3009
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036840342
+mined on bitcoind in 0.331449 s
+waited 1.3755779 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=38 txid=7326bb3f8a1f6e3129335ae07d860f2bd8eb78edb57fc9ec9e74983a4b64a219 elapsed_ms=3085
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036843459
+mined on bitcoind in 0.336167 s
+waited 1.374944 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=39 txid=4f5441ee3a38a2f7a695423da7906bb9f971a8d28b07fee75d3317bc584e10ef elapsed_ms=3120
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036846553
+mined on bitcoind in 0.329999 s
+waited 1.368239 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=40 txid=d8b7e808a8cef9955fd59c628aba8355c157341cb8f01ce7e121c558063b571a elapsed_ms=3088
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036849653
+mined on bitcoind in 0.659366 s
+waited 1.686445 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=41 txid=f7d97fd939b1f27fbf90a3c9513a395425c3baafe13bc82d761a8d361d84ce4b elapsed_ms=3458
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036853153
+mined on bitcoind in 0.646125 s
+waited 1.686554 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=42 txid=6155c31f63ec415a643581429ea32a7a1e1bef380e853221a88095eb5c8c119f elapsed_ms=3504
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036856660
+mined on bitcoind in 0.32489902 s
+waited 1.356704 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=43 txid=59f976b4ad087a46b2003ec57c448eb33735df21234d4a065e2b63ede534105c elapsed_ms=3187
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036859915
+mined on bitcoind in 0.534863 s
+waited 1.5716331 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=44 txid=2db8e0b14110cfcf545b65e992aa670b300a0b80d86cc11ef17182603a637987 elapsed_ms=3482
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036863418
+mined on bitcoind in 0.550967 s
+waited 1.58844 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=45 txid=c0d5b9c2fb280f548ae642287a107b9cc75e63cc4e6a88936a56df548989cd16 elapsed_ms=3538
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036866961
+mined on bitcoind in 0.52181 s
+waited 1.562992 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=46 txid=eacba3fa3a61dfc511fe748247d97d3a4938f6f22575e615dfda49c6545cfcb7 elapsed_ms=3511
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036870503
+mined on bitcoind in 0.545344 s
+waited 1.570667 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=47 txid=cd84b6048c9c0b9db1c9524b0d7c7fa3ec4a87cd42196cec8df83cc2be45665b elapsed_ms=3616
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036874158
+mined on bitcoind in 0.432663 s
+waited 1.470212 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=48 txid=b1cff14a2c1d05e7c2bc47cd225710ac2a7824ea4fd302f0cad24310e37070a2 elapsed_ms=3517
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036877676
+mined on bitcoind in 0.409253 s
+waited 1.4520609 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=49 txid=85bcfe39ddf72d31250b882f20418da278d801a510b5a9b26eb8cdf2330aa263 elapsed_ms=3530
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036881253
+mined on bitcoind in 0.43626598 s
+waited 1.479861 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=50 txid=11121e37363ebb35917eeca3327b9f1487aa31725d65bf6ecc18e5d45489c726 elapsed_ms=3573
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036884827
+mined on bitcoind in 0.326912 s
+waited 1.366208 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=51 txid=fd2dfa1af80375a77c6ec65f1f3472b1fc4b742c5251067bb7400b39d349ad5f elapsed_ms=3484
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036888344
+mined on bitcoind in 0.420424 s
+waited 1.454303 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=52 txid=47515b526b6f7b54c2a519b5135c476474e1c4643ce2073db4e6f8184b1508dc elapsed_ms=3657
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036892027
+mined on bitcoind in 0.327241 s
+waited 1.366619 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=53 txid=58e3e887922048deec6a55c22d1b755d2b7339c75482cbee9a50dd5cd61491e0 elapsed_ms=3621
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036895680
+mined on bitcoind in 0.658618 s
+waited 1.6973081 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=54 txid=0157816e2c022bc34f77482a0e4cf3dd668f985d410168198500c590666a0c3d elapsed_ms=3995
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036899634
+mined on bitcoind in 0.303644 s
+waited 1.339599 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=55 txid=30888301911817bc74026fcdd5a2f4715da34ab0091d9c51150d17584ead9dc0 elapsed_ms=3639
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036903324
+mined on bitcoind in 0.531895 s
+waited 1.5642929 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=56 txid=08e902d2fe2c3db5ae18b4e8674def5e93ad16dff7198ccfb37f1ea759bb56e9 elapsed_ms=3832
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036907193
+mined on bitcoind in 0.334077 s
+waited 1.371762 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=57 txid=c3ca65be11cb09d80485a7e0324d0e0636fcac20d595ae4be5575852b8a495e7 elapsed_ms=3752
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036910976
+mined on bitcoind in 0.531152 s
+waited 1.5737729 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=58 txid=4d8c0bbc1cbf158c8ad7fb7e5746433cb3af7b4321258420791cb5afce66f8bd elapsed_ms=4017
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036914984
+mined on bitcoind in 0.546965 s
+waited 1.585485 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=59 txid=915dc57f4f42558073fff869e350378b98f411244a64ebe4eb04ecb8e25dcda4 elapsed_ms=4000
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036919064
+mined on bitcoind in 0.535174 s
+waited 1.5737619 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=60 txid=80972f32d3dde1d26b47217f4f67c5885e0578e9a14d617d07f628313d4bee30 elapsed_ms=4064
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036923148
+mined on bitcoind in 0.45553902 s
+waited 1.490584 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=61 txid=66963ea4e39637492c074910ff9bbab23aa131ba4be8bffbddcfbf3c4d407335 elapsed_ms=4098
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036927343
+mined on bitcoind in 0.315065 s
+waited 1.355361 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=62 txid=a08b2f1bab45092c3b6d87eb0d19352cd6a659eade3fe9b5fd74908519f48e88 elapsed_ms=4017
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036931249
+mined on bitcoind in 0.4584 s
+waited 1.501406 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=63 txid=d2a71c9d3cb759fe8bce5b7ce5722e1334ac67d2b2ab1cb6582e4ff240d10128 elapsed_ms=3992
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036935257
+mined on bitcoind in 0.540035 s
+waited 1.580447 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=64 txid=377a7b5e29d0ef800f75d3771b3a2aed5a9fe6033827f644461ccb55db53a030 elapsed_ms=4164
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036939460
+mined on bitcoind in 0.32983398 s
+waited 1.3632131 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=65 txid=cd3d7485c2913bfcce480c95d90bed587a82d301076529f52362d74b1130ba15 elapsed_ms=3932
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036943422
+mined on bitcoind in 0.438448 s
+waited 1.470376 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=66 txid=4169cc00dd7ed15e78f83b7dba22b21c4c10b7cc5d88c107d40ae4c44ecc3911 elapsed_ms=4092
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036947539
+mined on bitcoind in 0.317768 s
+waited 1.353019 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=67 txid=01b32707c576eb9a7073cf1de01cc2c37dbb2c26f90acad190a53024fec2c1dd elapsed_ms=4072
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036951663
+mined on bitcoind in 0.33943298 s
+waited 1.3679171 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=68 txid=c2c82161a5973ef59ba4a2b52d2309c34899d4f81da0cd622298719ce14fbebe elapsed_ms=4111
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036955775
+mined on bitcoind in 0.319725 s
+waited 1.355934 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=69 txid=ed19a3fe4b359bf3b3d28e360e229aad4d9f428e015a0a181de29faf05b29098 elapsed_ms=4191
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036959981
+mined on bitcoind in 0.540952 s
+waited 1.582605 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=70 txid=df663569d8268fa9ad0f015ed2f2a2e2c559b6437b6e44459f47da5c17d1c4b3 elapsed_ms=4400
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036964376
+mined on bitcoind in 0.329907 s
+waited 1.366946 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=71 txid=c1132e74df3b6a43be45d42c54b07f3b110ecddb3d2e2cf7fa4ec355c540184a elapsed_ms=4129
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036968516
+mined on bitcoind in 0.65816104 s
+waited 1.689634 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=72 txid=ebd659de09749725b69224eee68b42448db0cedd330150a7ec9ee9d79ed3231d elapsed_ms=4602
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036973177
+mined on bitcoind in 0.563171 s
+waited 1.604385 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=73 txid=44d5015c9365d081d1e47ef7dddf188d49cc829dff5d4811d42ee9a171f93253 elapsed_ms=4422
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036977594
+mined on bitcoind in 0.61765 s
+waited 1.655982 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=74 txid=efa78d9bb7b5593fd3e06533be4951a9ac5404b2f70f13f48c4cc367061d8a3c elapsed_ms=4597
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036982243
+mined on bitcoind in 0.552772 s
+waited 1.585335 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=75 txid=0979838b74822f9b0f459bf9bc91a358a1735872ac0b2ead3b11d2935b2d62ba elapsed_ms=4496
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036986805
+mined on bitcoind in 0.539569 s
+waited 1.576823 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=76 txid=0ec35c13ad3a8f279d1a5b818cae7cf4bf9cbe0a9c65297a19d623e5ff55aa9e elapsed_ms=4676
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036991430
+mined on bitcoind in 0.44945 s
+waited 1.486012 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=77 txid=84b0098d88bd566ce249e3419b98e5d229c0944c0aee42d1c05b0d9f172844ea elapsed_ms=4524
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786036995969
+mined on bitcoind in 0.417592 s
+waited 1.460342 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=78 txid=df9b5ceb8c4cb77619248953122578cf6fb8c5193c27e7eaadd0d9ad4b5d3185 elapsed_ms=4413
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037000417
+mined on bitcoind in 0.53365797 s
+waited 1.575628 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=79 txid=7db7782406d1ed1199bc0ee16cac0b87627e366a4ee17bb1c0bd000c06be1063 elapsed_ms=4587
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000002 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037005002
+mined on bitcoind in 0.534665 s
+waited 1.576819 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=80 txid=71d46eff2d36e24928318ce3c02a58c8d8300d8323a5e31b234bb08ef948073a elapsed_ms=4702
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037009708
+mined on bitcoind in 0.43958 s
+waited 1.47754 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=81 txid=6cc44a816d97767e64aa5130531ab8d600a40e3834ba9fa267ba969fdd011985 elapsed_ms=4569
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037014333
+mined on bitcoind in 0.319533 s
+waited 1.3548009 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=82 txid=dc05693586862d230c99e1d3cbc8d06613c6fc410024f413ec24715ee1d6425d elapsed_ms=4573
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000002 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037018915
+mined on bitcoind in 0.324188 s
+waited 1.355672 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=83 txid=c94edfb59c8283edf1c673544f778931fcfd4887417bcff89d188e1234af92c7 elapsed_ms=4609
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037023547
+mined on bitcoind in 0.32667398 s
+waited 1.361236 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=84 txid=878cc51715555c26bd299c2f1919096cd2f6cf9143673b54a9d614482498f38b elapsed_ms=4562
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037028139
+mined on bitcoind in 0.658126 s
+waited 1.685048 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=85 txid=0bc8132fe5cf41ce59863403b1aa1a3cb4b8419ade258f7de8e07de68ed0dc52 elapsed_ms=4935
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037033197
+mined on bitcoind in 0.66369796 s
+waited 1.701385 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=86 txid=a172fb55f17448b9203d6d0c0323601d46a7699303787bb1e7f55475d930b9d1 elapsed_ms=5185
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000003 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037038311
+mined on bitcoind in 0.55604 s
+waited 1.5939951 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=87 txid=219fff60272f67148c5589b3aef97d92ed044dbc30ee1c2b098e4d715f2f2f3c elapsed_ms=4906
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+waited 0.000004 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786037043273
+mined on bitcoind in 0.32430598 s
+waited 1.358919 s to mine after grace on bitcoind
+waiting for refresh (tests/tmp)
+waiting for refresh (tests/tmp)
+PERF_FIXTURE step=88 txid=79c4574bf73c2b5fcd490e639ffe0c68eb6990c13b82531f465d3c762fa49c30 elapsed_ms=4858
+PERF_FIXTURE_COMPLETE transfers=88 asset_id=rgb:VyLXf0Dy-VDAK5iZ-ETnpZkt-3q6PNt5-hYLM5gx-Ylf2EoE final_txid=79c4574bf73c2b5fcd490e639ffe0c68eb6990c13b82531f465d3c762fa49c30 bytes=49648 witness_bundles=88 transitions=88 elapsed_ms=308347
+test wallet::test::high_history_perf::generate_high_history_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 293 filtered out; finished in 308.35s
+

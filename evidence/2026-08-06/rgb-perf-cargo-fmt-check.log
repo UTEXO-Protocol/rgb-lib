@@ -1,0 +1,38 @@
+Diff in /Users/hardik/Projects/rgb-protocol-perf-lab/src/wallet/test/high_history_perf.rs:7:
+ use std::time::Instant;
+ 
+ use rgbstd::indexers::esplora_blocking::{
+-    esplora_client::Builder, EsploraClient as RgbEsploraClient,
++    EsploraClient as RgbEsploraClient, esplora_client::Builder,
+ };
+ use rgbstd::validation::{ResolveWitness, WitnessResolverError, WitnessStatus};
+ 
+Diff in /Users/hardik/Projects/rgb-protocol-perf-lab/src/wallet/test/high_history_perf.rs:14:
+-use crate::utils::{prefetch_consignment_witnesses, OperationResolver};
++use crate::utils::{OperationResolver, prefetch_consignment_witnesses};
+ 
+ const LOCAL_ESPLORA_URL: &str = "http://127.0.0.1:3003";
+ const LATENT_ESPLORA_URL: &str = "http://127.0.0.1:3010";
+Diff in /Users/hardik/Projects/rgb-protocol-perf-lab/src/wallet/test/high_history_perf.rs:454:
+     assert!(matches!(result, Err(Error::Network { .. })));
+     let assets = receiver.wallet.list_assets(vec![]).unwrap();
+     assert!(assets.nia.unwrap_or_default().is_empty());
+-    assert!(receiver
+-        .wallet
+-        .rgb_runtime()
+-        .unwrap()
+-        .contracts()
+-        .unwrap()
+-        .is_empty());
++    assert!(
++        receiver
++            .wallet
++            .rgb_runtime()
++            .unwrap()
++            .contracts()
++            .unwrap()
++            .is_empty()
++    );
+     println!(
+         "PERF_PREFETCH_FAILURE indexer={} no_assets=true no_contracts=true",
+         failing_indexer

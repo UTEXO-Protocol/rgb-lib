@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-3b713ee634a47107)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/7d877e73"
+waited 0.000024 s to register on bitcoind
+mining after grace time on bitcoind for 1 pending requests
+mining on bitcoind, time: 1786038461127
+mined on bitcoind in 0.55486596 s
+waited 1.5883679 s to mine after grace on bitcoind
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/8e68a0e1"
+test wallet::test::rust_only::success ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 295 filtered out; finished in 4.04s
+

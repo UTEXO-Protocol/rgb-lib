@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-3b713ee634a47107)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/a77dc30e"
+PERF_REPLAY indexer=http://127.0.0.1:3010 cache=false prefetch_workers=8 prefetch_ms=7393 validate_ms=859 import_ms=53 accept_ms=307 fallback_resolver_calls=2 fallback_unique_witnesses=1 fallback_duplicate_calls=1 fallback_resolver_ms=0
+test wallet::test::high_history_perf::replay_high_history_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 293 filtered out; finished in 10.96s
+

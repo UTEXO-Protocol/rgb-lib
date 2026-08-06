@@ -51,17 +51,13 @@ impl Drop for MinerStopGuard {
 }
 
 pub(crate) fn bitcoin_cli() -> Vec<String> {
-    let compose_file = ["tests", "compose.yaml"].join(MAIN_SEPARATOR_STR);
     vec![
-        s!("-f"),
-        compose_file,
         s!("exec"),
-        s!("-T"),
-        s!("-u"),
-        s!("blits"),
-        s!("bitcoind"),
+        s!("utexo-wallet-devstack-bitcoind-1"),
         s!("bitcoin-cli"),
         s!("-regtest"),
+        s!("-rpcuser=user"),
+        s!("-rpcpassword=password"),
     ]
 }
 
@@ -126,7 +122,6 @@ impl Miner {
         let cmd = || {
             let output = Command::new("docker")
                 .stdin(Stdio::null())
-                .arg("compose")
                 .args(&bitcoin_cli)
                 .arg("-rpcwallet=miner")
                 .arg("-generate")
@@ -338,7 +333,6 @@ pub(crate) fn estimate_smart_fee(esplora: bool) -> bool {
     let cmd = || {
         let output = Command::new("docker")
             .stdin(Stdio::null())
-            .arg("compose")
             .args(&bitcoin_cli)
             .arg("estimatesmartfee")
             .arg("1")
@@ -368,48 +362,28 @@ pub(crate) fn estimate_smart_fee(esplora: bool) -> bool {
 
 pub(crate) fn wait_indexers_sync() {
     let t_0 = OffsetDateTime::now_utc();
-    let mut max_blockcount = 0;
-    for bitcoin_cli in [bitcoin_cli(), esplora_bitcoin_cli()] {
-        let output = loop {
-            if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > 120.0 {
-                panic!("could not get blockcount ({QUEUE_DEPTH_EXCEEDED})");
-            }
-            let output = Command::new("docker")
-                .stdin(Stdio::null())
-                .arg("compose")
-                .args(&bitcoin_cli)
-                .arg("getblockcount")
-                .output()
-                .expect("failed to call getblockcount");
-            if !output.status.success()
-                && str::from_utf8(&output.stderr)
-                    .unwrap()
-                    .contains(QUEUE_DEPTH_EXCEEDED)
-            {
-                println!("work queue depth exceeded");
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                continue;
-            }
-            assert!(output.status.success());
-            break output;
-        };
-        let blockcount_str =
-            std::str::from_utf8(&output.stdout).expect("could not parse blockcount output");
-        let blockcount = blockcount_str
-            .trim()
-            .parse::<u32>()
-            .expect("could not parse blockcount");
-        max_blockcount = std::cmp::max(blockcount, max_blockcount);
-    }
+    let output = Command::new("docker")
+        .stdin(Stdio::null())
+        .args(bitcoin_cli())
+        .arg("getblockcount")
+        .output()
+        .expect("failed to call getblockcount");
+    assert!(output.status.success());
+    let max_blockcount = std::str::from_utf8(&output.stdout)
+        .expect("could not parse blockcount output")
+        .trim()
+        .parse::<u32>()
+        .expect("could not parse blockcount");
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut all_synced = true;
 
-        let mut indexer_urls = vec![];
-        #[cfg(feature = "electrum")]
-        indexer_urls.extend([ELECTRUM_URL, ELECTRUM_2_URL, ELECTRUM_BLOCKSTREAM_URL]);
-        #[cfg(feature = "esplora")]
-        indexer_urls.push(ESPLORA_URL);
+        let indexer_urls = vec![
+            #[cfg(feature = "electrum")]
+            ELECTRUM_URL,
+            #[cfg(feature = "esplora")]
+            "http://127.0.0.1:3003",
+        ];
 
         for indexer_url in indexer_urls {
             let err_msg = format!("cannot get indexer {indexer_url}");

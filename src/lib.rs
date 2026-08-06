@@ -110,14 +110,14 @@ use std::{
     num::NonZeroU32,
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},
     panic,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
 

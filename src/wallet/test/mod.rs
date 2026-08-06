@@ -358,6 +358,7 @@ mod get_fee_estimation;
 mod get_wallet_data;
 mod get_wallet_dir;
 mod go_online;
+mod high_history_perf;
 mod inflate;
 mod issue_asset_cfa;
 mod issue_asset_ifa;

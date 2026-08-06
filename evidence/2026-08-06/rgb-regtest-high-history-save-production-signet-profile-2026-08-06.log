@@ -1,0 +1,12 @@
+   Compiling rgb-lib v0.3.0-beta.6 (/Users/hardik/Projects/rgb-protocol-perf-lab)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.00s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-3b713ee634a47107)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/d7340532"
+PERF_SAVE_NEW_ASSET indexer=http://127.0.0.1:3010 asset_id=rgb:VyLXf0Dy-VDAK5iZ-ETnpZkt-3q6PNt5-hYLM5gx-Ylf2EoE accept_elapsed_ms=1195 persist_elapsed_ms=10010 total_elapsed_ms=11205 persisted=true
+test wallet::test::high_history_perf::save_high_history_asset_with_production_resolver ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 294 filtered out; finished in 21.90s
+

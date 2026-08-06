@@ -223,7 +223,6 @@ pub(crate) fn send_sats_to_address(address: String, sats: Option<u64>) {
         }
         let output = Command::new("docker")
             .stdin(Stdio::null())
-            .arg("compose")
             .args(&bitcoin_cli)
             .arg("-rpcwallet=miner")
             .arg("sendtoaddress")

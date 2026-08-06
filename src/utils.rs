@@ -30,6 +30,10 @@ pub(crate) const INDEXER_RETRIES: u8 = 3;
 pub(crate) const INDEXER_BATCH_SIZE: usize = 5;
 #[cfg(feature = "esplora")]
 pub(crate) const INDEXER_PARALLEL_REQUESTS: usize = 5;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+const WITNESS_PREFETCH_WORKERS: usize = 8;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+const WITNESS_PREFETCH_LIMIT: usize = 256;
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const PROXY_PROTOCOL_VERSION: &str = "0.2";
@@ -746,6 +750,117 @@ impl ResolveWitness for DumbResolver {
     fn check_chain_net(&self, _: ChainNet) -> Result<(), WitnessResolverError> {
         Ok(())
     }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) struct OperationResolver<'a> {
+    fallback: &'a dyn ResolveWitness,
+    witnesses: Mutex<HashMap<RgbTxid, WitnessStatus>>,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl<'a> OperationResolver<'a> {
+    pub(crate) fn new(
+        fallback: &'a dyn ResolveWitness,
+        prefetched: HashMap<RgbTxid, WitnessStatus>,
+    ) -> Self {
+        Self {
+            fallback,
+            witnesses: Mutex::new(prefetched),
+        }
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl ResolveWitness for OperationResolver<'_> {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        if let Some(status) = lock_recover(&self.witnesses).get(&witness_id).cloned() {
+            return Ok(status);
+        }
+        let status = self.fallback.resolve_witness(witness_id)?;
+        lock_recover(&self.witnesses).insert(witness_id, status.clone());
+        Ok(status)
+    }
+
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        self.fallback.check_chain_net(chain_net)
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn prefetch_consignment_witnesses<const TRANSFER: bool>(
+    indexer_url: &str,
+    bitcoin_network: BitcoinNetwork,
+    consignment: &Consignment<TRANSFER>,
+    offchain_witness_id: RgbTxid,
+) -> Result<HashMap<RgbTxid, WitnessStatus>, Error> {
+    let mut witness_ids = consignment
+        .bundled_witnesses()
+        .map(|bundle| bundle.witness_id())
+        .filter(|witness_id| *witness_id != offchain_witness_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    witness_ids.sort_unstable_by_key(ToString::to_string);
+    witness_ids.truncate(WITNESS_PREFETCH_LIMIT);
+
+    let queue = Arc::new(Mutex::new(VecDeque::from(witness_ids)));
+    let witnesses = Arc::new(Mutex::new(HashMap::new()));
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let worker_count = WITNESS_PREFETCH_WORKERS.min(lock_recover(&queue).len());
+    if worker_count == 0 {
+        return Ok(HashMap::new());
+    }
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let queue = Arc::clone(&queue);
+            let witnesses = Arc::clone(&witnesses);
+            let failures = Arc::clone(&failures);
+            scope.spawn(move || {
+                let resolver = match get_indexer_and_resolver(indexer_url, bitcoin_network) {
+                    Ok((_, resolver)) => resolver,
+                    Err(error) => {
+                        lock_recover(&failures).push(error.to_string());
+                        return;
+                    }
+                };
+                loop {
+                    let Some(witness_id) = lock_recover(&queue).pop_front() else {
+                        break;
+                    };
+                    match resolver.resolve_witness(witness_id) {
+                        Ok(status) => {
+                            lock_recover(&witnesses).insert(witness_id, status);
+                        }
+                        Err(error) => {
+                            lock_recover(&failures).push(format!("witness {witness_id}: {error}"))
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let mut failures = lock_recover(&failures).clone();
+    if !failures.is_empty() {
+        failures.sort();
+        return Err(Error::Network {
+            details: format!(
+                "failed to prefetch {} RGB witnesses; first error: {}",
+                failures.len(),
+                failures[0]
+            ),
+        });
+    }
+    Ok(lock_recover(&witnesses).clone())
 }
 
 /// Wrapper for the RGB stock and its lockfile.

@@ -1,0 +1,15 @@
+   Compiling rgb-ops v0.11.1-rc.10 (/Users/hardik/Projects/rgb-ops-perf-lab)
+   Compiling rgb-schemas v0.11.1-rc.10
+   Compiling rgb-psbt-utils v0.11.1-rc.10
+   Compiling rgb-lib v0.3.0-beta.6 (/Users/hardik/Projects/rgb-protocol-perf-lab)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.91s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-3b713ee634a47107)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/eb73746b"
+PERF_REPLAY indexer=http://127.0.0.1:3012 cache=false production_resolver=true production_prefetch_ms=8629 prefetch_workers=0 prefetch_ms=0 validate_ms=900 import_ms=50 accept_ms=295 fallback_resolver_calls=0 fallback_unique_witnesses=0 fallback_duplicate_calls=0 fallback_resolver_ms=0
+test wallet::test::high_history_perf::replay_high_history_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 295 filtered out; finished in 12.12s
+

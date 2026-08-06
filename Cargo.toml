@@ -167,3 +167,7 @@ required-features = ["electrum"]
 [profile.reldebug]
 inherits = "release"
 debug = 1
+
+[patch.crates-io]
+rgb-invoicing = { path = "../rgb-ops-perf-lab/invoice" }
+rgb-ops = { path = "../rgb-ops-perf-lab" }

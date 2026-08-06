@@ -1,0 +1,21 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running unittests src/lib.rs (target/debug/deps/rgb_lib-3b713ee634a47107)
+
+running 1 test
+skipping services initialization
+wallet directory: "/Users/hardik/Projects/rgb-protocol-perf-lab/tests/tmp/6245ab16"
+test wallet::test::high_history_perf::replay_high_history_fixture has been running for over 60 seconds
+
+thread 'wallet::test::high_history_perf::replay_high_history_fixture' (51401484) panicked at src/wallet/test/high_history_perf.rs:238:65:
+called `Result::unwrap()` on an `Err` value: ResolverError(ResolverIssue(Some(377a7b5e29d0ef800f75d3771b3a2aed5a9fe6033827f644461ccb55db53a030), "HttpResponse { status: 503, message: \"controlled indexer outage\" }"))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test wallet::test::high_history_perf::replay_high_history_fixture ... FAILED
+
+failures:
+
+failures:
+    wallet::test::high_history_perf::replay_high_history_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 295 filtered out; finished in 91.25s
+
+error: test failed, to rerun pass `--lib`
