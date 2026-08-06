@@ -25,9 +25,9 @@ pub use multisig::{
     OperationInfo, RespondToOperation, UserRole,
 };
 pub use objects::{
-    Address, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection, Balance,
-    BlockTime, BtcBalance, DatabaseType, EmbeddedMedia, Invoice, InvoiceData, Media, Metadata,
-    Online, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo, PsbtInspection,
+    Address, AssetCFA, AssetFilter, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection,
+    Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia, Invoice, InvoiceData, Media,
+    Metadata, Online, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo, PsbtInspection,
     PsbtOutputInfo, ReceiveData, Recipient, RecipientInfo, RecipientType, RgbAllocation,
     RgbInputInfo, RgbInspection, RgbOperationInfo, RgbOutputInfo, RgbTransitionInfo, Token,
     TokenLight, Transaction, TransactionType, Transfer, TransferKind, TransferTransportEndpoint,

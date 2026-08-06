@@ -16,8 +16,8 @@ use rgb_lib::{
     keys::WitnessVersion,
     utils::BitcoinNetwork,
     wallet::{
-        Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline, RgbWalletOpsOnline,
-        SinglesigKeys, SyncOptions, Wallet, WalletData,
+        AssetFilter, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline,
+        RgbWalletOpsOnline, SinglesigKeys, SyncOptions, Wallet, WalletData,
     },
 };
 
@@ -381,9 +381,10 @@ pub extern "C" fn rgblib_list_transactions(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_list_transfers(
     wallet: &COpaqueStruct,
-    asset_id_opt: *const c_char,
+    asset_filter: *const c_char,
+    txid_opt: *const c_char,
 ) -> CResultString {
-    list_transfers(wallet, asset_id_opt).into()
+    list_transfers(wallet, asset_filter, txid_opt).into()
 }
 
 #[unsafe(no_mangle)]

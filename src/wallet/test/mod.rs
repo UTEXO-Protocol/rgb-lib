@@ -126,7 +126,6 @@ const IDENT_NOT_ASCII_MSG: &str = "string '{0}' contains invalid character '{1}'
 const IDENT_NOT_START_MSG: &str = "string '{0}' must not start with character '{1}'.";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const MIN_CONFIRMATIONS: u8 = 1;
-#[cfg(feature = "electrum")]
 const FAKE_TXID: &str = "e5a3e577309df31bd606f48049049d2e1e02b048206ba232944fcc053a176ccb";
 #[cfg(feature = "electrum")]
 const FAKE_OUTPOINT: &str = "e5a3e577309df31bd606f48049049d2e1e02b048206ba232944fcc053a176ccb:0";

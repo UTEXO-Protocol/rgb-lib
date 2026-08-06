@@ -181,6 +181,17 @@ pub struct BlockTime {
 // Assets, tokens & media
 // ────────────────────────────────────────────────────────────
 
+/// An asset filter.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AssetFilter {
+    /// Match any or no asset
+    AnyOrNone,
+    /// Match no asset
+    None,
+    /// Match the asset with the given ID
+    Id(String),
+}
+
 /// An asset media file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
