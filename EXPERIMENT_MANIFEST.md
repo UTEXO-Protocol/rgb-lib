@@ -13,7 +13,7 @@ The Iris Wallet app worktree at `/Users/hardik/Projects/utexo-app` is explicitly
 | Repository | Local experiment worktree | Immutable baseline | Before | After |
 |---|---|---|---|---|
 | `UTEXO-Protocol/rgb-lib` | `/Users/hardik/Projects/rgb-protocol-perf-lab` | `2e1026e9b15fffdbc2ea8b0f7f23a10ffe1f11ca` | Clean detached checkout; no performance fixture or resolver changes | Operation-scoped witness cache, bounded witness prefetch, acceptance integration, test harness adaptations, deterministic fixture and diagnostic proxy |
-| `rgb-protocol/rgb-ops` | `/Users/hardik/Projects/rgb-ops-perf-lab` | `08911c5b66b8a7e628f6636a99a17b8082dbc232` | Clean detached checkout; Esplora resolver made two sequential requests | One-response Esplora resolver using `get_tx_info()` |
+| `rgb-protocol/rgb-ops` | `/Users/hardik/Projects/rgb-ops-perf-lab` | `08911c5b66b8a7e628f6636a99a17b8082dbc232` | Clean detached checkout; Esplora resolver made two sequential requests | One-response Esplora resolver using `get_tx_info()`; preserved on `Jainakin/rgb-ops` because upstream rejected direct branch pushes |
 | `UTEXO-Protocol/rgb-lightning-node` | `/Users/hardik/Projects/rgb-lightning-node-perf-lab` | `0bfa66fa256a6c36f3737d5b6402eacea40c68fc` | Clean detached checkout using tagged `rgb-lib` | Build-only local dependency override proving RLN compiles with one patched `rgb-lib` instance |
 
 All three directories were created specifically for this experiment. Deleting these three worktrees removes every repository change described here without touching any pre-existing wallet work.
@@ -22,8 +22,8 @@ All three directories were created specifically for this experiment. Deleting th
 
 Tracked files:
 
-- `Cargo.toml`: adds local `[patch.crates-io]` entries for `rgb-ops` and `rgb-invoicing`.
-- `Cargo.lock`: records those local dependency overrides.
+- `Cargo.toml`: adds `[patch.crates-io]` entries for `rgb-ops` and `rgb-invoicing` from `Jainakin/rgb-ops` branch `codex/rgb-witness-resolution-experiment`.
+- `Cargo.lock`: pins those experiment dependencies to commit `b9da59b0`.
 - `src/lib.rs`: imports `VecDeque`, `Mutex`, and `MutexGuard`.
 - `src/utils.rs`: adds `OperationResolver`, successful-result operation caching, eight-worker bounded prefetch, a 256-witness prefetch bound, typed network failure aggregation, and poison-tolerant lock acquisition.
 - `src/wallet/rust_only.rs`: prefetches before mutation and reuses one resolver through validation, contract import, and runtime acceptance in both `accept_transfer()` and `save_new_asset()`.

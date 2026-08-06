@@ -169,5 +169,5 @@ inherits = "release"
 debug = 1
 
 [patch.crates-io]
-rgb-invoicing = { path = "../rgb-ops-perf-lab/invoice" }
-rgb-ops = { path = "../rgb-ops-perf-lab" }
+rgb-invoicing = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "codex/rgb-witness-resolution-experiment" }
+rgb-ops = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "codex/rgb-witness-resolution-experiment" }
