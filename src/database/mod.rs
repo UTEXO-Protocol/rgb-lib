@@ -519,14 +519,14 @@ impl DbTxn {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub(crate) fn get_batch_transfer_by_txid(
+    pub(crate) fn get_batch_transfers_by_txid(
         &self,
         txid: &str,
-    ) -> Result<Option<DbBatchTransfer>, Error> {
+    ) -> Result<Vec<DbBatchTransfer>, Error> {
         Ok(block_on(
             BatchTransfer::find()
                 .filter(batch_transfer::Column::Txid.eq(txid))
-                .one(self.inner()),
+                .all(self.inner()),
         )?)
     }
 
