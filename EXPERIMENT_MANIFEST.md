@@ -4,7 +4,7 @@ Recorded: 2026-08-06 23:48:28 IST
 
 ## Purpose and ownership
 
-This manifest defines the complete rollback boundary for the experiment that reproduced and optimized the multi-minute RGB transfer acceptance path. None of these changes are approved production changes. The work is preserved on `codex/rgb-witness-resolution-experiment` in each protocol repository so it remains isolated from production branches.
+This manifest defines the complete rollback boundary for the experiment that reproduced and optimized the multi-minute RGB transfer acceptance path. None of these changes are approved production changes. The work is preserved on `hardik/rgb-witness-resolution-experiment` in each protocol repository so it remains isolated from production branches.
 
 The Iris Wallet app worktree at `/Users/hardik/Projects/utexo-app` is explicitly outside this experiment. It was already dirty, remains on `signet-testing` at `31766e7f5ee725a825499e6651b569b58f819c65`, and no app file was edited during this experiment.
 
@@ -22,7 +22,7 @@ All three directories were created specifically for this experiment. Deleting th
 
 Tracked files:
 
-- `Cargo.toml`: adds `[patch.crates-io]` entries for `rgb-ops` and `rgb-invoicing` from `Jainakin/rgb-ops` branch `codex/rgb-witness-resolution-experiment`.
+- `Cargo.toml`: adds `[patch.crates-io]` entries for `rgb-ops` and `rgb-invoicing` from `Jainakin/rgb-ops` branch `hardik/rgb-witness-resolution-experiment`.
 - `Cargo.lock`: pins those experiment dependencies to commit `b9da59b0`.
 - `src/lib.rs`: imports `VecDeque`, `Mutex`, and `MutexGuard`.
 - `src/utils.rs`: adds `OperationResolver`, successful-result operation caching, eight-worker bounded prefetch, a 256-witness prefetch bound, typed network failure aggregation, and poison-tolerant lock acquisition.
