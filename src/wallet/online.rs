@@ -195,9 +195,12 @@ pub trait WalletOnline: WalletOffline {
         runtime: &mut RgbRuntime,
         signed_psbt: &Psbt,
         fascia: Fascia,
+        consume_fascia: bool,
     ) -> Result<BdkTransaction, Error> {
         let tx = self.broadcast_psbt(txn, signed_psbt)?;
-        runtime.consume_fascia(fascia, None)?;
+        if consume_fascia {
+            runtime.consume_fascia(fascia, None)?;
+        }
         Ok(tx)
     }
 
@@ -1621,7 +1624,7 @@ pub trait WalletOnline: WalletOffline {
             let fascia_path = transfer_dir.join(FASCIA_FILE);
             let fascia_str = fs::read_to_string(fascia_path)?;
             let fascia: Fascia = serde_json::from_str(&fascia_str).map_err(InternalError::from)?;
-            self.broadcast_and_update_rgb(txn, &mut runtime, &signed_psbt, fascia)?;
+            self.broadcast_and_update_rgb(txn, &mut runtime, &signed_psbt, fascia, true)?;
             updated_batch_transfer.status = ActiveValue::Set(TransferStatus::WaitingConfirmations);
         } else {
             return Ok(None);
@@ -2549,7 +2552,7 @@ pub trait WalletOnline: WalletOffline {
 
         if let Some(err) = consignment_res.error {
             if err.code == -101 {
-                return Err(Error::RecipientIDAlreadyUsed)?;
+                Err(Error::RecipientIDAlreadyUsed)?;
             }
             return Err(Error::InvalidTransportEndpoint {
                 details: format!("proxy error: {}", err.message),
@@ -2623,7 +2626,7 @@ pub trait WalletOnline: WalletOffline {
                     let media_res = proxy_client.post_media(&digest, &media.file_path)?;
                     debug!(self.logger(), "Attachment POST response: {:?}", media_res);
                     if let Some(_err) = media_res.error {
-                        return Err(InternalError::Unexpected)?;
+                        Err(InternalError::Unexpected)?;
                     }
                 }
 
@@ -3123,9 +3126,36 @@ pub trait WalletOnline: WalletOffline {
         status: TransferStatus,
         fascia: Fascia,
         sync_tte_used: bool,
+        consume_fascia: bool,
     ) -> Result<i32, Error> {
         let mut runtime = self.rgb_runtime()?;
-        self.broadcast_and_update_rgb(txn, &mut runtime, psbt, fascia)?;
+        self.finalize_transfer_end_with_runtime(
+            txn,
+            txid,
+            psbt,
+            info_contents,
+            status,
+            fascia,
+            sync_tte_used,
+            consume_fascia,
+            &mut runtime,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_transfer_end_with_runtime(
+        &mut self,
+        txn: &DbTxn,
+        txid: String,
+        psbt: &Psbt,
+        info_contents: &InfoBatchTransfer,
+        status: TransferStatus,
+        fascia: Fascia,
+        sync_tte_used: bool,
+        consume_fascia: bool,
+        runtime: &mut RgbRuntime,
+    ) -> Result<i32, Error> {
+        self.broadcast_and_update_rgb(txn, runtime, psbt, fascia, consume_fascia)?;
         self.update_or_save_transfers(txn, txid, info_contents, status, sync_tte_used)
     }
 
@@ -3333,11 +3363,31 @@ pub trait WalletOnline: WalletOffline {
         })
     }
 
-    fn send_end_impl(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<OperationResult, Error> {
+    fn send_end_impl(
+        &mut self,
+        txn: &DbTxn,
+        signed_psbt: &Psbt,
+        consume_fascia: bool,
+        operation_id: Option<&str>,
+    ) -> Result<OperationResult, Error> {
         let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(signed_psbt)?;
 
-        self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
+        let mut operation_runtime = operation_id
+            .map(|operation_id| {
+                crate::utils::load_rgb_runtime_for_operation(self.wallet_dir(), operation_id)
+            })
+            .transpose()?;
+        if let Some(runtime) = operation_runtime.as_ref() {
+            self.gen_consignments_with_runtime(
+                runtime,
+                &fascia,
+                &info_contents.transfers,
+                &transfer_dir,
+            )?;
+        } else {
+            self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
+        }
 
         let psbt_out = transfer_dir.join(SIGNED_PSBT_FILE);
         fs::write(psbt_out, signed_psbt.to_string())?;
@@ -3376,15 +3426,30 @@ pub trait WalletOnline: WalletOffline {
 
         let sync_tte_used = true;
         let batch_transfer_idx = if info_contents.donation {
-            self.finalize_transfer_end(
-                txn,
-                txid.clone(),
-                signed_psbt,
-                &info_contents,
-                TransferStatus::WaitingConfirmations,
-                fascia,
-                sync_tte_used,
-            )?
+            if let Some(runtime) = operation_runtime.as_mut() {
+                self.finalize_transfer_end_with_runtime(
+                    txn,
+                    txid.clone(),
+                    signed_psbt,
+                    &info_contents,
+                    TransferStatus::WaitingConfirmations,
+                    fascia,
+                    sync_tte_used,
+                    consume_fascia,
+                    runtime,
+                )?
+            } else {
+                self.finalize_transfer_end(
+                    txn,
+                    txid.clone(),
+                    signed_psbt,
+                    &info_contents,
+                    TransferStatus::WaitingConfirmations,
+                    fascia,
+                    sync_tte_used,
+                    consume_fascia,
+                )?
+            }
         } else {
             self.update_or_save_transfers(
                 txn,
@@ -3628,6 +3693,7 @@ pub trait WalletOnline: WalletOffline {
             TransferStatus::WaitingConfirmations,
             fascia,
             false,
+            true,
         )?;
 
         let (asset_id, transfer_info) = info_contents.transfers.into_iter().next().unwrap();
@@ -3775,6 +3841,7 @@ pub trait WalletOnline: WalletOffline {
             TransferStatus::WaitingConfirmations,
             fascia,
             false,
+            true,
         )?;
 
         Ok(OperationResult {

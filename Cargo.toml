@@ -38,6 +38,7 @@ chacha20poly1305 = { version = "0.10.1", default-features = false, features = [
 tokio = { version = "1", default-features = false, features = ["rt"] }
 generic-array = "=0.14.7"  # temporary pin while waiting for chacha20poly1305 update
 hex = { version = "0.4.3", default-features = false }
+nonasync = { version = "0.1.3", default-features = false }
 rand = { version = "0.10.0", default-features = false, features = [
     "thread_rng",
 ] }
@@ -74,6 +75,7 @@ time = { version = "0.3.41", default-features = false }
 file-format = { version = "0.29.0", default-features = false, features = [
     "reader",
 ] }
+fs2 = { version = "0.4.3", default-features = false }
 typenum = { version = "1.19.0", default-features = false }
 url = { version = "2.5", default-features = false }
 walkdir = { version = "2.5.0", default-features = false }

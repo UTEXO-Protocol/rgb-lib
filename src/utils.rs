@@ -3,6 +3,9 @@
 //! This module defines some utility methods and structures.
 
 use super::*;
+use fs2::FileExt;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use nonasync::persistence::CloneNoPersistence;
 
 const TIMESTAMP_FORMAT: &[time::format_description::BorrowedFormatItem] = time::macros::format_description!(
     "[year]-[month]-[day]T[hour repr:24]:[minute]:[second].[subsecond digits:3]+00"
@@ -863,17 +866,31 @@ pub(crate) fn prefetch_consignment_witnesses<const TRANSFER: bool>(
     Ok(lock_recover(&witnesses).clone())
 }
 
+#[derive(Debug)]
+pub(crate) struct RgbRuntimeLock {
+    _file: std::fs::File,
+}
+
 /// Wrapper for the RGB stock and its lockfile.
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct RgbRuntime {
     /// The RGB stock
     stock: Stock,
-    /// The wallet directory, where the lockfile for the runtime is to be held
-    wallet_dir: PathBuf,
+    /// Process-scoped ownership of the RGB stock. The operating system releases this lock on exit,
+    /// including an unclean exit, so a stale path cannot permanently block wallet recovery.
+    _lock: RgbRuntimeLock,
+    /// Whether dropping this runtime should persist its stock to the live provider.
+    persist_on_drop: bool,
 }
 
 impl RgbRuntime {
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn lock(&self) -> &RgbRuntimeLock {
+        &self._lock
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn export_contract(
         &self,
         contract_id: ContractId,
@@ -927,6 +944,29 @@ impl RgbRuntime {
             .contracts()
             .map_err(InternalError::from)?
             .collect())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn contains_transfer_witness(
+        &self,
+        contract_id: ContractId,
+        witness_id: RgbTxid,
+    ) -> Result<bool, InternalError> {
+        if !self
+            .stock
+            .contracts()
+            .map_err(InternalError::from)?
+            .any(|contract| contract.id == contract_id)
+        {
+            return Ok(false);
+        }
+
+        Ok(self
+            .stock
+            .contract_data(contract_id)
+            .map_err(InternalError::from)?
+            .witness_info(witness_id)
+            .is_some())
     }
 
     pub(crate) fn contract_wrapper<C: IssuerWrapper>(
@@ -1016,6 +1056,52 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn stage_transfer<R: ResolveWitness>(
+        &self,
+        seal: GraphSeal,
+        transfer: ValidTransfer,
+        resolver: &R,
+    ) -> Result<Stock, InternalError> {
+        let mut stock = self.stock.clone_no_persistence();
+        stock.store_secret_seal(seal)?;
+        stock.import_contract(transfer.clone().into_valid_contract(), resolver)?;
+        stock.accept_transfer(transfer, resolver)?;
+        Ok(stock)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn stage_fascia(
+        &self,
+        fascia: Fascia,
+        witness_ord: Option<WitnessOrd>,
+    ) -> Result<Stock, InternalError> {
+        struct FasciaResolver {
+            witness_id: RgbTxid,
+            witness_ord: WitnessOrd,
+        }
+
+        impl WitnessOrdProvider for FasciaResolver {
+            fn witness_ord(&self, witness_id: RgbTxid) -> Result<WitnessOrd, WitnessResolverError> {
+                debug_assert_eq!(witness_id, self.witness_id);
+                Ok(self.witness_ord)
+            }
+        }
+
+        let resolver = FasciaResolver {
+            witness_id: fascia.witness_id(),
+            witness_ord: witness_ord.unwrap_or(WitnessOrd::Tentative),
+        };
+        let mut stock = self.stock.clone_no_persistence();
+        stock.consume_fascia(fascia, resolver)?;
+        Ok(stock)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn suppress_persistence(&mut self) {
+        self.persist_on_drop = false;
+    }
+
     pub(crate) fn transfer(
         &self,
         contract_id: ContractId,
@@ -1099,23 +1185,25 @@ impl RgbRuntime {
 
 impl Drop for RgbRuntime {
     fn drop(&mut self) {
-        self.stock.store().expect("unable to save stock");
-        fs::remove_file(self.wallet_dir.join(RGB_RUNTIME_LOCK_FILE))
-            .expect("should be able to drop lockfile")
+        if self.persist_on_drop {
+            self.stock.store().expect("unable to save stock");
+        }
     }
 }
 
-fn write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
+pub(crate) fn acquire_rgb_runtime_lock(wallet_dir: &Path) -> Result<RgbRuntimeLock, Error> {
     let lock_file_path = wallet_dir.join(RGB_RUNTIME_LOCK_FILE);
     let t_0 = OffsetDateTime::now_utc();
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_file_path)?;
     loop {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(lock_file_path.clone())
-        {
-            Ok(_) => return Ok(()),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(RgbRuntimeLock { _file: file }),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > LOCK_FILE_TIMEOUT_SECS {
                     return Err(Error::Internal {
                         details: s!("unreleased lock file"),
@@ -1133,8 +1221,12 @@ fn write_rgb_runtime_lockfile(wallet_dir: &Path) -> Result<(), Error> {
     }
 }
 
-pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRuntime, Error> {
-    write_rgb_runtime_lockfile(wallet_dir.as_ref())?;
+fn load_rgb_runtime_with_operation<P: AsRef<Path>>(
+    wallet_dir: P,
+    operation_id: Option<&str>,
+) -> Result<RgbRuntime, Error> {
+    let lock = acquire_rgb_runtime_lock(wallet_dir.as_ref())?;
+    crate::wallet::rust_only::validate_rgb_runtime_access(wallet_dir.as_ref(), operation_id)?;
 
     let rgb_dir = wallet_dir.as_ref().join(RGB_RUNTIME_DIR);
     if !rgb_dir.exists() {
@@ -1157,8 +1249,21 @@ pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRunti
 
     Ok(RgbRuntime {
         stock,
-        wallet_dir: wallet_dir.as_ref().to_path_buf(),
+        _lock: lock,
+        persist_on_drop: true,
     })
+}
+
+pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRuntime, Error> {
+    load_rgb_runtime_with_operation(wallet_dir, None)
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn load_rgb_runtime_for_operation<P: AsRef<Path>>(
+    wallet_dir: P,
+    operation_id: &str,
+) -> Result<RgbRuntime, Error> {
+    load_rgb_runtime_with_operation(wallet_dir, Some(operation_id))
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1191,6 +1296,8 @@ impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
 
     #[derive(Debug, Deserialize)]
     struct MandatoryField {
@@ -1322,14 +1429,72 @@ mod tests {
     }
 
     #[test]
-    fn test_write_rgb_runtime_lockfile_timeout() {
+    fn test_rgb_runtime_lock_allows_preexisting_file() {
         let dir = tempfile::tempdir().unwrap();
         let lock_path = dir.path().join(RGB_RUNTIME_LOCK_FILE);
-        // pre-create the lock file so every open attempt sees AlreadyExists
         fs::File::create(&lock_path).unwrap();
-        // with a lower LOCK_FILE_TIMEOUT_SECS in test builds the error is returned immediately
-        let result = write_rgb_runtime_lockfile(dir.path());
+        let lock = acquire_rgb_runtime_lock(dir.path()).unwrap();
+        drop(lock);
+        acquire_rgb_runtime_lock(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn test_rgb_runtime_lock_times_out_while_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = acquire_rgb_runtime_lock(dir.path()).unwrap();
+        let result = acquire_rgb_runtime_lock(dir.path());
         assert_matches!(result, Err(Error::Internal { details }) if details == "unreleased lock file");
+    }
+
+    #[test]
+    #[ignore = "subprocess used by test_rgb_runtime_lock_released_after_process_kill"]
+    fn rgb_runtime_lock_crash_child() {
+        let wallet_dir = PathBuf::from(std::env::var("RGB_LOCK_CHILD_WALLET_DIR").unwrap());
+        let ready_path = PathBuf::from(std::env::var("RGB_LOCK_CHILD_READY_PATH").unwrap());
+        let _runtime = load_rgb_runtime(wallet_dir).unwrap();
+        let mut ready = fs::File::create(ready_path).unwrap();
+        ready.write_all(b"ready").unwrap();
+        ready.sync_all().unwrap();
+        loop {
+            std::thread::park();
+        }
+    }
+
+    #[test]
+    fn test_rgb_runtime_lock_released_after_process_kill() {
+        let directory = tempfile::tempdir().unwrap();
+        let ready_path = directory.path().join("ready");
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--ignored")
+            .arg("--exact")
+            .arg("utils::tests::rgb_runtime_lock_crash_child")
+            .env("RGB_LOCK_CHILD_WALLET_DIR", directory.path())
+            .env("RGB_LOCK_CHILD_READY_PATH", &ready_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if ready_path.exists() {
+                break;
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("RGB runtime lock child exited early with status {status}");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "RGB runtime lock child did not acquire the lock"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child.kill().unwrap();
+        let status = child.wait().unwrap();
+        assert!(!status.success());
+
+        let runtime = load_rgb_runtime(directory.path()).unwrap();
+        drop(runtime);
+        assert!(directory.path().join(RGB_RUNTIME_LOCK_FILE).exists());
     }
 
     // The None return from build_indexer is only reachable when electrum is enabled but esplora

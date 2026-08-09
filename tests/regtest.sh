@@ -127,6 +127,26 @@ _wait_for_proxy() {
     done
 }
 
+_port_is_bound() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -HOant "sport = :$port" | grep -q .
+    elif command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN -t | grep -q .
+    else
+        _die "neither ss nor lsof is available to check whether port $port is bound"
+    fi
+}
+
+_show_port_owner() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        ss -Oant "sport = :$port"
+    else
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN
+    fi
+}
+
 stop_services() {
     # cleanly stop the version 0.1.0 RGB proxy server
     local proxy_mod_proto
@@ -145,8 +165,8 @@ _start_services() {
         mkdir -p $TMP_DIR $LISTS_DIR
     fi
     for port in "${EXPOSED_PORTS[@]}"; do
-        if [ -n "$(ss -HOant "sport = :$port")" ]; then
-            ss -Oant "sport = :$port"
+        if _port_is_bound "$port"; then
+            _show_port_owner "$port"
             _die "port $port is already bound, services can't be started"
         fi
     done
@@ -167,6 +187,7 @@ prepare_tests_environment() {
     $COMPOSE build $PROXY_MOD_API
     $COMPOSE build esplora
     $COMPOSE build vss-server
+    $COMPOSE build rgb-multisig-hub
 
     mkdir -p "${HUB_DIR}"
     touch "${HUB_DIR}/config.toml"

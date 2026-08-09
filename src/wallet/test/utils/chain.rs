@@ -51,13 +51,18 @@ impl Drop for MinerStopGuard {
 }
 
 pub(crate) fn bitcoin_cli() -> Vec<String> {
+    let compose_file = ["tests", "compose.yaml"].join(MAIN_SEPARATOR_STR);
     vec![
+        s!("-f"),
+        compose_file,
         s!("exec"),
-        s!("utexo-wallet-devstack-bitcoind-1"),
+        s!("-T"),
+        s!("-u"),
+        s!("blits"),
+        s!("bitcoind"),
         s!("bitcoin-cli"),
         s!("-regtest"),
-        s!("-rpcuser=user"),
-        s!("-rpcpassword=password"),
+        s!("-rpcclienttimeout=15"),
     ]
 }
 
@@ -70,6 +75,7 @@ fn esplora_bitcoin_cli() -> Vec<String> {
         s!("-T"),
         s!("esplora"),
         s!("cli"),
+        s!("-rpcclienttimeout=15"),
     ]
 }
 
@@ -122,6 +128,7 @@ impl Miner {
         let cmd = || {
             let output = Command::new("docker")
                 .stdin(Stdio::null())
+                .arg("compose")
                 .args(&bitcoin_cli)
                 .arg("-rpcwallet=miner")
                 .arg("-generate")
@@ -145,7 +152,7 @@ impl Miner {
         if !wait_for_function(cmd, 120, 500) {
             panic!("could not mine ({QUEUE_DEPTH_EXCEEDED})");
         }
-        wait_indexers_sync();
+        wait_indexers_sync(esplora);
         println!(
             "mined on {} in {} s",
             if esplora { "esplora" } else { "bitcoind" },
@@ -333,6 +340,7 @@ pub(crate) fn estimate_smart_fee(esplora: bool) -> bool {
     let cmd = || {
         let output = Command::new("docker")
             .stdin(Stdio::null())
+            .arg("compose")
             .args(&bitcoin_cli)
             .arg("estimatesmartfee")
             .arg("1")
@@ -360,44 +368,84 @@ pub(crate) fn estimate_smart_fee(esplora: bool) -> bool {
     json_output.unwrap().get("errors").is_none()
 }
 
-pub(crate) fn wait_indexers_sync() {
+pub(crate) fn wait_indexers_sync(esplora: bool) {
     let t_0 = OffsetDateTime::now_utc();
-    let output = Command::new("docker")
-        .stdin(Stdio::null())
-        .args(bitcoin_cli())
-        .arg("getblockcount")
-        .output()
-        .expect("failed to call getblockcount");
-    assert!(output.status.success());
-    let max_blockcount = std::str::from_utf8(&output.stdout)
-        .expect("could not parse blockcount output")
-        .trim()
-        .parse::<u32>()
-        .expect("could not parse blockcount");
+    let timeout_secs = std::env::var("RGB_LIB_TEST_INDEXER_SYNC_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .unwrap_or(180.0);
+    let bitcoin_cli = if esplora {
+        esplora_bitcoin_cli()
+    } else {
+        bitcoin_cli()
+    };
+    let output = loop {
+        if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > timeout_secs {
+            panic!("could not query the canonical chain tip ({QUEUE_DEPTH_EXCEEDED})");
+        }
+        let output = Command::new("docker")
+            .stdin(Stdio::null())
+            .arg("compose")
+            .args(&bitcoin_cli)
+            .arg("getblockchaininfo")
+            .output()
+            .expect("failed to query the canonical chain tip");
+        if !output.status.success()
+            && str::from_utf8(&output.stderr)
+                .unwrap()
+                .contains(QUEUE_DEPTH_EXCEEDED)
+        {
+            println!("work queue depth exceeded");
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            continue;
+        }
+        assert!(
+            output.status.success(),
+            "failed to query the canonical chain tip: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        break output;
+    };
+    let chain_info: Value =
+        serde_json::from_slice(&output.stdout).expect("could not parse canonical chain info");
+    let expected_height = chain_info["blocks"]
+        .as_u64()
+        .and_then(|height| usize::try_from(height).ok())
+        .expect("canonical chain info is missing a valid block height");
+    let expected_hash = chain_info["bestblockhash"]
+        .as_str()
+        .expect("canonical chain info is missing a best block hash");
+
+    let mut pending = vec![];
     loop {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        let mut all_synced = true;
+        pending.clear();
 
-        let indexer_urls = vec![
-            #[cfg(feature = "electrum")]
-            ELECTRUM_URL,
-            #[cfg(feature = "esplora")]
-            "http://127.0.0.1:3003",
-        ];
+        let mut indexer_urls = vec![];
+        #[cfg(feature = "electrum")]
+        indexer_urls.extend([ELECTRUM_URL, ELECTRUM_2_URL, ELECTRUM_BLOCKSTREAM_URL]);
+        #[cfg(feature = "esplora")]
+        indexer_urls.push(ESPLORA_URL);
 
         for indexer_url in indexer_urls {
             let err_msg = format!("cannot get indexer {indexer_url}");
             let indexer = build_indexer(indexer_url).expect(&err_msg);
-            if indexer.block_hash(max_blockcount as usize).is_err() {
-                all_synced = false;
+            match indexer.block_hash(expected_height) {
+                Ok(hash) if hash == expected_hash => {}
+                Ok(hash) => pending.push(format!("{indexer_url}: block hash {hash}")),
+                Err(error) => pending.push(format!("{indexer_url}: {error}")),
             }
         }
 
-        if all_synced {
+        if pending.is_empty() {
             break;
         };
-        if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > 60.0 {
-            panic!("indexers not syncing with bitcoind");
+        if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > timeout_secs {
+            panic!(
+                "indexers did not reach canonical block {expected_height} ({expected_hash}) within \
+                 {timeout_secs} seconds: {}",
+                pending.join(", ")
+            );
         }
     }
 }

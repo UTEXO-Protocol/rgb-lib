@@ -60,3 +60,29 @@ jobs:
       - name: Test documentation
         run: |
           cargo test --doc
+
+  persistence_address_sanitizer:
+    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 1
+      RUSTFLAGS: >-
+        -Zsanitizer=address -Cdebuginfo=0 -Copt-level=0 -Ccodegen-units=256
+        -Clinker=clang -Clink-arg=-fuse-ld=lld
+      RUSTDOCFLAGS: -Zsanitizer=address
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+          components: rust-src
+      - name: Install sanitizer build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake pkg-config libssl-dev libsqlite3-dev
+      - name: Run RGB acceptance process-kill matrix under AddressSanitizer
+        run: >-
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu
+          --all-features --lib wallet::rust_only::tests::rgb_acceptance_os_kill_matrix
+          -- --exact --test-threads=1

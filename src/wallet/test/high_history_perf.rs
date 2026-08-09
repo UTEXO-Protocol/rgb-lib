@@ -15,7 +15,6 @@ use rgbstd::validation::{ResolveWitness, WitnessResolverError, WitnessStatus};
 
 use crate::utils::{OperationResolver, prefetch_consignment_witnesses};
 
-const LOCAL_ESPLORA_URL: &str = "http://127.0.0.1:3003";
 const LATENT_ESPLORA_URL: &str = "http://127.0.0.1:3010";
 const FAILING_ESPLORA_URL: &str = "http://127.0.0.1:3012";
 const DEFAULT_TRANSFER_COUNT: usize = 88;
@@ -277,9 +276,9 @@ fn replay_high_history_fixture() {
     let consignment = RgbTransfer::load_file(output_dir.join("high-history.rgbc")).unwrap();
     let final_txid = fs::read_to_string(output_dir.join("final-txid.txt")).unwrap();
     let indexer_url =
-        std::env::var("RGB_PERF_ESPLORA_URL").unwrap_or_else(|_| LOCAL_ESPLORA_URL.to_owned());
+        std::env::var("RGB_PERF_ESPLORA_URL").unwrap_or_else(|_| ESPLORA_URL.to_owned());
     assert!(
-        indexer_url == LOCAL_ESPLORA_URL
+        indexer_url == ESPLORA_URL
             || indexer_url == LATENT_ESPLORA_URL
             || indexer_url == FAILING_ESPLORA_URL
     );
@@ -379,7 +378,7 @@ fn save_high_history_asset_with_production_resolver() {
     let asset_id = consignment.contract_id().to_string();
     let final_txid = fs::read_to_string(output_dir.join("final-txid.txt")).unwrap();
     let indexer_url =
-        std::env::var("RGB_PERF_ESPLORA_URL").unwrap_or_else(|_| LOCAL_ESPLORA_URL.to_owned());
+        std::env::var("RGB_PERF_ESPLORA_URL").unwrap_or_else(|_| ESPLORA_URL.to_owned());
     let receiver = get_empty_party!(indexer_url.clone());
 
     let witness_id = RgbTxid::from_str(final_txid.trim()).unwrap();
@@ -444,7 +443,7 @@ fn prefetch_failure_does_not_mutate_wallet() {
     let consignment = RgbTransfer::load_file(output_dir.join("high-history.rgbc")).unwrap();
     let final_txid = fs::read_to_string(output_dir.join("final-txid.txt")).unwrap();
     let witness_id = RgbTxid::from_str(final_txid.trim()).unwrap();
-    let receiver = get_empty_party!(LOCAL_ESPLORA_URL.to_owned());
+    let receiver = get_empty_party!(ESPLORA_URL.to_owned());
     let failing_indexer = std::env::var("RGB_PERF_ESPLORA_URL").unwrap();
 
     let result = prefetch_consignment_witnesses(

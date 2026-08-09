@@ -137,18 +137,54 @@ fn success() {
         .post_consignment(
             PROXY_URL,
             txid.clone(),
-            consignment_path,
+            consignment_path.clone(),
             txid.clone(),
             Some(vout),
         )
         .unwrap();
 
-    // accept transfer
-    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
+    // recover and accept from the exact persisted consignment without another proxy fetch
+    let consignment_bytes = std::fs::read(&consignment_path).unwrap();
+    assert!(
+        !recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id.clone(), txid.clone())
+            .unwrap()
+    );
+    let prepared = recv_party
+        .wallet
+        .prepare_accept_transfer_from_consignment(
+            txid.clone(),
+            txid.clone(),
+            vout,
+            consignment_bytes,
+            blinding,
+        )
+        .unwrap();
+    assert_eq!(
+        prepared.consignment().contract_id().to_string(),
+        asset.asset_id
+    );
+    let pending = recv_party.wallet.pending_rgb_acceptance().unwrap().unwrap();
+    assert_eq!(pending.operation_id(), txid);
+    assert!(!pending.promoted());
+    prepared.promote().unwrap();
+    assert_matches!(
+        recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id.clone(), txid.clone()),
+        Err(Error::RgbOperationInProgress { operation_id }) if operation_id == txid
+    );
     recv_party
         .wallet
-        .accept_transfer(txid.clone(), vout, consignment_endpoint, blinding)
+        .resolve_pending_rgb_acceptance(&txid, RgbAcceptanceResolution::Finalize)
         .unwrap();
+    assert!(
+        recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id, txid)
+            .unwrap()
+    );
 
     // consume fascia
     party_send.wallet.consume_fascia(fascia, None).unwrap();
@@ -297,6 +333,7 @@ fn save_new_asset_success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 fn import_asset_contract_success() {
     initialize();
 

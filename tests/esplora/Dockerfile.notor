@@ -1,5 +1,7 @@
-FROM blockstream/esplora:latest
+# The arm64 image in this upstream manifest contains empty runit scripts.
+# Pin the verified amd64 image so the integration fixture is reproducible.
+FROM --platform=linux/amd64 blockstream/esplora@sha256:1db92e95b55cdea9e1fcb80f94dabff66f6aa370574a02af4baeecefd1d6c236
 
 # disable socat and tor services
 RUN sed -i '1G; 2i # disable socat and tor services\nrm /etc/service/socat /etc/service/tor' \
-    source/contrib/runit_boot.sh |head
+    source/contrib/runit_boot.sh

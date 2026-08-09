@@ -118,7 +118,7 @@ pub fn initialize() {
             println!("{output:?}");
             panic!("failed to start test services");
         }
-        wait_indexers_sync()
+        wait_indexers_sync(false)
     });
 }
 
@@ -133,33 +133,46 @@ pub fn restart_multisig_hub() {
         s!("-v"),
         service_name.to_string(),
     ]);
-    Command::new("docker")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
+    let output = Command::new("docker")
         .arg("compose")
         .args(&cmd)
         .output()
         .expect("failed to remove hub service");
-    Command::new("docker")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
+    assert!(
+        output.status.success(),
+        "failed to remove hub service: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new("docker")
         .arg("volume")
         .arg("rm")
         .arg("tests_hub")
         .output()
         .expect("failed to remove hub volume");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() || stderr.contains("No such volume"),
+        "failed to remove hub volume: {stderr}"
+    );
     let mut cmd = cmd_base.clone();
-    cmd.extend([s!("up"), s!("-d"), service_name.to_string()]);
-    Command::new("docker")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .stdout(Stdio::null())
+    cmd.extend([
+        s!("up"),
+        s!("-d"),
+        s!("--wait"),
+        s!("--wait-timeout"),
+        s!("90"),
+        service_name.to_string(),
+    ]);
+    let output = Command::new("docker")
         .arg("compose")
         .args(&cmd)
         .output()
         .expect("failed to start hub service");
+    assert!(
+        output.status.success(),
+        "failed to start healthy hub service: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // the get_*_wallet! macros can be called with no arguments to use defaults

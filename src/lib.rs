@@ -105,19 +105,20 @@ pub use rgbstd::validation::{ValidationConfig, ValidationError};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
     cmp::{Ordering, max, min},
-    collections::{BTreeSet, hash_map::DefaultHasher},
+    collections::{BTreeSet, VecDeque, hash_map::DefaultHasher},
     hash::Hasher,
     num::NonZeroU32,
+    sync::{Mutex, MutexGuard},
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},
     panic,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
