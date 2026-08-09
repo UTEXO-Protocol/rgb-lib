@@ -3259,7 +3259,7 @@ dependencies = [
 [[package]]
 name = "rgb-invoicing"
 version = "0.11.1-rc.10"
-source = "git+https://github.com/Jainakin/rgb-ops.git?branch=codex%2Frgb-witness-resolution-experiment#b9da59b04acc178f96f1cfda0606c6183a7a31cf"
+source = "git+https://github.com/Jainakin/rgb-ops.git?branch=hardik%2Frgb-witness-resolution-experiment#8010f0ceb1d6bd12546f5f3bab570be43a21bc19"
 dependencies = [
  "amplify",
  "baid64",
@@ -3344,7 +3344,7 @@ dependencies = [
 [[package]]
 name = "rgb-ops"
 version = "0.11.1-rc.10"
-source = "git+https://github.com/Jainakin/rgb-ops.git?branch=codex%2Frgb-witness-resolution-experiment#b9da59b04acc178f96f1cfda0606c6183a7a31cf"
+source = "git+https://github.com/Jainakin/rgb-ops.git?branch=hardik%2Frgb-witness-resolution-experiment#8010f0ceb1d6bd12546f5f3bab570be43a21bc19"
 dependencies = [
  "amplify",
  "baid64",

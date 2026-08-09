@@ -171,5 +171,5 @@ inherits = "release"
 debug = 1
 
 [patch.crates-io]
-rgb-invoicing = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "codex/rgb-witness-resolution-experiment" }
-rgb-ops = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "codex/rgb-witness-resolution-experiment" }
+rgb-invoicing = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "hardik/rgb-witness-resolution-experiment" }
+rgb-ops = { git = "https://github.com/Jainakin/rgb-ops.git", branch = "hardik/rgb-witness-resolution-experiment" }
