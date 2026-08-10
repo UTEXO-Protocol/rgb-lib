@@ -2087,13 +2087,31 @@ pub trait WalletOffline: WalletBackup {
     fn list_transfers_impl(
         &self,
         txn: &DbTxn,
-        asset_id: Option<String>,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
     ) -> Result<Vec<Transfer>, Error> {
         let db_data = txn.get_db_data(false)?;
+        let batch_transfer_idxs: Option<HashSet<i32>> = txid.map(|txid| {
+            db_data
+                .batch_transfers
+                .iter()
+                .filter(|b| b.txid.as_deref() == Some(txid.as_str()))
+                .map(|b| b.idx)
+                .collect()
+        });
         let asset_transfer_ids: Vec<i32> = db_data
             .asset_transfers
             .iter()
-            .filter(|t| t.asset_id == asset_id)
+            .filter(|t| match &asset_filter {
+                AssetFilter::AnyOrNone => true,
+                AssetFilter::None => t.asset_id.is_none(),
+                AssetFilter::Id(asset_id) => t.asset_id.as_ref() == Some(asset_id),
+            })
+            .filter(|t| {
+                batch_transfer_idxs
+                    .as_ref()
+                    .is_none_or(|idxs| idxs.contains(&t.batch_transfer_idx))
+            })
             .filter(|t| t.user_driven)
             .map(|t| t.idx)
             .collect();
@@ -2719,18 +2737,23 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
 
     /// List the RGB [`Transfer`]s known to the wallet.
     ///
-    /// When an `asset_id` is not provided, return transfers that are not connected to a specific
-    /// asset.
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, Error> {
+    /// `asset_filter` selects transfers by asset. When a `txid` is provided, restrict the result to the
+    /// transfers committed by the on-chain transaction with that ID; an unknown `txid` yields an
+    /// empty list.
+    fn list_transfers(
+        &self,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, Error> {
         info!(
             self.logger(),
-            "Listing transfers for asset '{:?}'...", asset_id
+            "Listing transfers for filter '{:?}' and txid '{:?}'...", asset_filter, txid
         );
         let txn = self.database().begin_transaction()?;
-        if let Some(asset_id) = &asset_id {
+        if let AssetFilter::Id(asset_id) = &asset_filter {
             txn.check_asset_exists(asset_id.clone())?;
         }
-        let transfers = self.list_transfers_impl(&txn, asset_id)?;
+        let transfers = self.list_transfers_impl(&txn, asset_filter, txid)?;
         txn.commit()?;
         info!(self.logger(), "List transfers completed");
         Ok(transfers)
