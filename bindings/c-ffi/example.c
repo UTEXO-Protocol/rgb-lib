@@ -180,7 +180,8 @@ int main() {
     CResultString fee_res = rgblib_get_fee_estimation(wlt, online, "7");
     printf("Fee estimation: %s\n", fee_res.inner);
 
-    CResultString transfers_res = rgblib_list_transfers(wlt, NULL);
+    CResultString transfers_res =
+        rgblib_list_transfers(wlt, "\"AnyOrNone\"", NULL);
     if (transfers_res.result == Err) {
         printf("ERR: %s\n", transfers_res.inner);
         return EXIT_FAILURE;
