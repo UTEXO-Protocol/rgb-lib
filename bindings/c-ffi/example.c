@@ -1,9 +1,26 @@
 #include "rgblib.h"
 #include <json-c/json.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
-int main() {
+/* Run this method and monitor memory usage to check there are no memory leaks
+ */
+void checkMemoryLeak() {
+    for (int i = 0; i < 50; i++) {
+        CResultString keys_res = rgblib_generate_keys("Regtest", "Taproot");
+        if (keys_res.result == Err) {
+            printf("ERR: %s\n", keys_res.inner);
+            return;
+        }
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc > 1 && strcmp(argv[1], "checkMemoryLeak") == 0) {
+        checkMemoryLeak();
+        return EXIT_SUCCESS;
+    }
     const char *bitcoin_network = "Regtest";
     const char *witness_version = "Taproot";
     CResultString keys_res =
