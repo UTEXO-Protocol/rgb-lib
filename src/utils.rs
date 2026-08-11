@@ -712,6 +712,7 @@ fn log_timestamp(io: &mut dyn io::Write) -> io::Result<()> {
     )
 }
 
+#[cfg(not(feature = "no_file_log"))]
 pub(crate) fn setup_logger<P: AsRef<Path>>(
     log_path: P,
     log_name: Option<&str>,
@@ -724,6 +725,27 @@ pub(crate) fn setup_logger<P: AsRef<Path>>(
         .open(log_filepath)?;
 
     let decorator = PlainDecorator::new(file);
+    let drain = FullFormat::new(decorator)
+        .use_custom_timestamp(log_timestamp)
+        .use_file_location();
+    let (drain, async_guard) = slog_async::Async::new(drain.build().fuse()).build_with_guard();
+    let logger = Logger::root(drain.fuse(), o!());
+
+    Ok((logger, async_guard))
+}
+
+/// Log setup with the `no_file_log` feature enabled: no log file is created, records go to stdout.
+#[cfg(feature = "no_file_log")]
+pub(crate) fn setup_logger<P: AsRef<Path>>(
+    _log_path: P,
+    _log_name: Option<&str>,
+) -> Result<(Logger, AsyncGuard), Error> {
+    setup_stdout_logger()
+}
+
+#[cfg(feature = "no_file_log")]
+pub(crate) fn setup_stdout_logger() -> Result<(Logger, AsyncGuard), Error> {
+    let decorator = PlainDecorator::new(std::io::stdout());
     let drain = FullFormat::new(decorator)
         .use_custom_timestamp(log_timestamp)
         .use_file_location();

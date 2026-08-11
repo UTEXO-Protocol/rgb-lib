@@ -320,12 +320,16 @@ fn fail() {
     let err = result.err().unwrap();
     assert!(matches!(err, Error::IO { details: m } if m.starts_with("Permission denied")));
     // try to setup logger, expecting it to receive a permission denied error
-    let result = std::panic::catch_unwind(|| setup_logger(non_writable_path, Some("log")));
-    assert!(result.is_ok());
-    let res = result.unwrap();
-    assert!(res.is_err());
-    let err = res.err().unwrap();
-    assert!(matches!(err, Error::IO { details: m } if m.starts_with("Permission denied")));
+    // (with no_file_log there's no log file, so no error can happen)
+    #[cfg(not(feature = "no_file_log"))]
+    {
+        let result = std::panic::catch_unwind(|| setup_logger(non_writable_path, Some("log")));
+        assert!(result.is_ok());
+        let res = result.unwrap();
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert!(matches!(err, Error::IO { details: m } if m.starts_with("Permission denied")));
+    }
     // remove non writable directory
     fs::remove_dir(non_writable_path).unwrap();
 }

@@ -3059,6 +3059,7 @@ dependencies = [
  "generic-array",
  "hex",
  "hkdf",
+ "log",
  "rand 0.10.1",
  "reqwest",
  "rgb-invoicing",
