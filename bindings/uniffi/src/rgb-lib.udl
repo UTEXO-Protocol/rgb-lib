@@ -357,8 +357,8 @@ interface Invoice {
 
 [Enum]
 interface AssetFilter {
-  Any();
-  NoAsset();
+  AnyOrNone();
+  None();
   Id(string asset_id);
 };
 
@@ -1033,7 +1033,7 @@ interface Wallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(AssetFilter filter, string? txid);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(
@@ -1203,7 +1203,7 @@ interface MultisigWallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(AssetFilter filter, string? txid);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(

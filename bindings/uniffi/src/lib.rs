@@ -119,15 +119,15 @@ impl From<Assignment> for RgbLibAssignment {
     }
 }
 pub enum AssetFilter {
-    Any,
-    NoAsset,
+    AnyOrNone,
+    None,
     Id { asset_id: String },
 }
 impl From<AssetFilter> for RgbLibAssetFilter {
     fn from(orig: AssetFilter) -> Self {
         match orig {
-            AssetFilter::Any => RgbLibAssetFilter::Any,
-            AssetFilter::NoAsset => RgbLibAssetFilter::NoAsset,
+            AssetFilter::AnyOrNone => RgbLibAssetFilter::AnyOrNone,
+            AssetFilter::None => RgbLibAssetFilter::None,
             AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
         }
     }
@@ -1399,12 +1399,12 @@ impl Wallet {
 
     fn list_transfers(
         &self,
-        filter: AssetFilter,
+        asset_filter: AssetFilter,
         txid: Option<String>,
     ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(filter.into(), txid)?
+            .list_transfers(asset_filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())
@@ -1889,12 +1889,12 @@ impl MultisigWallet {
 
     fn list_transfers(
         &self,
-        filter: AssetFilter,
+        asset_filter: AssetFilter,
         txid: Option<String>,
     ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(filter.into(), txid)?
+            .list_transfers(asset_filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())

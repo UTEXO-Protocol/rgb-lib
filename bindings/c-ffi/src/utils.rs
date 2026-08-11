@@ -733,13 +733,13 @@ pub(crate) fn list_transactions(
 
 pub(crate) fn list_transfers(
     wallet: &COpaqueStruct,
-    filter: *const c_char,
+    asset_filter: *const c_char,
     txid_opt: *const c_char,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
-    let filter: AssetFilter = serde_json::from_str(&ptr_to_string(filter))?;
+    let asset_filter: AssetFilter = serde_json::from_str(&ptr_to_string(asset_filter))?;
     let txid = convert_optional_string(txid_opt);
-    let res = wallet.list_transfers(filter, txid)?;
+    let res = wallet.list_transfers(asset_filter, txid)?;
     Ok(serde_json::to_string(&res)?)
 }
 

@@ -349,7 +349,7 @@ fn proxy_recipient_id_unique_per_invoice_under_reuse() {
     }
 
     // Transfers expose the same per-invoice IDs.
-    let transfers = wallet.list_transfers(AssetFilter::NoAsset, None).unwrap();
+    let transfers = wallet.list_transfers(AssetFilter::None, None).unwrap();
     for (inv, data) in [(&inv1, &data1), (&inv2, &data2)] {
         let transfer = transfers
             .iter()
@@ -400,7 +400,7 @@ fn proxy_recipient_id_matches_recipient_id_without_nonce() {
 
         let transfers = party
             .wallet
-            .list_transfers(AssetFilter::NoAsset, None)
+            .list_transfers(AssetFilter::None, None)
             .unwrap();
         let transfer = transfers
             .iter()
