@@ -13,6 +13,7 @@ void checkMemoryLeak() {
             printf("ERR: %s\n", keys_res.inner);
             return;
         }
+        free_string(keys_res.inner);
     }
 }
 

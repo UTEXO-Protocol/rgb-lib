@@ -45,6 +45,17 @@ pub struct CResultString {
     inner: *mut c_char,
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn free_string(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = CString::from_raw(ptr);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn free_wallet(obj: COpaqueStruct) {
     unsafe {
