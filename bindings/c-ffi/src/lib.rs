@@ -189,6 +189,26 @@ pub extern "C" fn rgblib_delete_transfers(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_drain_to_begin(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    address: *const c_char,
+    fee_rate: *const c_char,
+    dry_run: bool,
+) -> CResultString {
+    drain_to_begin(wallet, online, address, fee_rate, dry_run).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_drain_to_end(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    drain_to_end(wallet, online, signed_psbt).into()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_fail_transfers(
     wallet: &COpaqueStruct,
     online: *const c_char,
@@ -287,6 +307,37 @@ pub extern "C" fn rgblib_inflate(
         min_confirmations,
     )
     .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_inflate_begin(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    asset_id: *const c_char,
+    inflation_amounts: *const c_char,
+    fee_rate: *const c_char,
+    min_confirmations: *const c_char,
+    dry_run: bool,
+) -> CResultString {
+    inflate_begin(
+        wallet,
+        online,
+        asset_id,
+        inflation_amounts,
+        fee_rate,
+        min_confirmations,
+        dry_run,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_inflate_end(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    inflate_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]
@@ -496,6 +547,31 @@ pub extern "C" fn rgblib_send_btc(
     skip_sync: bool,
 ) -> CResultString {
     send_btc(wallet, online, address, amount, fee_rate, skip_sync).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_begin(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    address: *const c_char,
+    amount: *const c_char,
+    fee_rate: *const c_char,
+    skip_sync: bool,
+    dry_run: bool,
+) -> CResultString {
+    send_btc_begin(
+        wallet, online, address, amount, fee_rate, skip_sync, dry_run,
+    )
+    .into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_send_btc_end(
+    wallet: &COpaqueStruct,
+    online: *const c_char,
+    signed_psbt: *const c_char,
+) -> CResultString {
+    send_btc_end(wallet, online, signed_psbt).into()
 }
 
 #[unsafe(no_mangle)]
