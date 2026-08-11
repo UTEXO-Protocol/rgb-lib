@@ -453,7 +453,7 @@ pub(crate) trait OfflineSigParty {
 
     fn get_pending_blind_transfers(&self) -> Vec<Transfer> {
         self.wlt()
-            .list_transfers(AssetFilter::NoAsset, None)
+            .list_transfers(AssetFilter::None, None)
             .unwrap()
             .into_iter()
             .filter(|t| t.status.pending() && t.kind == TransferKind::ReceiveBlind)
@@ -560,7 +560,7 @@ pub(crate) trait OfflineSigParty {
     fn list_transfers_result(&self, asset_id: Option<&str>) -> Result<Vec<Transfer>, Error> {
         let filter = match asset_id {
             Some(a) => AssetFilter::Id(a.to_string()),
-            None => AssetFilter::NoAsset,
+            None => AssetFilter::None,
         };
         self.wlt().list_transfers(filter, None)
     }

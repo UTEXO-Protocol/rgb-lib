@@ -447,10 +447,10 @@ pub extern "C" fn rgblib_list_transactions(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_list_transfers(
     wallet: &COpaqueStruct,
-    filter: *const c_char,
+    asset_filter: *const c_char,
     txid_opt: *const c_char,
 ) -> CResultString {
-    list_transfers(wallet, filter, txid_opt).into()
+    list_transfers(wallet, asset_filter, txid_opt).into()
 }
 
 #[unsafe(no_mangle)]

@@ -1332,15 +1332,15 @@ pub struct TransferData {
     pub(crate) psbt_path: Option<String>,
 }
 
-/// An asset filter for listing transfers.
+/// An asset filter.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum AssetFilter {
-    /// Match transfers of any asset, including those not connected to one
-    Any,
-    /// Match only transfers not connected to a specific asset
-    NoAsset,
-    /// Match only transfers of the asset with the given ID
+    /// Match any or no asset
+    AnyOrNone,
+    /// Match no asset
+    None,
+    /// Match the asset with the given ID
     Id(String),
 }
 

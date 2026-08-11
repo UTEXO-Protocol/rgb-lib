@@ -210,7 +210,7 @@ fn filters() {
     assert!(!txid.is_empty());
 
     // Any + txid: the tx's transfers across all assets
-    let by_txid = party.list_transfers_filtered(AssetFilter::Any, Some(&txid));
+    let by_txid = party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
     assert_eq!(by_txid.len(), 2);
     assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
 
@@ -227,11 +227,11 @@ fn filters() {
     assert_eq!(vec![nia_by_txid[0].idx], expected);
 
     // Any + no txid: the whole history (2 issuances + 2 sends)
-    let all = party.list_transfers_filtered(AssetFilter::Any, None);
+    let all = party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
     assert_eq!(all.len(), 4);
 
-    // NoAsset: receiver's pending blind receives not yet tied to an asset
-    let pending = rcv_party.list_transfers_filtered(AssetFilter::NoAsset, None);
+    // None: receiver's pending blind receives not yet tied to an asset
+    let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
     assert_eq!(pending.len(), 2);
 
     // settle the batch so the change is spendable again
@@ -263,7 +263,7 @@ fn filters() {
     let unknown = "0000000000000000000000000000000000000000000000000000000000000000";
     assert!(
         party
-            .list_transfers_filtered(AssetFilter::Any, Some(unknown))
+            .list_transfers_filtered(AssetFilter::AnyOrNone, Some(unknown))
             .is_empty()
     );
 }
