@@ -3,6 +3,8 @@
 //! This module defines additional utility methods that are not exposed via FFI.
 
 use super::*;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use crate::utils::{WitnessBatchResolver, resolve_consignment_witness_batch};
 use rgbstd::Operation as _;
 
 /// RGB asset-specific information to color a transaction
@@ -531,16 +533,20 @@ impl Wallet {
             "Got consignment for asset with {} schema", asset_schema
         );
 
-        let mut runtime = self.rgb_runtime()?;
-
-        let graph_seal = GraphSeal::with_blinded_vout(vout, blinding);
-        runtime.store_secret_seal(graph_seal)?;
-
-        let resolver = OffchainResolver {
+        let fallback_resolver = OffchainResolver {
             witness_id,
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
+        let online_data = self.online_data().as_ref().unwrap();
+        let resolved_witnesses =
+            resolve_consignment_witness_batch(&online_data.indexer, &consignment, witness_id)?;
+        let resolver = WitnessBatchResolver::new(&fallback_resolver, resolved_witnesses);
+
+        let mut runtime = self.rgb_runtime()?;
+
+        let graph_seal = GraphSeal::with_blinded_vout(vout, blinding);
+        runtime.store_secret_seal(graph_seal)?;
 
         debug!(self.logger(), "Validating consignment...");
         let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
@@ -568,7 +574,7 @@ impl Wallet {
 
         let valid_contract = valid_consignment.clone().into_valid_contract();
         runtime
-            .import_contract(valid_contract, self.blockchain_resolver())
+            .import_contract(valid_contract, &resolver)
             .expect("failure importing validated contract");
 
         let received_rgb_assignments =
@@ -682,11 +688,15 @@ impl Wallet {
         let contract_id = consignment.contract_id();
 
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
-        let resolver = OffchainResolver {
+        let fallback_resolver = OffchainResolver {
             witness_id,
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
+        let online_data = self.online_data().as_ref().unwrap();
+        let resolved_witnesses =
+            resolve_consignment_witness_batch(&online_data.indexer, &consignment, witness_id)?;
+        let resolver = WitnessBatchResolver::new(&fallback_resolver, resolved_witnesses);
         let asset_schema: AssetSchema = consignment.schema_id().try_into()?;
         let trusted_typesystem = asset_schema.types();
         let validation_config = ValidationConfig {

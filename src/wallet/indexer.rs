@@ -48,7 +48,7 @@ impl Indexer {
             Indexer::Electrum(client) => {
                 let estimate = client
                     .inner
-                    .estimate_fee(blocks as usize)
+                    .estimate_fee(blocks as usize, None)
                     .map_err(IndexerError::from)?; // in BTC/kB
                 if estimate == -1.0 {
                     return Err(Error::CannotEstimateFees);

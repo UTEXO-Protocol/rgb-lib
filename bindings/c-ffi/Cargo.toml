@@ -30,6 +30,14 @@ cbindgen = "0.29.0"
 
 [workspace]
 
+[patch.crates-io]
+rgb-aluvm = { git = "https://github.com/rgb-protocol/rgb-aluvm", rev = "536fb55" }
+rgb-consensus = { git = "https://github.com/rgb-protocol/rgb-consensus", rev = "768249aa" }
+rgb-invoicing = { git = "https://github.com/Jainakin/rgb-ops", rev = "80a2608f95fd8784441efa38cf8085d607480057" }
+rgb-ops = { git = "https://github.com/Jainakin/rgb-ops", rev = "80a2608f95fd8784441efa38cf8085d607480057" }
+rgb-strict-encoding = { git = "https://github.com/rgb-protocol/rgb-strict-encoding", rev = "7feb0f2" }
+rgb-strict-types = { git = "https://github.com/rgb-protocol/rgb-strict-types", rev = "8dfd921" }
+
 [features]
 default = []
 all = ["camel_case", "vss"]

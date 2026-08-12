@@ -25,7 +25,7 @@ bdk_wallet = { version = "=3.0.0", default-features = false, features = [
     "keys-bip39",
     "std",
 ] }
-bdk_electrum = { version = "0.23.2", optional = true, default-features = false, features = [
+bdk_electrum = { version = "0.24.0", optional = true, default-features = false, features = [
     "use-rustls",
 ] }
 bdk_esplora = { version = "0.22.2", optional = true, default-features = false, features = [
@@ -92,16 +92,16 @@ sha2 = { version = "0.10", default-features = false, optional = true }
 
 # RGB-related deps
 amplify = { version = "=4.8.1", default-features = false }
-rgb-invoicing = { version = "=0.11.1-rc.10", default-features = false }
-rgb-psbt-utils = { version = "=0.11.1-rc.10", default-features = false }
-rgb-schemas = { version = "=0.11.1-rc.10", default-features = false }
-rgb-ops = { version = "=0.11.1-rc.10", default-features = false, features = [
+rgb-invoicing = { version = "=0.11.1-rc.11", default-features = false }
+rgb-psbt-utils = { version = "=0.11.1-rc.11", default-features = false }
+rgb-schemas = { version = "=0.11.1-rc.11", default-features = false }
+rgb-ops = { version = "=0.11.1-rc.11", default-features = false, features = [
     "serde",
 ] }
-rgb-strict-encoding = { version = "=1.0.1", default-features = false, features = [
+rgb-strict-encoding = { version = "=1.0.2", default-features = false, features = [
     "bitcoin",
 ] }
-rgb-strict-types = { version = "=1.0.1", default-features = false }
+rgb-strict-types = { version = "=1.0.2", default-features = false }
 
 [dev-dependencies]
 biscuit-auth = { version = "6.0.0", default-features = false, features = [
@@ -147,6 +147,14 @@ vss = ["vss-client", "hkdf", "dep:sha2"]
 mpc = []
 dfns = ["mpc", "dep:p256", "dep:ed25519-dalek", "dep:sha2"]
 camel_case = ["default"]
+
+[patch.crates-io]
+rgb-aluvm = { git = "https://github.com/rgb-protocol/rgb-aluvm", rev = "536fb55" }
+rgb-consensus = { git = "https://github.com/rgb-protocol/rgb-consensus", rev = "768249aa" }
+rgb-invoicing = { git = "https://github.com/Jainakin/rgb-ops", rev = "80a2608f95fd8784441efa38cf8085d607480057" }
+rgb-ops = { git = "https://github.com/Jainakin/rgb-ops", rev = "80a2608f95fd8784441efa38cf8085d607480057" }
+rgb-strict-encoding = { git = "https://github.com/rgb-protocol/rgb-strict-encoding", rev = "7feb0f2" }
+rgb-strict-types = { git = "https://github.com/rgb-protocol/rgb-strict-types", rev = "8dfd921" }
 
 [[example]]
 name = "vss_example"
