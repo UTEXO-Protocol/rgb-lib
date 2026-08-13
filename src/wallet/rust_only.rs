@@ -574,7 +574,7 @@ impl Wallet {
 
         let valid_contract = valid_consignment.clone().into_valid_contract();
         runtime
-            .import_contract(valid_contract, &resolver)
+            .import_contract(valid_contract, self.blockchain_resolver())
             .expect("failure importing validated contract");
 
         let received_rgb_assignments =

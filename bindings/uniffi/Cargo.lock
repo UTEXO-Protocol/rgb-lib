@@ -3076,7 +3076,7 @@ dependencies = [
 [[package]]
 name = "rgb-invoicing"
 version = "0.11.1-rc.11"
-source = "git+https://github.com/Jainakin/rgb-ops?rev=80a2608f95fd8784441efa38cf8085d607480057#80a2608f95fd8784441efa38cf8085d607480057"
+source = "git+https://github.com/Jainakin/rgb-ops?rev=46c7aacb0cfe46e145133393989a38493ecc2f15#46c7aacb0cfe46e145133393989a38493ecc2f15"
 dependencies = [
  "amplify",
  "baid64",
@@ -3155,7 +3155,7 @@ dependencies = [
 [[package]]
 name = "rgb-ops"
 version = "0.11.1-rc.11"
-source = "git+https://github.com/Jainakin/rgb-ops?rev=80a2608f95fd8784441efa38cf8085d607480057#80a2608f95fd8784441efa38cf8085d607480057"
+source = "git+https://github.com/Jainakin/rgb-ops?rev=46c7aacb0cfe46e145133393989a38493ecc2f15#46c7aacb0cfe46e145133393989a38493ecc2f15"
 dependencies = [
  "amplify",
  "baid64",
