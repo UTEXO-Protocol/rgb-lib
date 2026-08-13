@@ -1,5 +1,6 @@
-FROM blockstream/esplora:latest
+ARG TARGETARCH
+FROM blockstream/esplora:latest-${TARGETARCH}
 
 # disable socat and tor services
-RUN sed -i '1G; 2i # disable socat and tor services\nrm /etc/service/socat /etc/service/tor' \
-    source/contrib/runit_boot.sh |head
+RUN sed -i '2i rm -rf /etc/service/socat /etc/service/tor' \
+    source/contrib/runit_boot.sh
