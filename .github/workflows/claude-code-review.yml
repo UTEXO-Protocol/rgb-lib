@@ -14,8 +14,10 @@ jobs:
   claude-review:
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event.action == 'review_requested' && github.event.requested_reviewer.login == 'claude') ||
-      (github.event.action == 'synchronize' && contains(github.event.pull_request.requested_reviewers.*.login, 'claude'))
+      (github.event.action == 'review_requested' &&
+       github.event.requested_team.slug == 'ai-review-claude') ||
+      (github.event.action == 'synchronize' &&
+       contains(github.event.pull_request.requested_teams.*.slug, 'ai-review-claude'))
     runs-on: ubuntu-latest
     concurrency:
       group: ai-review-claude-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
