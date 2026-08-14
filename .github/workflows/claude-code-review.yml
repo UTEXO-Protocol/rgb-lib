@@ -40,7 +40,7 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: false
-          prompt: |
+          direct_prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
 
