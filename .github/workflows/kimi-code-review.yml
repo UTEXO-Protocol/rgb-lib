@@ -37,4 +37,3 @@ jobs:
           model: kimi-k2.5
           language: en-US
           review_level: normal
-          auto_review: false
