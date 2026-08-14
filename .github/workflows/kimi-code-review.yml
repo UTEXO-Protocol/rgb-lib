@@ -1,0 +1,39 @@
+name: AI Review - Kimi
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (for manual reruns)"
+        required: true
+        type: string
+
+jobs:
+  kimi-review:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ai-review/kimi')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-kimi-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Kimi Code Review
+        uses: xiaoju111a/kimi-actions@main
+        with:
+          kimi_api_key: ${{ secrets.KIMI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          model: kimi-k2.5
+          language: en-US
+          review_level: normal
+          auto_review: false
