@@ -39,6 +39,7 @@ jobs:
         uses: UTEXO-Protocol/kimi-actions@main
         with:
           kimi_api_key: ${{ secrets.KIMI_API_KEY }}
+          kimi_base_url: https://api.moonshot.ai/v1
           github_token: ${{ secrets.GITHUB_TOKEN }}
           model: kimi-k2.5
           language: en-US
