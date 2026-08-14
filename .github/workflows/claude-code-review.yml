@@ -2,7 +2,7 @@ name: AI Review - Claude
 
 on:
   pull_request:
-    types: [labeled, synchronize]
+    types: [review_requested, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -12,7 +12,10 @@ on:
 
 jobs:
   claude-review:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ai-review/claude') || contains(github.event.pull_request.labels.*.name, 'claude-review')
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'review_requested' && github.event.requested_reviewer.login == 'claude') ||
+      (github.event.action == 'synchronize' && contains(github.event.pull_request.requested_reviewers.*.login, 'claude'))
     runs-on: ubuntu-latest
     concurrency:
       group: ai-review-claude-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
