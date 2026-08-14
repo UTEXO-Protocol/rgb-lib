@@ -757,9 +757,27 @@ pub struct RgbRuntime {
     stock: Stock,
     /// The wallet directory, where the lockfile for the runtime is to be held
     wallet_dir: PathBuf,
+    /// Whether dropping the runtime should persist the in-memory stock.
+    persist_on_drop: bool,
 }
 
 impl RgbRuntime {
+    /// Opt out of the legacy drop-time persistence path for a mutation whose errors must be
+    /// observable by the caller.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn require_explicit_persistence(&mut self) {
+        self.persist_on_drop = false;
+    }
+
+    /// Persist the RGB stock and propagate storage failures to the caller.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn persist(&mut self) -> Result<(), Error> {
+        self.persist_on_drop = false;
+        self.stock.store().map_err(|error| Error::IO {
+            details: error.to_string(),
+        })
+    }
+
     pub(crate) fn export_contract(
         &self,
         contract_id: ContractId,
@@ -997,7 +1015,9 @@ impl RgbRuntime {
 
 impl Drop for RgbRuntime {
     fn drop(&mut self) {
-        self.stock.store().expect("unable to save stock");
+        if self.persist_on_drop {
+            self.stock.store().expect("unable to save stock");
+        }
         fs::remove_file(self.wallet_dir.join(RGB_RUNTIME_LOCK_FILE))
             .expect("should be able to drop lockfile")
     }
@@ -1056,6 +1076,7 @@ pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRunti
     Ok(RgbRuntime {
         stock,
         wallet_dir: wallet_dir.as_ref().to_path_buf(),
+        persist_on_drop: true,
     })
 }
 
