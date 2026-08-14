@@ -14,3 +14,4 @@ Use this checklist to verify AI review workflows after setup:
 10. Confirm `ANTHROPIC_API_KEY` auth succeeds without 401 errors.
 11. Confirm Claude posts review output directly into the PR discussion.
 # Test Claude team reviewer trigger
+# Test Kimi + Claude AI review
