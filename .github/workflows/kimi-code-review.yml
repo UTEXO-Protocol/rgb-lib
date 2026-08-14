@@ -12,7 +12,10 @@ on:
 
 jobs:
   kimi-review:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ai-review/kimi')
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ai-review/kimi') ||
+      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'ai-review/kimi'))
     runs-on: ubuntu-latest
     concurrency:
       group: ai-review-kimi-pr-${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || github.event.pull_request.number }}
