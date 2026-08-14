@@ -406,11 +406,9 @@ fn import_asset_contract_repairs_partial_persistence() {
     assert!(!repaired.already_imported);
 
     {
-        let mut runtime = database_only_recipient.wallet.rgb_runtime().unwrap();
-        runtime.require_explicit_persistence();
-        runtime
-            .import_contract(valid_contract.clone(), &DumbResolver)
-            .unwrap();
+        // Read metadata from the issuer's stock so the recipient's stock remains untouched. This
+        // deterministically models a database commit that completed before the stock write.
+        let runtime = issuer.wallet.rgb_runtime().unwrap();
         let txn = database_only_recipient
             .wallet
             .database()
