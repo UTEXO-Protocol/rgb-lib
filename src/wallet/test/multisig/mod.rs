@@ -1399,3 +1399,215 @@ fn offline() {
     let result = wallet.witness_receive(fake_online, None, Assignment::Any, None, vec![], 0);
     assert_matches!(result, Err(Error::Offline));
 }
+
+/// Reproducer: replaying hub history must survive operation data recorded by
+/// an older library version.
+///
+/// The "already broadcast" completion arm rebuilds the transfer directory from
+/// the hub's `OperationData` file and resolves the change UTXO from it. When
+/// the file carries `btc_change` (current format) a missing local TXO row is
+/// tolerated - a placeholder row is inserted. When it carries only
+/// `change_utxo_outpoint` (the older format, which the hub retains forever)
+/// the same situation hits `.expect("should exist")` in
+/// `online.rs` and panics, killing the embedding process. A cosigner that
+/// fell behind - or was restored from a backup - replays history through its
+/// own designed catch-up path and dies on the first old-format operation.
+///
+/// The test drives exactly that: a cosigner that never synced catches up over
+/// a completed send whose cached operation data has the legacy shape.
+#[cfg(feature = "electrum")]
+#[test]
+#[serial]
+fn sync_with_hub_replay_survives_legacy_transfer_data() {
+    initialize();
+    op_counter_reset();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let threshold_colored = 2;
+    let threshold_vanilla = 2;
+    let random_str: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect();
+
+    // multisig wallet keys
+    let wlt_1_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_2_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_3_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+
+    // cosigners
+    let cosigners = vec![
+        Cosigner::from_keys(&wlt_1_keys, None),
+        Cosigner::from_keys(&wlt_2_keys, None),
+        Cosigner::from_keys(&wlt_3_keys, None),
+    ];
+    let cosigner_xpubs: Vec<String> = cosigners
+        .iter()
+        .map(|c| c.account_xpub_colored.clone())
+        .collect();
+
+    // biscuit token setup
+    let root_keypair = KeyPair::new();
+    let root_public_key = root_keypair.public();
+    let mut cosigner_tokens = vec![];
+    for cosigner_xpub in &cosigner_xpubs {
+        cosigner_tokens.push(create_token(
+            &root_keypair,
+            Role::Cosigner(cosigner_xpub.clone()),
+            None,
+        ));
+    }
+
+    // hub setup
+    write_hub_config(
+        &cosigner_xpubs,
+        threshold_colored,
+        threshold_vanilla,
+        root_public_key.to_bytes_hex(),
+        None,
+    );
+    restart_multisig_hub();
+
+    // multisig wallets
+    let multisig_wlt_keys =
+        MultisigKeys::new(cosigners.clone(), threshold_colored, threshold_vanilla);
+    let mut wlt_1_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_1"));
+    let wlt_1_multisig_online = ms_go_online(&mut wlt_1_multisig, &cosigner_tokens[0]);
+    let mut wlt_2_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_2"));
+    let wlt_2_multisig_online = ms_go_online(&mut wlt_2_multisig, &cosigner_tokens[1]);
+    let mut wlt_3_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_3"));
+    let wlt_3_multisig_online = ms_go_online(&mut wlt_3_multisig, &cosigner_tokens[2]);
+
+    // singlesig wallets (for signing)
+    let wlt_1_singlesig = get_test_wallet_with_keys(&wlt_1_keys);
+    let wlt_2_singlesig = get_test_wallet_with_keys(&wlt_2_keys);
+    let wlt_3_singlesig = get_test_wallet_with_keys(&wlt_3_keys);
+
+    // multisig parties
+    let mut wlt_1 = ms_party!(
+        &wlt_1_singlesig,
+        &mut wlt_1_multisig,
+        wlt_1_multisig_online,
+        &cosigner_xpubs[0]
+    );
+    let mut wlt_2 = ms_party!(
+        &wlt_2_singlesig,
+        &mut wlt_2_multisig,
+        wlt_2_multisig_online,
+        &cosigner_xpubs[1]
+    );
+    let mut wlt_3 = ms_party!(
+        &wlt_3_singlesig,
+        &mut wlt_3_multisig,
+        wlt_3_multisig_online,
+        &cosigner_xpubs[2]
+    );
+
+    // fund wallet 1
+    send_sats_to_address(wlt_1.get_address(), Some(50_000));
+    mine(false);
+
+    // wlt_3 stays behind for the whole flow - the state of a cosigner that
+    // fell behind, or of one whose wallet was rebuilt and has to catch up.
+    println!("\n=== create UTXOs (wlt_1 + wlt_2) ===");
+    let op_init = wlt_1.create_utxos_init(false, Some(3), Some(3000), FEE_RATE);
+    operation_complete::<CreateUtxosHandler>(
+        op_init.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [],
+        true,
+    );
+    mine(false);
+
+    println!("\n=== issue NIA (wlt_1 + wlt_2) ===");
+    let IssuedAsset::Nia(nia_asset) = issue_asset(
+        &mut wlt_1,
+        &mut [&mut wlt_2],
+        AssetSchema::Nia,
+        Some(&[600]),
+        None,
+    ) else {
+        unreachable!()
+    };
+
+    println!("\n=== send NIA to a singlesig receiver (wlt_1 + wlt_2) ===");
+    let mut singlesig_wlt = get_funded_party!();
+    let rcv_data = singlesig_wlt.blind_receive();
+    let recipient_map = HashMap::from([(
+        nia_asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(100),
+            recipient_id: rcv_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let send_op = wlt_1.send_init(recipient_map);
+    operation_complete::<SendRgbHandler>(
+        send_op.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [],
+        true,
+    );
+    settle_transfer(
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [&mut singlesig_wlt],
+        Some(&nia_asset.asset_id),
+        None,
+        Some(&send_op.psbt),
+        true,
+    );
+
+    println!("\n=== age the send's operation data to the legacy shape ===");
+    // The hub keeps operation files forever, so a wallet catching up replays
+    // whatever format they were written in. Simulate a file written before
+    // `btc_change` existed: only `change_utxo_outpoint` names the change.
+    let (op, files) = wlt_1.get_op_and_files(send_op.operation_idx);
+    let data_file = files
+        .iter()
+        .find(|f| matches!(f.r#type, FileType::OperationData))
+        .unwrap();
+    let mut info: InfoBatchTransfer =
+        serde_json::from_reader(fs::File::open(&data_file.filepath).unwrap()).unwrap();
+    if let Some(btc_change) = info.btc_change.take() {
+        let txid = Psbt::from_str(&send_op.psbt).unwrap().get_txid().to_string();
+        info.change_utxo_outpoint = Some(Outpoint {
+            txid,
+            vout: btc_change.vout,
+        });
+    }
+    assert!(
+        info.change_utxo_outpoint.is_some(),
+        "legacy shape needs change_utxo_outpoint"
+    );
+    let file_id = op
+        .files
+        .iter()
+        .find(|m| matches!(m.r#type, FileType::OperationData))
+        .unwrap()
+        .file_id
+        .clone();
+    // Plant it in wlt_3's cache: get_or_download_file consults the cache
+    // before the hub, so the replay reads the legacy-format copy.
+    let cache_dir = wlt_3.multisig.get_wallet_dir().join("hub_ops");
+    fs::create_dir_all(&cache_dir).unwrap();
+    fs::write(
+        cache_dir.join(&file_id),
+        serde_json::to_string(&info).unwrap(),
+    )
+    .unwrap();
+
+    println!("\n=== wlt_3 catches up over the whole history ===");
+    // This is the library's own recovery path; it must complete. Today it
+    // panics at online.rs `.expect("should exist")` on the legacy-format send.
+    wlt_3.sync_to_head();
+
+    check_asset_balance(
+        &[&wlt_1, &wlt_2, &wlt_3],
+        &nia_asset.asset_id,
+        (500, 500, 500),
+    );
+}
