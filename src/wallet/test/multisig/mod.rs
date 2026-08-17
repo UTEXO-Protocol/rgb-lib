@@ -1400,25 +1400,24 @@ fn offline() {
     assert_matches!(result, Err(Error::Offline));
 }
 
-/// Reproducer: replaying hub history must survive operation data recorded by
-/// an older library version.
+/// Reproducer: replaying hub history must survive an inflation whose RGB
+/// change rode an existing UTXO.
 ///
-/// The "already broadcast" completion arm rebuilds the transfer directory from
-/// the hub's `OperationData` file and resolves the change UTXO from it. When
-/// the file carries `btc_change` (current format) a missing local TXO row is
-/// tolerated - a placeholder row is inserted. When it carries only
-/// `change_utxo_outpoint` (the older format, which the hub retains forever)
-/// the same situation hits `.expect("should exist")` in
-/// `online.rs` and panics, killing the embedding process. A cosigner that
-/// fell behind - or was restored from a backup - replays history through its
-/// own designed catch-up path and dies on the first old-format operation.
-///
-/// The test drives exactly that: a cosigner that never synced catches up over
-/// a completed send whose cached operation data has the legacy shape.
+/// An inflation assigns its inflation-rights change to an EXISTING colored
+/// UTXO, so its operation data carries `change_utxo_outpoint` (an outpoint of
+/// an earlier transaction) rather than `btc_change` (a vout of this one). The
+/// "already broadcast" completion arm resolves that outpoint against the
+/// local txo table with `.expect("should exist")` (`online.rs`) - fine for
+/// the wallet that allocated it, fatal for a wallet that replays the
+/// operation later: once a subsequent inflation has spent that UTXO, no chain
+/// sync brings the row back, and the catch-up panics, killing the embedding
+/// process. Replaying hub history is the library's own recovery path for a
+/// cosigner that fell behind or was restored, so exactly the wallets that
+/// need it are the ones it kills.
 #[cfg(feature = "electrum")]
 #[test]
 #[serial]
-fn sync_with_hub_replay_survives_legacy_transfer_data() {
+fn sync_with_hub_replay_survives_inflation_change() {
     initialize();
     op_counter_reset();
 
@@ -1511,7 +1510,9 @@ fn sync_with_hub_replay_survives_legacy_transfer_data() {
     // wlt_3 stays behind for the whole flow - the state of a cosigner that
     // fell behind, or of one whose wallet was rebuilt and has to catch up.
     println!("\n=== create UTXOs (wlt_1 + wlt_2) ===");
-    let op_init = wlt_1.create_utxos_init(false, Some(3), Some(3000), FEE_RATE);
+    // Exactly two: the IFA genesis occupies one UTXO for the fungible amount
+    // and one for the inflation rights, leaving no empty output of this batch.
+    let op_init = wlt_1.create_utxos_init(false, Some(2), Some(1000), FEE_RATE);
     operation_complete::<CreateUtxosHandler>(
         op_init.operation_idx,
         &mut [&mut wlt_1, &mut wlt_2],
@@ -1521,32 +1522,46 @@ fn sync_with_hub_replay_survives_legacy_transfer_data() {
     );
     mine(false);
 
-    println!("\n=== issue NIA (wlt_1 + wlt_2) ===");
-    let IssuedAsset::Nia(nia_asset) = issue_asset(
+    println!("\n=== issue IFA with inflation rights (wlt_1 + wlt_2) ===");
+    let IssuedAsset::Ifa(ifa_asset) = issue_asset(
         &mut wlt_1,
         &mut [&mut wlt_2],
-        AssetSchema::Nia,
+        AssetSchema::Ifa,
         Some(&[600]),
-        None,
+        Some(&[1000]),
     ) else {
         unreachable!()
     };
 
-    println!("\n=== send NIA to a singlesig receiver (wlt_1 + wlt_2) ===");
-    let mut singlesig_wlt = get_funded_party!();
-    let rcv_data = singlesig_wlt.blind_receive();
-    let recipient_map = HashMap::from([(
-        nia_asset.asset_id.clone(),
-        vec![Recipient {
-            assignment: Assignment::Fungible(100),
-            recipient_id: rcv_data.recipient_id.clone(),
-            witness_data: None,
-            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
-        }],
-    )]);
-    let send_op = wlt_1.send_init(recipient_map);
-    operation_complete::<SendRgbHandler>(
-        send_op.operation_idx,
+    println!("\n=== wlt_3 catches up through the issuance, then goes dark ===");
+    // The lagging cosigner must know the inflation's input UTXOs (they are
+    // unspent right now, so this sync records them) but must miss the window
+    // in which the change target is created AND spent. A wallet that never
+    // synced would be rescued by the replay's own FastSync backfill; a wallet
+    // that synced up to here is not.
+    wlt_3.sync_to_head();
+
+    println!("\n=== create UTXOs round 2 - the only empties left for the inflation ===");
+    // The genesis occupies every round-1 output, so inflation 1 must place its
+    // rights change on a round-2 output. Replaying the issuance materializes
+    // txo rows for the round-1 tx (its consignment anchors there), but nothing
+    // replays a create-utxos tx - round-2 outputs stay unknown to a
+    // catching-up wallet.
+    let cu2 = wlt_1.create_utxos_init(false, Some(5), Some(1000), FEE_RATE);
+    operation_complete::<CreateUtxosHandler>(
+        cu2.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [],
+        true,
+    );
+    mine(false);
+    let cu2_txid = Psbt::from_str(&cu2.psbt).unwrap().get_txid().to_string();
+
+    println!("\n=== inflation 1 (wlt_1 + wlt_2) - the operation wlt_3 will replay ===");
+    let inflate_op = wlt_1.inflate_init(&ifa_asset.asset_id, &[25]);
+    operation_complete::<InflateHandler>(
+        inflate_op.operation_idx,
         &mut [&mut wlt_1, &mut wlt_2],
         &mut [],
         &mut [],
@@ -1554,60 +1569,67 @@ fn sync_with_hub_replay_survives_legacy_transfer_data() {
     );
     settle_transfer(
         &mut [&mut wlt_1, &mut wlt_2],
-        &mut [&mut singlesig_wlt],
-        Some(&nia_asset.asset_id),
+        &mut [] as &mut [&mut MultisigParty],
+        Some(&ifa_asset.asset_id),
         None,
-        Some(&send_op.psbt),
-        true,
+        Some(&inflate_op.psbt),
+        false,
     );
 
-    println!("\n=== age the send's operation data to the legacy shape ===");
-    // The hub keeps operation files forever, so a wallet catching up replays
-    // whatever format they were written in. Simulate a file written before
-    // `btc_change` existed: only `change_utxo_outpoint` names the change.
-    let (op, files) = wlt_1.get_op_and_files(send_op.operation_idx);
+    println!("\n=== inflation 2 spends inflation 1's rights change ===");
+    // The remaining inflation rights ride the UTXO inflation 1 assigned its
+    // change to; inflation 2 must consume it. That is the load-bearing part:
+    // a spent outpoint is not restored by a chain sync, so the lagging
+    // wallet's replay of inflation 1 has no txo row to find.
+    let inflate_op_2 = wlt_1.inflate_init(&ifa_asset.asset_id, &[26]);
+    operation_complete::<InflateHandler>(
+        inflate_op_2.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [],
+        true,
+    );
+    settle_transfer(
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [] as &mut [&mut MultisigParty],
+        Some(&ifa_asset.asset_id),
+        None,
+        Some(&inflate_op_2.psbt),
+        false,
+    );
+
+    println!("\n=== inflation 1 operation data, as any catch-up will read it ===");
+    let (_, files) = wlt_1.get_op_and_files(inflate_op.operation_idx);
     let data_file = files
         .iter()
         .find(|f| matches!(f.r#type, FileType::OperationData))
         .unwrap();
-    let mut info: InfoBatchTransfer =
+    let info: InfoBatchTransfer =
         serde_json::from_reader(fs::File::open(&data_file.filepath).unwrap()).unwrap();
-    if let Some(btc_change) = info.btc_change.take() {
-        let txid = Psbt::from_str(&send_op.psbt).unwrap().get_txid().to_string();
-        info.change_utxo_outpoint = Some(Outpoint {
-            txid,
-            vout: btc_change.vout,
-        });
-    }
-    assert!(
-        info.change_utxo_outpoint.is_some(),
-        "legacy shape needs change_utxo_outpoint"
+    println!(
+        "btc_change={:?} change_utxo_outpoint={:?}",
+        info.btc_change, info.change_utxo_outpoint
     );
-    let file_id = op
-        .files
-        .iter()
-        .find(|m| matches!(m.r#type, FileType::OperationData))
-        .unwrap()
-        .file_id
-        .clone();
-    // Plant it in wlt_3's cache: get_or_download_file consults the cache
-    // before the hub, so the replay reads the legacy-format copy.
-    let cache_dir = wlt_3.multisig.get_wallet_dir().join("hub_ops");
-    fs::create_dir_all(&cache_dir).unwrap();
-    fs::write(
-        cache_dir.join(&file_id),
-        serde_json::to_string(&info).unwrap(),
-    )
-    .unwrap();
+    // The steering must have worked: no btc change (sub-dust remainder) and
+    // the RGB change assigned to an output of create-utxos round 2.
+    assert!(
+        info.btc_change.is_none(),
+        "expected a no-btc-change inflation"
+    );
+    assert_eq!(
+        info.change_utxo_outpoint.as_ref().unwrap().txid,
+        cu2_txid,
+        "expected the inflation change on a create-utxos round 2 output"
+    );
 
     println!("\n=== wlt_3 catches up over the whole history ===");
     // This is the library's own recovery path; it must complete. Today it
-    // panics at online.rs `.expect("should exist")` on the legacy-format send.
+    // panics at online.rs `.expect("should exist")` replaying inflation 1.
     wlt_3.sync_to_head();
 
     check_asset_balance(
         &[&wlt_1, &wlt_2, &wlt_3],
-        &nia_asset.asset_id,
-        (500, 500, 500),
+        &ifa_asset.asset_id,
+        (651, 651, 651),
     );
 }
