@@ -44,3 +44,4 @@ jobs:
           model: kimi-k2.6
           language: en-US
           review_level: normal
+          pr_number: ${{ inputs.pr_number }}
