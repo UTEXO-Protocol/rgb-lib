@@ -157,6 +157,7 @@ fn testnet4_success() {
 
 #[cfg(feature = "esplora")]
 #[test]
+#[ignore = "frequently fails due to public esplora endpoint being unreachable from CI"]
 #[parallel]
 fn mainnet_esplora_success() {
     create_test_data_dir();

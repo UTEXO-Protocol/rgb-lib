@@ -71,6 +71,31 @@ fn success() {
 fn fail() {
     initialize();
 
+    // === offline tests
+
+    let mut offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+    let result = offline_party
+        .wallet
+        .send_btc(Online { id: 0 }, s!(""), 0, FEE_RATE, false, None);
+    assert_matches!(result, Err(Error::Offline));
+    let result = offline_party.wallet.send_btc_begin(
+        Online { id: 0 },
+        s!(""),
+        0,
+        FEE_RATE,
+        false,
+        false,
+        None,
+    );
+    assert_matches!(result, Err(Error::Offline));
+    let result = offline_party.wallet.send_btc_end(Online { id: 0 }, s!(""));
+    assert_matches!(result, Err(Error::Offline));
+
+    // === online tests
+
     let amount: u64 = 1000;
 
     // wallets

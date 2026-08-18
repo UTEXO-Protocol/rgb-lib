@@ -68,6 +68,40 @@ fn rotate_disabled_errors() {
     assert!(matches!(result, Err(Error::AddressReuseDisabled)));
 }
 
+#[test]
+#[parallel]
+fn rotate_persists_across_reload() {
+    create_test_data_dir();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wallet_data = WalletData {
+        data_dir: get_test_data_dir_string(),
+        bitcoin_network,
+        database_type: DatabaseType::Sqlite,
+        max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+        supported_schemas: AssetSchema::VALUES.to_vec(),
+        reuse_addresses: true,
+    };
+
+    let rotated = {
+        let mut wallet =
+            Wallet::new(wallet_data.clone(), SinglesigKeys::from_keys(&keys, None)).unwrap();
+        let base = wallet.get_address().unwrap();
+        let rotated = wallet.rotate_address(KeychainKind::Internal).unwrap();
+        assert_ne!(rotated, base);
+        assert_eq!(rotated, wallet.get_address().unwrap());
+        rotated
+    };
+
+    let mut wallet = Wallet::new(wallet_data, SinglesigKeys::from_keys(&keys, None)).unwrap();
+    assert_eq!(
+        wallet.get_address().unwrap(),
+        rotated,
+        "rotated pin must persist across wallet reload"
+    );
+}
+
 /// Verify that send_btc and create_utxos change outputs go to the pinned reuse address.
 #[cfg(feature = "electrum")]
 #[test]
@@ -253,6 +287,135 @@ fn witness_receive_keeps_recipient_id_but_rotates_invoice_nonce() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn proxy_recipient_id_unique_per_invoice_under_reuse() {
+    initialize();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let online = wallet.go_online(test_go_online_options(None)).unwrap();
+
+    fund_wallet(wallet.get_address().unwrap());
+    wallet
+        .create_utxos(online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+
+    let inv1 = wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let inv2 = wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+
+    let data1 = Invoice::new(inv1.invoice.clone()).unwrap().invoice_data();
+    let data2 = Invoice::new(inv2.invoice.clone()).unwrap().invoice_data();
+
+    // Same beneficiary, unique proxy_recipient_id per invoice.
+    assert_eq!(data1.recipient_id, data2.recipient_id);
+    assert_ne!(data1.proxy_recipient_id, data2.proxy_recipient_id);
+    assert_ne!(data1.proxy_recipient_id, data1.recipient_id);
+
+    // Matches the nonce-derived proxy routing key.
+    for data in [&data1, &data2] {
+        let (_, nonce) = crate::utils::extract_recipient_nonce(&data.transport_endpoints[0]);
+        assert_eq!(
+            data.proxy_recipient_id,
+            crate::utils::derive_proxy_recipient_id(&data.recipient_id, &nonce.unwrap())
+        );
+    }
+
+    // Transfers expose the same per-invoice IDs.
+    let transfers = wallet.list_transfers(AssetFilter::None, None).unwrap();
+    for (inv, data) in [(&inv1, &data1), (&inv2, &data2)] {
+        let transfer = transfers
+            .iter()
+            .find(|t| t.batch_transfer_idx == inv.batch_transfer_idx)
+            .unwrap();
+        assert_eq!(transfer.recipient_id.as_ref(), Some(&data.recipient_id));
+        assert_eq!(
+            transfer.proxy_recipient_id.as_ref(),
+            Some(&data.proxy_recipient_id)
+        );
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn proxy_recipient_id_matches_recipient_id_without_nonce() {
+    initialize();
+
+    let mut party = get_funded_party!();
+
+    for receive_data in [
+        party
+            .wallet
+            .witness_receive(
+                None,
+                Assignment::Any,
+                None,
+                TRANSPORT_ENDPOINTS.clone(),
+                MIN_CONFIRMATIONS,
+            )
+            .unwrap(),
+        party
+            .wallet
+            .blind_receive(
+                None,
+                Assignment::Any,
+                None,
+                TRANSPORT_ENDPOINTS.clone(),
+                MIN_CONFIRMATIONS,
+            )
+            .unwrap(),
+    ] {
+        let data = Invoice::new(receive_data.invoice.clone())
+            .unwrap()
+            .invoice_data();
+        assert_eq!(data.proxy_recipient_id, data.recipient_id);
+
+        let transfers = party
+            .wallet
+            .list_transfers(AssetFilter::None, None)
+            .unwrap();
+        let transfer = transfers
+            .iter()
+            .find(|t| t.batch_transfer_idx == receive_data.batch_transfer_idx)
+            .unwrap();
+        assert_eq!(
+            transfer.proxy_recipient_id.as_ref(),
+            Some(&data.recipient_id)
+        );
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn two_consecutive_witness_transfers_both_settle() {
     initialize();
 
@@ -289,6 +452,7 @@ fn two_consecutive_witness_transfers_both_settle() {
     let mut prior_recipient_id: Option<String> = None;
     let mut rcv_batch_idxs: Vec<i32> = vec![];
     let mut sender_txids: Vec<String> = vec![];
+    let mut proxy_recipient_ids: Vec<String> = vec![];
     for cycle in 0..2 {
         // Receiver issues a witness invoice. Reuse_addresses ⇒ same pinned
         // script ⇒ same recipient_id; only the rid_nonce changes per call.
@@ -305,6 +469,7 @@ fn two_consecutive_witness_transfers_both_settle() {
         // Build the sender's Recipient from the parsed invoice, so the
         // transport URLs carry rid_nonce (matching production sender flow).
         let invoice = Invoice::new(receive_data.invoice.clone()).unwrap();
+        proxy_recipient_ids.push(invoice.invoice_data().proxy_recipient_id);
         let invoice_endpoints = invoice.invoice_data().transport_endpoints;
         let recipient_map = HashMap::from([(
             asset.asset_id.clone(),
@@ -336,7 +501,7 @@ fn two_consecutive_witness_transfers_both_settle() {
     // batch_transfer_idx (unique per invoice) since recipient_id is shared
     // across the two transfers under reuse_addresses.
     let rcv_transfers = rcv_party.list_transfers(Some(&asset.asset_id));
-    for batch_idx in &rcv_batch_idxs {
+    for (cycle, batch_idx) in rcv_batch_idxs.iter().enumerate() {
         let t = rcv_transfers
             .iter()
             .find(|t| t.batch_transfer_idx == *batch_idx)
@@ -346,16 +511,32 @@ fn two_consecutive_witness_transfers_both_settle() {
             TransferStatus::Settled,
             "receiver transfer for batch_idx {batch_idx} not settled"
         );
+        assert_eq!(
+            t.proxy_recipient_id.as_ref(),
+            Some(&proxy_recipient_ids[cycle]),
+            "cycle {cycle}: receiver proxy_recipient_id mismatch"
+        );
     }
 
-    // Both sends on the sender side must also be Settled.
-    for txid in &sender_txids {
+    // Both sends on the sender side must also be Settled, exposing the same
+    // per-invoice proxy_recipient_id as the receiver.
+    let sender_transfers = party.list_transfers(Some(&asset.asset_id));
+    for (cycle, txid) in sender_txids.iter().enumerate() {
         let (sender_transfer, _, _) = party.get_test_transfer_sender(txid);
         let (sender_data, _) = party.get_test_transfer_data(&sender_transfer);
         assert_eq!(
             sender_data.status,
             TransferStatus::Settled,
             "sender transfer for txid {txid} not settled"
+        );
+        let t = sender_transfers
+            .iter()
+            .find(|t| t.txid.as_deref() == Some(txid.as_str()) && t.kind == TransferKind::Send)
+            .unwrap_or_else(|| panic!("no sender transfer for txid {txid}"));
+        assert_eq!(
+            t.proxy_recipient_id.as_ref(),
+            Some(&proxy_recipient_ids[cycle]),
+            "cycle {cycle}: sender proxy_recipient_id mismatch"
         );
     }
 }

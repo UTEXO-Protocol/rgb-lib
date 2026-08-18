@@ -3,6 +3,8 @@
 //! This module defines some utility methods and structures.
 
 use super::*;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use rgbstd::contract::LinkableIssuerWrapper;
 
 const TIMESTAMP_FORMAT: &[time::format_description::BorrowedFormatItem] = time::macros::format_description!(
     "[year]-[month]-[day]T[hour repr:24]:[minute]:[second].[subsecond digits:3]+00"
@@ -660,7 +662,6 @@ pub(crate) fn append_recipient_nonce(url: &str, nonce: &[u8]) -> String {
 
 /// Extract the `rid_nonce` query parameter from a transport endpoint URL.
 /// Returns `(bare_url_with_other_params, nonce_bytes_if_present)`.
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn extract_recipient_nonce(url: &str) -> (String, Option<Vec<u8>>) {
     let Some(qpos) = url.find('?') else {
         return (url.to_string(), None);
@@ -756,9 +757,36 @@ pub struct RgbRuntime {
     stock: Stock,
     /// The wallet directory, where the lockfile for the runtime is to be held
     wallet_dir: PathBuf,
+    /// Whether dropping the runtime should persist the in-memory stock.
+    persist_on_drop: bool,
 }
 
 impl RgbRuntime {
+    /// Opt out of the legacy drop-time persistence path for a mutation whose errors must be
+    /// observable by the caller.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn require_explicit_persistence(&mut self) {
+        self.persist_on_drop = false;
+    }
+
+    /// Persist the RGB stock and propagate storage failures to the caller.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn persist(&mut self) -> Result<(), Error> {
+        self.persist_on_drop = false;
+        self.stock.store().map_err(|error| Error::IO {
+            details: error.to_string(),
+        })
+    }
+
+    pub(crate) fn export_contract(
+        &self,
+        contract_id: ContractId,
+    ) -> Result<RgbContract, InternalError> {
+        self.stock
+            .export_contract(contract_id)
+            .map_err(InternalError::from)
+    }
+
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn accept_transfer<R: ResolveWitness>(
         &mut self,
@@ -971,11 +999,25 @@ impl RgbRuntime {
         self.stock.upsert_witness(witness_id, witness_ord)?;
         Ok(())
     }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn validate_contracts_link<Parent: LinkableIssuerWrapper, Child: LinkableIssuerWrapper>(
+        &self,
+        parent_contract_id: ContractId,
+        child_contract_id: ContractId,
+    ) -> Result<(), Error> {
+        self.stock
+            .validate_contracts_link::<Parent, Child>(parent_contract_id, child_contract_id)
+            .map_err(InternalError::from)
+            .map_err(Error::from)
+    }
 }
 
 impl Drop for RgbRuntime {
     fn drop(&mut self) {
-        self.stock.store().expect("unable to save stock");
+        if self.persist_on_drop {
+            self.stock.store().expect("unable to save stock");
+        }
         fs::remove_file(self.wallet_dir.join(RGB_RUNTIME_LOCK_FILE))
             .expect("should be able to drop lockfile")
     }
@@ -1034,6 +1076,7 @@ pub(crate) fn load_rgb_runtime<P: AsRef<Path>>(wallet_dir: P) -> Result<RgbRunti
     Ok(RgbRuntime {
         stock,
         wallet_dir: wallet_dir.as_ref().to_path_buf(),
+        persist_on_drop: true,
     })
 }
 

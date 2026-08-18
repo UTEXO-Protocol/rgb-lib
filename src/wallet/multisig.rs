@@ -342,12 +342,12 @@ impl RgbWalletOpsOnline for MultisigWallet {
         no_asset_only: bool,
         skip_sync: bool,
     ) -> Result<bool, Error> {
+        self.check_online(online)?;
         self.check_is_cosigner()?;
         info!(
             self.logger(),
             "Failing batch transfer with idx {:?}...", batch_transfer_idx
         );
-        self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let outcome =
             self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
@@ -1054,6 +1054,7 @@ impl MultisigWallet {
 
         // setup rgb-lib DB
         let database = setup_db(&wallet_dir)?;
+        let reuse_address_index = database.begin_transaction()?.get_reuse_address_index()?;
 
         info!(logger, "New multisig wallet completed");
         Ok(Self {
@@ -1065,7 +1066,7 @@ impl MultisigWallet {
                 wallet_dir,
                 bdk_wallet,
                 bdk_database,
-                reuse_address_index: HashMap::new(),
+                reuse_address_index,
                 #[cfg(any(feature = "electrum", feature = "esplora"))]
                 online_data: None,
                 #[cfg(feature = "vss")]
@@ -1235,6 +1236,9 @@ impl MultisigWallet {
         self.internals_mut()
             .reuse_address_index
             .insert(keychain, new_index);
+        let txn = self.database().begin_transaction()?;
+        txn.set_reuse_address_index(keychain, new_index)?;
+        txn.commit()?;
         let address = self.bdk_wallet().peek_address(keychain, new_index).address;
         Ok(address.to_string())
     }
@@ -1471,6 +1475,9 @@ impl MultisigWallet {
     ///
     /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
     /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// `issuance_type` controls whether a link-right UTXO is created and whether the genesis
+    /// contract declares a parent contract.
     pub fn issue_asset_ifa(
         &self,
         online: Online,
@@ -1480,10 +1487,13 @@ impl MultisigWallet {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        issuance_type: Option<IfaIssuanceType>,
     ) -> Result<AssetIFA, Error> {
         info!(self.logger(), "Issuing IFA...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
+        let (create_link_right, linked_from_contract_id) =
+            issuance_type.unwrap_or_default().into_ifa_link_data()?;
         let txn = self.database().begin_transaction()?;
         let issue_data = self.create_ifa_contract(
             &txn,
@@ -1493,6 +1503,8 @@ impl MultisigWallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            linked_from_contract_id,
+            create_link_right,
         )?;
         let res = self.upload_and_process_issuance(&txn, &issue_data, vec![])?;
         txn.commit()?;
@@ -1757,6 +1769,7 @@ impl MultisigWallet {
             valid_contract,
             contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         };
 
         self.import_and_save_contract(txn, &issue_data, &mut runtime)?;
@@ -2027,8 +2040,32 @@ impl MultisigWallet {
             }
             (OperationStatus::Approved, _) => {
                 let mut combined_psbt = Self::combine_psbts_from_files(files)?;
-                self.finalize_psbt_impl(&mut combined_psbt, None)?;
-                let txid = combined_psbt.unsigned_tx.compute_txid().to_string();
+                // Idempotency: if this operation's transaction is already broadcast
+                // (another cosigner finalized and broadcast it, or we did but lost
+                // our local commit), complete it without requiring this party to
+                // re-finalize the PSBT — otherwise a party that has not yet
+                // collected all signatures loops on `CannotFinalizePsbt` forever
+                // even though the transaction is already on-chain. The txid commits
+                // to all inputs and outputs, so it is stable regardless of
+                // finalization. The BDK graph is a fast offline check; the indexer
+                // probe is the authoritative fallback so recovery does not depend
+                // on a prior chain sync.
+                let tx = combined_psbt.unsigned_tx.compute_txid();
+                let already_broadcast = self.tx_known_to_wallet(&tx)
+                    || self
+                        .indexer()
+                        .get_tx_confirmations(&tx.to_string())?
+                        .is_some();
+                if already_broadcast {
+                    info!(
+                        self.logger(),
+                        "operation {} tx {tx} already broadcast; completing without re-finalizing",
+                        op.operation_idx
+                    );
+                } else {
+                    self.finalize_psbt_impl(&mut combined_psbt, None)?;
+                }
+                let txid = tx.to_string();
                 H::reconstruct_transfer_directory(self, &txid, files)?;
                 let txn = self.database().begin_transaction()?;
                 let txid = H::finalize_and_execute(&txn, self, &combined_psbt)?;
@@ -2183,6 +2220,19 @@ impl MultisigWallet {
             PostData::BeginOperationData(begin_operation_data) => {
                 let fascia_path = begin_operation_data.transfer_dir.join(FASCIA_FILE);
                 files.push((FileType::Fascia, FileSource::Path(fascia_path)));
+                // the send consignment is fully determined by begin-time data, so
+                // attach it already now to let cosigners access it from the hub
+                if matches!(operation_type, OperationType::SendRgb) {
+                    let (_, transfer_dir, info_contents, fascia) =
+                        self.get_transfer_end_data(&begin_operation_data.psbt)?;
+                    self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
+                    for asset_id in info_contents.transfers.keys() {
+                        let consignment_path = self
+                            .get_asset_transfer_dir(&transfer_dir, asset_id)
+                            .join(CONSIGNMENT_FILE);
+                        files.push((FileType::Consignment, FileSource::Path(consignment_path)));
+                    }
+                }
                 let transfer_metadata_bytes =
                     serde_json::to_vec(&begin_operation_data.info_batch_transfer)
                         .expect("serializable");

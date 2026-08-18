@@ -410,7 +410,7 @@ fn manual_smoke_autobackup_async_restore() {
         .get_asset_metadata(asset_id.clone())
         .expect("metadata");
     let transfers_pre = wallet_a
-        .list_transfers(Some(asset_id.clone()))
+        .list_transfers(AssetFilter::Id(asset_id.clone()), None)
         .expect("list_transfers");
 
     // Configure auto-backup Async and wait for the backup to complete.
@@ -470,7 +470,7 @@ fn manual_smoke_autobackup_async_restore() {
         .get_asset_metadata(asset_id.clone())
         .expect("metadata");
     let transfers_post = wallet_r
-        .list_transfers(Some(asset_id.clone()))
+        .list_transfers(AssetFilter::Id(asset_id.clone()), None)
         .expect("list_transfers");
 
     assert_eq!(bal_post, bal_pre, "balance mismatch after restore");

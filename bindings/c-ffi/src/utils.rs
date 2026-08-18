@@ -460,6 +460,24 @@ pub(crate) fn finalize_psbt(
     Ok(wallet.finalize_psbt(signed_psbt, None)?)
 }
 
+pub(crate) fn create_consignments(
+    wallet: &COpaqueStruct,
+    psbt: *const c_char,
+) -> Result<String, Error> {
+    let wallet = Wallet::from_opaque(wallet)?;
+    let psbt = ptr_to_string(psbt);
+    Ok(wallet.create_consignments_return_path(psbt)?)
+}
+
+pub(crate) fn string_free(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = CString::from_raw(ptr);
+    }
+}
+
 pub(crate) fn generate_keys(
     bitcoin_network: *const c_char,
     witness_version: *const c_char,
@@ -640,6 +658,7 @@ pub(crate) fn issue_asset_ifa(
         amounts,
         inflation_amounts,
         reject_list_url,
+        None,
     )?;
     Ok(serde_json::to_string(&res)?)
 }
@@ -714,11 +733,13 @@ pub(crate) fn list_transactions(
 
 pub(crate) fn list_transfers(
     wallet: &COpaqueStruct,
-    asset_id_opt: *const c_char,
+    asset_filter: *const c_char,
+    txid_opt: *const c_char,
 ) -> Result<String, Error> {
     let wallet = Wallet::from_opaque(wallet)?;
-    let asset_id = convert_optional_string(asset_id_opt);
-    let res = wallet.list_transfers(asset_id)?;
+    let asset_filter: AssetFilter = serde_json::from_str(&ptr_to_string(asset_filter))?;
+    let txid = convert_optional_string(txid_opt);
+    let res = wallet.list_transfers(asset_filter, txid)?;
     Ok(serde_json::to_string(&res)?)
 }
 

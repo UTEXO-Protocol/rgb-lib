@@ -335,7 +335,9 @@ pub fn mock_vout(vout: Option<u32>) -> Option<u32> {
 // test utilities
 #[macro_use]
 mod utils;
-pub(crate) use utils::{api::*, chain::*, helpers::*};
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) use utils::chain::*;
+pub(crate) use utils::{api::*, helpers::*};
 
 // API tests
 mod abort_pending_vanilla_tx;
@@ -361,6 +363,7 @@ mod issue_asset_cfa;
 mod issue_asset_ifa;
 mod issue_asset_nia;
 mod issue_asset_uda;
+mod link_ifa;
 mod list_assets;
 mod list_pending_vanilla_txs;
 mod list_transactions;
@@ -376,6 +379,7 @@ mod send_btc;
 mod sign_psbt;
 // mod swaply_htlc_lock; // missing on this branch; unrelated to shared-cosigner test
 mod sync;
+mod tx_known_to_wallet;
 #[cfg(feature = "vss")]
 mod vss;
 #[cfg(feature = "vss")]

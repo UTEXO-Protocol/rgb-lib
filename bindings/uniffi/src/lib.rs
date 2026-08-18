@@ -30,10 +30,10 @@ use rgb_lib::{
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
-        Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
-        AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult, BurnDetails,
-        Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
-        InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
+        Address as RgbLibAddress, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA, AssetNIA,
+        AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult,
+        BurnDetails, Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo,
+        InflateBeginResult, InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
@@ -101,6 +101,7 @@ pub enum Assignment {
     Fungible { amount: u64 },
     NonFungible,
     InflationRight { amount: u64 },
+    LinkRight,
     Any,
 }
 impl From<RgbLibAssignment> for Assignment {
@@ -109,6 +110,7 @@ impl From<RgbLibAssignment> for Assignment {
             RgbLibAssignment::Fungible(amount) => Assignment::Fungible { amount },
             RgbLibAssignment::NonFungible => Assignment::NonFungible,
             RgbLibAssignment::InflationRight(amount) => Assignment::InflationRight { amount },
+            RgbLibAssignment::LinkRight => Assignment::LinkRight,
             RgbLibAssignment::Any => Assignment::Any,
         }
     }
@@ -119,6 +121,7 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::Fungible { amount } => RgbLibAssignment::Fungible(amount),
             Assignment::NonFungible => RgbLibAssignment::NonFungible,
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
+            Assignment::LinkRight => RgbLibAssignment::LinkRight,
             Assignment::Any => RgbLibAssignment::Any,
         }
     }
@@ -218,8 +221,23 @@ fn parse_rgb_transport(endpoint: &str) -> Result<RgbTransport, RgbLibError> {
     })
 }
 
+pub enum AssetFilter {
+    AnyOrNone,
+    None,
+    Id { asset_id: String },
+}
+impl From<AssetFilter> for RgbLibAssetFilter {
+    fn from(orig: AssetFilter) -> Self {
+        match orig {
+            AssetFilter::AnyOrNone => RgbLibAssetFilter::AnyOrNone,
+            AssetFilter::None => RgbLibAssetFilter::None,
+            AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
+        }
+    }
+}
 pub struct InvoiceData {
     pub recipient_id: String,
+    pub proxy_recipient_id: String,
     pub asset_schema: Option<AssetSchema>,
     pub asset_id: Option<String>,
     pub assignment: Assignment,
@@ -232,6 +250,7 @@ impl From<RgbLibInvoiceData> for InvoiceData {
     fn from(orig: RgbLibInvoiceData) -> Self {
         Self {
             recipient_id: orig.recipient_id,
+            proxy_recipient_id: orig.proxy_recipient_id,
             asset_schema: orig.asset_schema,
             asset_id: orig.asset_id,
             assignment: orig.assignment.into(),
@@ -246,6 +265,7 @@ impl From<InvoiceData> for RgbLibInvoiceData {
     fn from(orig: InvoiceData) -> Self {
         RgbLibInvoiceData {
             recipient_id: orig.recipient_id,
+            proxy_recipient_id: orig.proxy_recipient_id,
             asset_schema: orig.asset_schema,
             asset_id: orig.asset_id,
             assignment: orig.assignment.into(),
@@ -316,6 +336,7 @@ pub struct Transfer {
     pub kind: TransferKind,
     pub txid: Option<String>,
     pub recipient_id: Option<String>,
+    pub proxy_recipient_id: Option<String>,
     pub receive_utxo: Option<Outpoint>,
     pub change_utxo: Option<Outpoint>,
     pub expiration_timestamp: Option<u64>,
@@ -337,6 +358,7 @@ impl From<RgbLibTransfer> for Transfer {
             kind: orig.kind,
             txid: orig.txid,
             recipient_id: orig.recipient_id,
+            proxy_recipient_id: orig.proxy_recipient_id,
             receive_utxo: orig.receive_utxo,
             change_utxo: orig.change_utxo,
             expiration_timestamp: orig.expiration_timestamp,
@@ -360,6 +382,7 @@ impl From<Transfer> for RgbLibTransfer {
             kind: orig.kind,
             txid: orig.txid,
             recipient_id: orig.recipient_id,
+            proxy_recipient_id: orig.proxy_recipient_id,
             receive_utxo: orig.receive_utxo,
             change_utxo: orig.change_utxo,
             expiration_timestamp: orig.expiration_timestamp,
@@ -1579,6 +1602,7 @@ impl Wallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            None,
         )
     }
 
@@ -1594,10 +1618,14 @@ impl Wallet {
         self._get_wallet().list_transactions(online, skip_sync)
     }
 
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, RgbLibError> {
+    fn list_transfers(
+        &self,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(asset_id)?
+            .list_transfers(asset_filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())
@@ -2064,6 +2092,7 @@ impl MultisigWallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            None,
         )
     }
 
@@ -2079,10 +2108,14 @@ impl MultisigWallet {
         self._get_wallet().list_transactions(online, skip_sync)
     }
 
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, RgbLibError> {
+    fn list_transfers(
+        &self,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, RgbLibError> {
         Ok(self
             ._get_wallet()
-            .list_transfers(asset_id)?
+            .list_transfers(asset_filter.into(), txid)?
             .into_iter()
             .map(|t| t.into())
             .collect())

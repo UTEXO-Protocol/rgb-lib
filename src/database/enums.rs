@@ -342,6 +342,8 @@ pub enum Assignment {
     NonFungible,
     /// Inflation right
     InflationRight(u64),
+    /// Link right
+    LinkRight,
     /// Any assignment
     Any,
 }
@@ -354,6 +356,7 @@ impl Assignment {
                 Self::InflationRight(amt.as_u64())
             }
             AllocatedState::Data(_) => Self::NonFungible,
+            AllocatedState::Void if opout.ty == OS_LINK => Self::LinkRight,
             _ => unreachable!(),
         }
     }
@@ -364,6 +367,7 @@ impl Assignment {
             Self::Fungible(amt) => assignments.fungible += amt,
             Self::NonFungible => assignments.non_fungible = true,
             Self::InflationRight(amt) => assignments.inflation += amt,
+            Self::LinkRight => {}
             _ => unreachable!("when using this method we should know the assignment type"),
         }
     }

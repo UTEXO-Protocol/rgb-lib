@@ -5,11 +5,27 @@ use super::*;
 #[cfg(feature = "mpc")]
 use crate::database::entities::mpc_address;
 use crate::database::entities::{
-    asset, coloring, media, prelude::*, transfer_transport_endpoint, transport_endpoint, txo,
-    wallet_transaction,
+    asset, coloring, media, prelude::*, reuse_address_index, transfer_transport_endpoint,
+    transport_endpoint, txo, wallet_transaction,
 };
+use bdk_wallet::KeychainKind;
+
+fn keychain_to_u8(keychain: KeychainKind) -> u8 {
+    match keychain {
+        KeychainKind::External => 0,
+        KeychainKind::Internal => 1,
+    }
+}
+
+fn keychain_from_u8(value: u8) -> Option<KeychainKind> {
+    match value {
+        0 => Some(KeychainKind::External),
+        1 => Some(KeychainKind::Internal),
+        _ => None,
+    }
+}
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use crate::database::entities::{batch_transfer, pending_witness_script, reserved_txo};
+use crate::database::entities::{pending_witness_script, reserved_txo};
 
 #[derive(Debug, Clone)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -565,14 +581,41 @@ impl DbTxn {
         Ok(block_on(BackupInfo::find().one(self.inner()))?)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn set_reuse_address_index(
+        &self,
+        keychain: KeychainKind,
+        index: u32,
+    ) -> Result<(), Error> {
+        let model = reuse_address_index::ActiveModel {
+            keychain: ActiveValue::Set(keychain_to_u8(keychain)),
+            derivation_index: ActiveValue::Set(index),
+        };
+        let on_conflict = sea_query::OnConflict::column(reuse_address_index::Column::Keychain)
+            .update_column(reuse_address_index::Column::DerivationIndex)
+            .to_owned();
+        block_on(
+            ReuseAddressIndex::insert(model)
+                .on_conflict(on_conflict)
+                .exec(self.inner()),
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn get_reuse_address_index(&self) -> Result<HashMap<KeychainKind, u32>, Error> {
+        let rows = block_on(ReuseAddressIndex::find().all(self.inner()))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| keychain_from_u8(row.keychain).map(|k| (k, row.derivation_index)))
+            .collect())
+    }
+
     pub(crate) fn get_batch_transfer_by_txid(
         &self,
         txid: &str,
     ) -> Result<Option<DbBatchTransfer>, Error> {
         Ok(block_on(
             BatchTransfer::find()
-                .filter(batch_transfer::Column::Txid.eq(txid))
+                .filter(crate::database::entities::batch_transfer::Column::Txid.eq(txid))
                 .one(self.inner()),
         )?)
     }
@@ -778,6 +821,49 @@ impl DbTxn {
             txos
         };
         Ok(txos.into_iter().filter(|t| !t.spent).collect())
+    }
+
+    pub(crate) fn get_issuance_link_right_outpoint(
+        &self,
+        asset_id: &str,
+        asset_transfers: Option<Vec<DbAssetTransfer>>,
+        colorings: Option<Vec<DbColoring>>,
+        txos: Option<Vec<DbTxo>>,
+    ) -> Result<Option<Outpoint>, Error> {
+        let asset_transfers = asset_transfers
+            .map(Ok)
+            .unwrap_or_else(|| self.iter_asset_transfers())?;
+        let colorings = colorings.map(Ok).unwrap_or_else(|| self.iter_colorings())?;
+        let txos = txos.map(Ok).unwrap_or_else(|| self.iter_txos())?;
+        let issuance_link_right_coloring = colorings.iter().find(|coloring| {
+            coloring.r#type == ColoringType::Issue
+                && coloring.assignment == Assignment::LinkRight
+                && asset_transfers.iter().any(|asset_transfer| {
+                    asset_transfer.idx == coloring.asset_transfer_idx
+                        && asset_transfer.asset_id.as_deref() == Some(asset_id)
+                })
+        });
+        Ok(issuance_link_right_coloring
+            .and_then(|coloring| txos.iter().find(|txo| txo.idx == coloring.txo_idx))
+            .map(|txo| txo.outpoint()))
+    }
+
+    pub(crate) fn get_unspent_link_right_outpoint(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<Outpoint>, Error> {
+        let unspent_txos = self.get_unspent_txos(vec![])?;
+        let unspents = self.get_rgb_allocations(unspent_txos, None, None, None, None)?;
+        Ok(unspents
+            .iter()
+            .find(|unspent| {
+                unspent.rgb_allocations.iter().any(|allocation| {
+                    allocation.asset_id.as_deref() == Some(asset_id)
+                        && allocation.assignment == Assignment::LinkRight
+                        && allocation.settled()
+                })
+            })
+            .map(|unspent| unspent.utxo.outpoint()))
     }
 
     pub(crate) fn get_asset_balance(

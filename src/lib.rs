@@ -76,7 +76,10 @@ pub use bdk_wallet::bitcoin;
 pub use rgbinvoice::RgbTransport;
 pub use rgbstd::{
     ChainNet, ContractId, Txid as RgbTxid,
-    containers::{ConsignmentExt, Fascia, FileContent, PubWitness, Transfer as RgbTransfer},
+    containers::{
+        ConsignmentExt, Contract as RgbContract, Fascia, FileContent, PubWitness,
+        Transfer as RgbTransfer,
+    },
     persistence::UpdateRes,
     schema::SchemaId,
     txout::CloseMethod,
@@ -90,7 +93,10 @@ pub use crate::{
     error::Error,
     keys::{generate_keys, restore_keys},
     utils::{BitcoinNetwork, block_on},
-    wallet::{RecipientType, TransactionType, TransferKind, Wallet, backup::restore_backup},
+    wallet::{
+        IfaIssuanceType, RecipientType, TransactionType, TransferKind, Wallet,
+        backup::restore_backup,
+    },
 };
 #[cfg(feature = "mpc")]
 pub use mpc::MpcWalletProvider;
@@ -191,7 +197,10 @@ use rgbstd::{
     Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, Opout,
     OutputSeal, OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition, TypeSystem,
     containers::{BuilderSeal, Kit, ValidContract, ValidKit, ValidTransfer},
-    contract::{AllocatedState, ContractBuilder, IssuerWrapper, SchemaWrapper, TransitionBuilder},
+    contract::{
+        AllocatedState, ContractBuilder, IssuerWrapper, LinkableSchemaWrapper, SchemaWrapper,
+        TransitionBuilder,
+    },
     info::SchemaInfo,
     invoice::{InvoiceState, Pay2Vout},
     persistence::{MemContract, MemContractState, StashReadProvider, Stock, fs::FsBinStore},
@@ -223,7 +232,7 @@ use rgbstd::{
 use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
     CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
-    OS_INFLATION, TS_BURN, TS_INFLATION, TS_TRANSFER, UniqueDigitalAsset,
+    OS_INFLATION, OS_LINK, TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
 };
 use scrypt::{
     Params, Scrypt,

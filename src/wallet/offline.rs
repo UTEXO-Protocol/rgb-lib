@@ -135,6 +135,11 @@ pub trait WalletOffline: WalletBackup {
             .filter(|u| !u.utxo.pending_witness)
             .filter(|u| !exclude_utxos.contains(&u.utxo.outpoint()))
             .filter(|u| {
+                u.rgb_allocations
+                    .iter()
+                    .all(|a| a.assignment != Assignment::LinkRight)
+            })
+            .filter(|u| {
                 (u.rgb_allocations.len() as u32) + u.pending_blinded <= max_allocs
                     && !u.rgb_allocations.iter().any(|a| {
                         !a.incoming && (a.status.initiated() || a.status.waiting_counterparty())
@@ -515,6 +520,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -662,6 +668,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -773,6 +780,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         })
     }
 
@@ -785,6 +793,8 @@ pub trait WalletOffline: WalletBackup {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        linked_from_contract_id: Option<ContractId>,
+        create_link_right: bool,
     ) -> Result<IssueData, Error> {
         let asset_schema = &AssetSchema::Ifa;
 
@@ -850,6 +860,11 @@ pub trait WalletOffline: WalletBackup {
                 )
                 .expect("invalid rejectListUrl");
         }
+        if let Some(linked_from_contract_id) = linked_from_contract_id {
+            builder = builder
+                .add_global_state(RGB_GLOBAL_LINKED_FROM_CONTRACT, linked_from_contract_id)
+                .expect("invalid linkedFromContract");
+        }
 
         let mut issue_utxos: HashMap<i32, Vec<Assignment>> = HashMap::new();
         let mut exclude_outpoints: Vec<Outpoint> = vec![];
@@ -883,6 +898,24 @@ pub trait WalletOffline: WalletBackup {
                 .expect("invalid global state data");
         }
 
+        let link_right_outpoint = if create_link_right {
+            let utxo_with_no_prior_rgb_allocations =
+                self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
+            issue_utxos
+                .entry(utxo_with_no_prior_rgb_allocations.idx)
+                .or_default()
+                .push(Assignment::LinkRight);
+            builder = builder
+                .add_rights_raw(
+                    OS_LINK,
+                    self.get_builder_seal(utxo_with_no_prior_rgb_allocations.clone()),
+                )
+                .expect("invalid link right state");
+            Some(utxo_with_no_prior_rgb_allocations.outpoint())
+        } else {
+            None
+        };
+
         debug!(self.logger(), "Issuing: {issue_utxos:?}");
 
         let (asset_id, _contract_path, valid_contract) = self.issue_contract(builder)?;
@@ -910,6 +943,7 @@ pub trait WalletOffline: WalletBackup {
             #[cfg(any(feature = "electrum", feature = "esplora"))]
             contract_path: _contract_path,
             issue_utxos,
+            link_right_outpoint,
         })
     }
 
@@ -1320,6 +1354,21 @@ pub trait WalletOffline: WalletBackup {
     fn get_asset_metadata_impl(&self, txn: &DbTxn, asset_id: String) -> Result<Metadata, Error> {
         let asset = txn.check_asset_exists(asset_id.clone())?;
 
+        let (linked_from_asset_id, linked_to_asset_id, unspent_link_right_outpoint) =
+            if asset.schema == AssetSchema::Ifa {
+                let (linked_from_asset_id, linked_to_asset_id) =
+                    self.asset_link_ifa_data(&asset_id)?;
+                let unspent_link_right_outpoint = txn.get_unspent_link_right_outpoint(&asset_id)?;
+
+                (
+                    linked_from_asset_id,
+                    linked_to_asset_id,
+                    unspent_link_right_outpoint,
+                )
+            } else {
+                (None, None, None)
+            };
+
         let initial_supply = asset.initial_supply.parse::<u64>().unwrap();
         let max_supply = if let Some(max_supply) = asset.max_supply {
             max_supply.parse::<u64>().unwrap()
@@ -1378,6 +1427,9 @@ pub trait WalletOffline: WalletBackup {
             details: asset.details,
             token,
             reject_list_url: asset.reject_list_url,
+            linked_from_asset_id,
+            linked_to_asset_id,
+            unspent_link_right_outpoint,
         })
     }
 
@@ -1834,7 +1886,7 @@ pub trait WalletOffline: WalletBackup {
                             .iter()
                             .filter(|a| a.schema == schema)
                             .map(|a| {
-                                AssetIFA::get_asset_details(
+                                let mut asset = AssetIFA::get_asset_details(
                                     txn,
                                     self,
                                     a,
@@ -1844,7 +1896,12 @@ pub trait WalletOffline: WalletBackup {
                                     colorings.clone(),
                                     txos.clone(),
                                     medias.clone(),
-                                )
+                                )?;
+                                let (linked_from_asset_id, linked_to_asset_id) =
+                                    self.asset_link_ifa_data(&asset.asset_id)?;
+                                asset.linked_from_asset_id = linked_from_asset_id;
+                                asset.linked_to_asset_id = linked_to_asset_id;
+                                Ok(asset)
                             })
                             .collect::<Result<Vec<AssetIFA>, Error>>()?,
                     );
@@ -2024,8 +2081,11 @@ pub trait WalletOffline: WalletBackup {
                     RecipientTypeFull::Witness { .. } => TransferKind::ReceiveWitness,
                 }
             }
+        } else if transfer.recipient_id.is_none()
+            && transfer.requested_assignment == Some(Assignment::LinkRight)
+        {
+            TransferKind::Link
         } else if transfer.recipient_id.is_none() {
-            // burn is the only outgoing transfer with no recipient
             TransferKind::Burn
         } else if filtered_coloring
             .clone()
@@ -2065,7 +2125,10 @@ pub trait WalletOffline: WalletBackup {
         };
         let change_utxo = match kind {
             TransferKind::ReceiveBlind | TransferKind::ReceiveWitness => None,
-            TransferKind::Send | TransferKind::Inflation | TransferKind::Burn => {
+            TransferKind::Send
+            | TransferKind::Inflation
+            | TransferKind::Burn
+            | TransferKind::Link => {
                 let change_txo_idx: Vec<i32> = filtered_coloring
                     .filter(|c| c.r#type == ColoringType::Change)
                     .map(|c| c.txo_idx)
@@ -2082,12 +2145,16 @@ pub trait WalletOffline: WalletBackup {
         };
 
         let consignment_path = match (&kind, batch_transfer.status) {
-            (TransferKind::Send | TransferKind::Inflation | TransferKind::Burn, _) => {
-                Some(self.send_consignment_path(
-                    &asset_transfer.asset_id.clone().unwrap(),
-                    &batch_transfer.txid.clone().unwrap(),
-                ))
-            }
+            (
+                TransferKind::Send
+                | TransferKind::Inflation
+                | TransferKind::Burn
+                | TransferKind::Link,
+                _,
+            ) => Some(self.send_consignment_path(
+                &asset_transfer.asset_id.clone().unwrap(),
+                &batch_transfer.txid.clone().unwrap(),
+            )),
             (
                 TransferKind::ReceiveBlind | TransferKind::ReceiveWitness,
                 TransferStatus::WaitingCounterparty,
@@ -2110,7 +2177,10 @@ pub trait WalletOffline: WalletBackup {
         .map(|p| p.to_string_lossy().to_string());
 
         let psbt_path = match &kind {
-            TransferKind::Send | TransferKind::Inflation | TransferKind::Burn => batch_transfer
+            TransferKind::Send
+            | TransferKind::Inflation
+            | TransferKind::Burn
+            | TransferKind::Link => batch_transfer
                 .txid
                 .as_ref()
                 .map(|txid| self.get_transfer_dir(txid).join(UNSIGNED_PSBT_FILE))
@@ -2140,25 +2210,47 @@ pub trait WalletOffline: WalletBackup {
     fn list_transfers_impl(
         &self,
         txn: &DbTxn,
-        asset_id: Option<String>,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
     ) -> Result<Vec<Transfer>, Error> {
+        let batch_transfer_idx = match txid {
+            Some(txid) => match txn.get_batch_transfer_by_txid(&txid)? {
+                Some(batch_transfer) => Some(batch_transfer.idx),
+                None => return Ok(vec![]),
+            },
+            None => None,
+        };
         let db_data = txn.get_db_data(false)?;
         let asset_transfer_ids: Vec<i32> = db_data
             .asset_transfers
             .iter()
-            .filter(|t| t.asset_id == asset_id)
+            .filter(|t| match &asset_filter {
+                AssetFilter::AnyOrNone => true,
+                AssetFilter::None => t.asset_id.is_none(),
+                AssetFilter::Id(asset_id) => t.asset_id.as_ref() == Some(asset_id),
+            })
+            .filter(|t| batch_transfer_idx.is_none_or(|idx| t.batch_transfer_idx == idx))
             .filter(|t| t.user_driven)
             .map(|t| t.idx)
             .collect();
+        self.build_transfers(txn, &db_data, &asset_transfer_ids)
+    }
+
+    fn build_transfers(
+        &self,
+        txn: &DbTxn,
+        db_data: &crate::database::DbData,
+        asset_transfer_ids: &[i32],
+    ) -> Result<Vec<Transfer>, Error> {
         db_data
             .transfers
-            .into_iter()
+            .iter()
             .filter(|t| asset_transfer_ids.contains(&t.asset_transfer_idx))
             .map(|t| {
                 let (asset_transfer, batch_transfer) =
                     t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
                 let td = self.get_transfer_data(
-                    &t,
+                    t,
                     &asset_transfer,
                     &batch_transfer,
                     &db_data.txos,
@@ -2492,6 +2584,7 @@ pub trait WalletOffline: WalletBackup {
                     TS_TRANSFER => TypeOfTransition::Transfer,
                     TS_INFLATION => TypeOfTransition::Inflate,
                     TS_BURN => TypeOfTransition::Burn,
+                    TS_LINK => TypeOfTransition::Link,
                     _ => {
                         return Err(Error::RgbInspection {
                             details: format!(
@@ -2628,12 +2721,11 @@ pub trait WalletOffline: WalletBackup {
     }
 
     fn get_transfer_end_data(&self, psbt: &Psbt) -> Result<TransferEndData, Error> {
-        let txid = psbt
-            .clone()
-            .extract_tx()
-            .map_err(InternalError::from)?
-            .compute_txid()
-            .to_string();
+        // The txid commits to all inputs and outputs and is therefore stable
+        // regardless of finalization, so derive it from the unsigned tx. This
+        // lets the completion path run on a combined-but-not-finalized PSBT
+        // (e.g. when the operation's transaction is already on-chain).
+        let txid = psbt.unsigned_tx.compute_txid().to_string();
         let transfer_dir = self.get_transfer_dir(&txid);
         if !transfer_dir.exists() {
             return Err(Error::UnknownTransfer { txid });
@@ -2675,6 +2767,30 @@ pub trait WalletOffline: WalletBackup {
             consignment.save_file(&consignment_path)?;
         }
         Ok(())
+    }
+
+    fn asset_link_ifa_data(
+        &self,
+        asset_id: &str,
+    ) -> Result<(Option<String>, Option<String>), Error> {
+        let contract_id = ContractId::from_str(asset_id).map_err(|e| Error::Internal {
+            details: e.to_string(),
+        })?;
+        let runtime = self.rgb_runtime()?;
+        let contract = runtime.contract_wrapper::<InflatableFungibleAsset>(contract_id)?;
+        let linked_from_asset_id = contract
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        let linked_to_asset_id = contract
+            .link_to()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        Ok((linked_from_asset_id, linked_to_asset_id))
     }
 }
 
@@ -2764,18 +2880,23 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
 
     /// List the RGB [`Transfer`]s known to the wallet.
     ///
-    /// When an `asset_id` is not provided, return transfers that are not connected to a specific
-    /// asset.
-    fn list_transfers(&self, asset_id: Option<String>) -> Result<Vec<Transfer>, Error> {
+    /// `asset_filter` selects transfers by asset. When a `txid` is provided, restrict the result to the
+    /// transfers committed by the on-chain transaction with that ID; an unknown `txid` yields an
+    /// empty list.
+    fn list_transfers(
+        &self,
+        asset_filter: AssetFilter,
+        txid: Option<String>,
+    ) -> Result<Vec<Transfer>, Error> {
         info!(
             self.logger(),
-            "Listing transfers for asset '{:?}'...", asset_id
+            "Listing transfers for filter '{:?}' and txid '{:?}'...", asset_filter, txid
         );
         let txn = self.database().begin_transaction()?;
-        if let Some(asset_id) = &asset_id {
+        if let AssetFilter::Id(asset_id) = &asset_filter {
             txn.check_asset_exists(asset_id.clone())?;
         }
-        let transfers = self.list_transfers_impl(&txn, asset_id)?;
+        let transfers = self.list_transfers_impl(&txn, asset_filter, txid)?;
         txn.commit()?;
         info!(self.logger(), "List transfers completed");
         Ok(transfers)

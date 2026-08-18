@@ -72,6 +72,9 @@ const BACKUP_KEY_CHUNK_PREFIX: &str = "backup/chunk/";
 const BACKUP_KEY_FINGERPRINT: &str = "backup/fingerprint";
 /// Generic directory name used in sanitized (plaintext) backups
 const SANITIZED_DIR_NAME: &str = "wallet";
+/// Marker dropped in a restored wallet dir until its first successful
+/// consistency check, so a failure there can be attributed to the restore.
+pub(crate) const VSS_RESTORE_MARKER: &str = ".vss_restored";
 /// BDK database filename
 const BDK_DB_NAME: &str = "bdk_db";
 /// BDK watch-only database filename
@@ -196,6 +199,7 @@ pub struct VssBackupClient {
     auto_backup: bool,
     backup_mode: VssBackupMode,
     runtime: Option<tokio::runtime::Runtime>,
+    last_auto_backup_error: std::sync::Mutex<Option<String>>,
 }
 
 impl Drop for VssBackupClient {
@@ -234,7 +238,19 @@ impl VssBackupClient {
             auto_backup: config.auto_backup,
             backup_mode: config.backup_mode,
             runtime: Some(runtime),
+            last_auto_backup_error: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Error message of the most recent failed auto-backup, cleared on the
+    /// next successful one. `None` when the last auto-backup succeeded or none
+    /// ran yet.
+    pub fn last_auto_backup_error(&self) -> Option<String> {
+        self.last_auto_backup_error.lock().unwrap().clone()
+    }
+
+    pub(crate) fn record_auto_backup_result(&self, error: Option<String>) {
+        *self.last_auto_backup_error.lock().unwrap() = error;
     }
 
     /// Get a handle to the client's tokio runtime
@@ -891,6 +907,8 @@ pub struct VssBackupInfo {
     pub server_version: Option<i64>,
     /// Whether the local wallet has changes since last backup
     pub backup_required: bool,
+    /// Error of the most recent failed auto-backup, if the last one failed
+    pub last_auto_backup_error: Option<String>,
 }
 
 /// Create a zip archive of a wallet directory in memory
@@ -1145,6 +1163,10 @@ pub async fn restore_from_vss(config: VssBackupConfig, target_dir: &str) -> Resu
             );
             fs::rename(&sanitized_dir, &wallet_dir)?;
         }
+    }
+
+    if let Err(e) = fs::write(wallet_dir.join(VSS_RESTORE_MARKER), b"") {
+        info!(logger, "Could not write restore marker: {e}");
     }
 
     info!(logger, "VSS restore completed successfully");

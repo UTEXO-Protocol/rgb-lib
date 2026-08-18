@@ -68,6 +68,7 @@ interface RgbLibError {
   InvalidBitcoinNetwork(string network);
   InvalidColoringInfo(string details);
   InvalidConsignment();
+  InvalidContractLink(string details);
   InvalidCosigner(string details);
   InvalidDetails(string details);
   InvalidElectrum(string details);
@@ -90,6 +91,7 @@ interface RgbLibError {
   InvalidRecipientMap();
   InvalidRecipientNetwork();
   InvalidRejectListUrl(string details);
+  InvalidRightOutpoint(string details);
   InvalidTicker(string details);
   InvalidTransportEndpoint(string details);
   InvalidTransportEndpoints(string details);
@@ -125,6 +127,7 @@ interface RgbLibError {
   RecipientIDDuplicated();
   RejectListService(string details);
   RestClientBuild(string details);
+  RestoredBackupInconsistent(string details);
   RgbInspection(string details);
   TooHighInflationAmounts();
   TooHighIssuanceAmounts();
@@ -230,6 +233,9 @@ dictionary AssetIFA {
   Balance balance;
   Media? media;
   string? reject_list_url;
+  Outpoint? issuance_link_right_outpoint;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
 };
 
 [Remote]
@@ -390,10 +396,18 @@ interface Invoice {
 };
 
 [Enum]
+interface AssetFilter {
+  AnyOrNone();
+  None();
+  Id(string asset_id);
+};
+
+[Enum]
 interface Assignment {
   Fungible(u64 amount);
   NonFungible();
   InflationRight(u64 amount);
+  LinkRight();
   Any();
 };
 
@@ -406,6 +420,7 @@ dictionary AssignmentsCollection {
 
 dictionary InvoiceData {
   string recipient_id;
+  string proxy_recipient_id;
   AssetSchema? asset_schema;
   string? asset_id;
   Assignment assignment;
@@ -469,6 +484,9 @@ dictionary Metadata {
   string? details;
   Token? token;
   string? reject_list_url;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
+  Outpoint? unspent_link_right_outpoint;
 };
 
 [Remote]
@@ -530,6 +548,7 @@ dictionary RefreshedTransfer {
 [Remote]
 enum RefreshTransferStatus {
   "WaitingCounterparty",
+  "WaitingSafeHeight",
   "WaitingConfirmations",
 };
 
@@ -554,6 +573,7 @@ enum TransferKind {
   "Send",
   "Inflation",
   "Burn",
+  "Link",
 };
 
 [Remote]
@@ -615,6 +635,7 @@ dictionary Transfer {
   TransferKind kind;
   string? txid;
   string? recipient_id;
+  string? proxy_recipient_id;
   Outpoint? receive_utxo;
   Outpoint? change_utxo;
   u64? expiration_timestamp;
@@ -817,6 +838,7 @@ enum TypeOfTransition {
   "Inflate",
   "Transfer",
   "Burn",
+  "Link",
 };
 
 [Remote]
@@ -886,6 +908,7 @@ dictionary VssBackupInfo {
   boolean backup_exists;
   i64? server_version;
   boolean backup_required;
+  string? last_auto_backup_error;
 };
 
 interface VssBackupClient {
@@ -1072,7 +1095,7 @@ interface Wallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(string? asset_id);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(
@@ -1242,7 +1265,7 @@ interface MultisigWallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(string? asset_id);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(

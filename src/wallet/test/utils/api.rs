@@ -63,7 +63,7 @@ pub(crate) trait OfflineSigParty {
             .unwrap();
         println!(
             "receive with recipient_id {} is in status {:?}",
-            recipient_id, &transfer_data.status
+            recipient_id, transfer_data.status
         );
         transfer_data.status == expected_status
     }
@@ -82,7 +82,7 @@ pub(crate) trait OfflineSigParty {
         let batch_transfer = batch_transfers.first().unwrap();
         println!(
             "send with txid {} is in status {:?}",
-            txid, &batch_transfer.status
+            txid, batch_transfer.status
         );
         batch_transfer.status == expected_status
     }
@@ -453,7 +453,7 @@ pub(crate) trait OfflineSigParty {
 
     fn get_pending_blind_transfers(&self) -> Vec<Transfer> {
         self.wlt()
-            .list_transfers(None)
+            .list_transfers(AssetFilter::None, None)
             .unwrap()
             .into_iter()
             .filter(|t| t.status.pending() && t.kind == TransferKind::ReceiveBlind)
@@ -558,7 +558,24 @@ pub(crate) trait OfflineSigParty {
     }
 
     fn list_transfers_result(&self, asset_id: Option<&str>) -> Result<Vec<Transfer>, Error> {
-        self.wlt().list_transfers(asset_id.map(|a| a.to_string()))
+        let filter = match asset_id {
+            Some(a) => AssetFilter::Id(a.to_string()),
+            None => AssetFilter::None,
+        };
+        self.wlt().list_transfers(filter, None)
+    }
+
+    fn list_transfers_filtered(&self, filter: AssetFilter, txid: Option<&str>) -> Vec<Transfer> {
+        self.list_transfers_filtered_result(filter, txid).unwrap()
+    }
+
+    fn list_transfers_filtered_result(
+        &self,
+        filter: AssetFilter,
+        txid: Option<&str>,
+    ) -> Result<Vec<Transfer>, Error> {
+        self.wlt()
+            .list_transfers(filter, txid.map(|t| t.to_string()))
     }
 
     fn list_unspents(&mut self, settled_only: bool) -> Vec<Unspent> {
@@ -1075,6 +1092,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             amounts,
             inflation_amounts,
             reject_list_url,
+            None,
         )
     }
 

@@ -1,0 +1,30 @@
+name: AI Review - <ProviderName>
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+jobs:
+  provider-review:
+    if: contains(github.event.pull_request.labels.*.name, 'ai-review/<provider>')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-<provider>-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # Replace this step with provider-specific action.
+      - name: Run provider review
+        run: |
+          echo "Replace with provider-specific action."
+          echo "Use secret(s), model, and prompt required by your provider."

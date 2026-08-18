@@ -16,7 +16,7 @@ use rgb_lib::{
     keys::WitnessVersion,
     utils::BitcoinNetwork,
     wallet::{
-        Invoice, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline,
+        AssetFilter, Invoice, Online, OnlineOptions, Recipient, RefreshFilter, RgbWalletOpsOffline,
         RgbWalletOpsOnline, SinglesigKeys, SyncOptions, Wallet, WalletData,
     },
 };
@@ -447,9 +447,10 @@ pub extern "C" fn rgblib_list_transactions(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_list_transfers(
     wallet: &COpaqueStruct,
-    asset_id_opt: *const c_char,
+    asset_filter: *const c_char,
+    txid_opt: *const c_char,
 ) -> CResultString {
-    list_transfers(wallet, asset_id_opt).into()
+    list_transfers(wallet, asset_filter, txid_opt).into()
 }
 
 #[unsafe(no_mangle)]
@@ -625,6 +626,19 @@ pub extern "C" fn rgblib_validate_consignment_offchain(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn rgblib_create_consignments(
+    wallet: &COpaqueStruct,
+    psbt: *const c_char,
+) -> CResultString {
+    create_consignments(wallet, psbt).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_string_free(ptr: *mut c_char) {
+    string_free(ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn rgblib_witness_receive(
     wallet: &COpaqueStruct,
     asset_id_opt: *const c_char,
@@ -728,4 +742,26 @@ pub extern "C" fn rgblib_restore_from_vss(
     target_dir: *const c_char,
 ) -> CResultString {
     restore_from_vss(config_json, target_dir).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_free_reclaims_ok_err_and_null() {
+        for i in 0..10_000 {
+            let ok: CResultString = Ok::<String, Error>(format!("consignment_out-{i}")).into();
+            assert!(matches!(ok.result, CResultValue::Ok));
+            assert!(!ok.inner.is_null());
+            rgblib_string_free(ok.inner);
+
+            let err: CResultString = Err::<String, Error>(Error::TypeMismatch).into();
+            assert!(matches!(err.result, CResultValue::Err));
+            assert!(!err.inner.is_null());
+            rgblib_string_free(err.inner);
+        }
+
+        rgblib_string_free(null_mut());
+    }
 }

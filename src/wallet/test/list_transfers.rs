@@ -169,6 +169,105 @@ fn success() {
     );
 }
 
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn filters() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset_nia = party.issue_asset_nia(None);
+    let asset_cfa = party.issue_asset_cfa(None, None);
+
+    // one batch tx carrying transfers of both assets
+    let receive_nia = rcv_party.blind_receive();
+    let receive_cfa = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([
+        (
+            asset_nia.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_nia.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+        (
+            asset_cfa.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_cfa.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+    ]);
+    let txid = party.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+
+    // Any + txid: the tx's transfers across all assets
+    let by_txid = party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
+    assert_eq!(by_txid.len(), 2);
+    assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
+
+    // Id + txid: intersection, restricted to the given asset
+    let nia_by_txid =
+        party.list_transfers_filtered(AssetFilter::Id(asset_nia.asset_id.clone()), Some(&txid));
+    assert_eq!(nia_by_txid.len(), 1);
+    let expected: Vec<i32> = party
+        .list_transfers(Some(&asset_nia.asset_id))
+        .into_iter()
+        .filter(|t| t.txid == Some(txid.clone()))
+        .map(|t| t.idx)
+        .collect();
+    assert_eq!(vec![nia_by_txid[0].idx], expected);
+
+    // Any + no txid: the whole history (2 issuances + 2 sends)
+    let all = party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
+    assert_eq!(all.len(), 4);
+
+    // None: receiver's pending blind receives not yet tied to an asset
+    let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
+    assert_eq!(pending.len(), 2);
+
+    // settle the batch so the change is spendable again
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+
+    // Id + txid of a tx not carrying that asset: empty
+    let receive_nia_2 = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset_nia.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_nia_2.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid_2 = party.send_retry(&recipient_map);
+    assert!(
+        party
+            .list_transfers_filtered(AssetFilter::Id(asset_cfa.asset_id.clone()), Some(&txid_2))
+            .is_empty()
+    );
+
+    // unknown txid: empty
+    let unknown = "0000000000000000000000000000000000000000000000000000000000000000";
+    assert!(
+        party
+            .list_transfers_filtered(AssetFilter::AnyOrNone, Some(unknown))
+            .is_empty()
+    );
+}
+
 #[test]
 #[parallel]
 fn fail() {
@@ -176,5 +275,12 @@ fn fail() {
 
     // asset not found
     let result = party.list_transfers_result(Some("rgb1inexistent"));
+    assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
+
+    // asset not found also when a txid is given
+    let result = party.list_transfers_filtered_result(
+        AssetFilter::Id(s!("rgb1inexistent")),
+        Some("0000000000000000000000000000000000000000000000000000000000000000"),
+    );
     assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
 }

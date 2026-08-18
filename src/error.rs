@@ -127,6 +127,17 @@ pub enum Error {
         details: String,
     },
 
+    /// The consistency check failed on a wallet that was just restored from a VSS backup,
+    /// meaning the backup itself is inconsistent or older than other wallet state
+    #[error(
+        "The restored VSS backup is inconsistent ({details}). The backup is likely stale or was \
+         taken mid-operation; restore a newer backup or recover from the original wallet data."
+    )]
+    RestoredBackupInconsistent {
+        /// Error details
+        details: String,
+    },
+
     /// An error was received from the indexer
     #[error("Indexer error: {details}")]
     Indexer {
@@ -211,6 +222,13 @@ pub enum Error {
     /// The consignment is invalid
     #[error("Invalid consignment")]
     InvalidConsignment,
+
+    /// The provided contracts cannot be linked
+    #[error("Invalid contract link: {details}")]
+    InvalidContractLink {
+        /// Error details
+        details: String,
+    },
 
     /// The provided cosigner is invalid
     #[error("Invalid cosigner: {details}")]
@@ -351,6 +369,13 @@ pub enum Error {
     /// The provided reject list URL is invalid
     #[error("Invalid reject list URL: {details}")]
     InvalidRejectListUrl {
+        /// Error details
+        details: String,
+    },
+
+    /// The provided outpoint does not hold a spendable right
+    #[error("Invalid right outpoint: {details}")]
+    InvalidRightOutpoint {
         /// Error details
         details: String,
     },

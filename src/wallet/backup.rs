@@ -111,7 +111,7 @@ pub trait WalletBackup: WalletCore {
         info!(self.logger(), "starting backup...");
         let backup_file = PathBuf::from(&backup_path);
         if backup_file.exists() {
-            return Err(Error::FileAlreadyExists {
+            Err(Error::FileAlreadyExists {
                 path: backup_path.to_string(),
             })?;
         }
@@ -268,9 +268,21 @@ pub trait WalletBackup: WalletCore {
     /// VSS server after operations like send, receive, issue, etc.
     #[cfg(feature = "vss")]
     fn configure_vss_backup(&mut self, config: super::vss::VssBackupConfig) -> Result<(), Error> {
+        let auto_backup = config.auto_backup;
         let client = super::vss::VssBackupClient::new(config)?;
         self.set_vss_client(Some(Arc::new(client)));
         info!(self.logger(), "VSS auto-backup configured");
+        // Upload an initial backup if the wallet has unsaved state, so
+        // enabling auto-backup never leaves an empty store behind.
+        if auto_backup {
+            let txn = self.database().begin_transaction()?;
+            let backup_required = self.get_backup_info(&txn)?;
+            txn.commit()?;
+            if backup_required {
+                info!(self.logger(), "VSS auto-backup: uploading initial backup");
+                self.trigger_auto_backup();
+            }
+        }
         Ok(())
     }
 
@@ -333,6 +345,7 @@ pub trait WalletBackup: WalletCore {
                     self.logger(),
                     "VSS auto-backup: failed to create data: {}", e
                 );
+                client.record_auto_backup_result(Some(e.to_string()));
                 self.auto_backup_in_progress()
                     .store(false, Ordering::SeqCst);
                 return;
@@ -352,6 +365,7 @@ pub trait WalletBackup: WalletCore {
             match client.upload_backup(backup_data).await {
                 Ok(version) => {
                     info!(logger, "VSS auto-backup completed, version: {}", version);
+                    client.record_auto_backup_result(None);
                     // Update backup timestamp on success
                     if let Ok(txn) = database.begin_transaction()
                         && let Ok(Some(backup_info)) = txn.get_backup_info()
@@ -369,6 +383,7 @@ pub trait WalletBackup: WalletCore {
                 }
                 Err(e) => {
                     error!(logger, "VSS auto-backup failed: {}", e);
+                    client.record_auto_backup_result(Some(e.to_string()));
                 }
             }
         };
@@ -404,6 +419,7 @@ pub trait WalletBackup: WalletCore {
             backup_exists,
             server_version,
             backup_required,
+            last_auto_backup_error: client.last_auto_backup_error(),
         })
     }
 
