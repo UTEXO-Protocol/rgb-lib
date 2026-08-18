@@ -1674,6 +1674,24 @@ pub trait WalletOnline: WalletOffline {
             });
         }
 
+        // under address reuse multiple pending witness invoices can share the same script-derived
+        // recipient ID: error out, as the paid invoice cannot be identified
+        let mut seen_recipient_ids = HashSet::new();
+        for (_, _, transfer, _, _) in &matches {
+            let recipient_id = transfer
+                .recipient_id
+                .clone()
+                .expect("matched transfer should have a recipient ID");
+            if !seen_recipient_ids.insert(recipient_id.clone()) {
+                return Err(Error::CannotProvideOutOfBandConsignment {
+                    details: format!(
+                        "ambiguous recipient {recipient_id}: multiple pending transfers share \
+                         this recipient ID (address reuse), cannot disambiguate out-of-band"
+                    ),
+                });
+            }
+        }
+
         // a single consignment (for one asset) can pay more than one of this wallet's pending
         // invoices (e.g. a sender batched a send to two of them), so process every matched receive
         let mut results: RefreshResult = HashMap::new();
@@ -1920,27 +1938,48 @@ pub trait WalletOnline: WalletOffline {
     ) -> Result<Option<OperationResult>, Error> {
         let db_data = txn.get_db_data(false)?;
 
-        // recipient IDs are unique per transfer, so this identifies a single recipient transfer
-        let transfer = db_data
+        // recipient IDs can be shared by multiple transfers under address reuse: error out when
+        // more than one pending outgoing transfer matches, as the ACK target cannot be identified
+        let mut candidates = vec![];
+        for transfer in db_data
             .transfers
             .iter()
-            .find(|t| t.recipient_id.as_deref() == Some(recipient_id.as_str()))
-            .cloned()
-            .ok_or(Error::CannotProvideOutOfBandAck {
+            .filter(|t| t.recipient_id.as_deref() == Some(recipient_id.as_str()))
+        {
+            let asset_transfer = db_data
+                .asset_transfers
+                .iter()
+                .find(|at| at.idx == transfer.asset_transfer_idx)
+                .expect("transfer should have an asset transfer");
+            let batch_transfer = db_data
+                .batch_transfers
+                .iter()
+                .find(|bt| bt.idx == asset_transfer.batch_transfer_idx)
+                .cloned()
+                .expect("asset transfer should have a batch transfer");
+            candidates.push((transfer.clone(), batch_transfer));
+        }
+        if candidates.is_empty() {
+            return Err(Error::CannotProvideOutOfBandAck {
                 details: s!("no transfer found for the provided recipient ID"),
-            })?;
-        let asset_transfer = db_data
-            .asset_transfers
+            });
+        }
+        let pending: Vec<usize> = candidates
             .iter()
-            .find(|at| at.idx == transfer.asset_transfer_idx)
-            .cloned()
-            .expect("transfer should have an asset transfer");
-        let batch_transfer = db_data
-            .batch_transfers
-            .iter()
-            .find(|bt| bt.idx == asset_transfer.batch_transfer_idx)
-            .cloned()
-            .expect("asset transfer should have a batch transfer");
+            .enumerate()
+            .filter(|(_, (_, bt))| !bt.incoming && bt.status == TransferStatus::WaitingCounterparty)
+            .map(|(i, _)| i)
+            .collect();
+        if pending.len() > 1 {
+            return Err(Error::CannotProvideOutOfBandAck {
+                details: format!(
+                    "ambiguous recipient {recipient_id}: multiple pending transfers share this \
+                     recipient ID (address reuse), cannot disambiguate out-of-band"
+                ),
+            });
+        }
+        let (transfer, batch_transfer) =
+            candidates.swap_remove(pending.first().copied().unwrap_or(0));
 
         // check if the transfer can receive an out-of-band ACK
         if batch_transfer.incoming {
