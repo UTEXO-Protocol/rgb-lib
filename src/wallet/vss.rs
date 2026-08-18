@@ -1012,10 +1012,11 @@ fn is_bdk_db_file(path: &str) -> bool {
     filename == BDK_DB_NAME || filename == BDK_DB_WO_NAME
 }
 
-/// Check if a zip entry path is the wallet manifest (contains xpubs and the fingerprint)
+/// Check if a zip entry path is the wallet manifest, or a temp copy orphaned by a crash
+/// mid-write (contains xpubs and the fingerprint)
 fn is_wallet_manifest_file(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or(path);
-    filename == WALLET_MANIFEST_FILE
+    filename == WALLET_MANIFEST_FILE || filename == format!("{WALLET_MANIFEST_FILE}.tmp")
 }
 
 /// Sanitize a wallet zip for plaintext (unencrypted) backup
@@ -1441,6 +1442,12 @@ mod tests {
             )
             .unwrap();
 
+            // Add an orphaned manifest temp file left by a crash mid-write
+            zip.start_file(format!("{fingerprint}/{WALLET_MANIFEST_FILE}.tmp"), options)
+                .unwrap();
+            zip.write_all(br#"{"account_xpub_vanilla":"tpubFakeVanilla"}"#)
+                .unwrap();
+
             zip.finish().unwrap();
         }
         buffer.into_inner()
@@ -1494,6 +1501,7 @@ mod tests {
             let mut file = archive.by_index(i).unwrap();
             let filename = file.name().rsplit('/').next().unwrap().to_string();
             assert_ne!(filename, WALLET_MANIFEST_FILE);
+            assert_ne!(filename, format!("{WALLET_MANIFEST_FILE}.tmp"));
             let mut content = Vec::new();
             file.read_to_end(&mut content).unwrap();
             let content = String::from_utf8_lossy(&content);
