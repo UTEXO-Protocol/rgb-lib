@@ -21,12 +21,7 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, ContractId, Error as RgbLibError,
     FileContent, RgbTransfer, RgbTransport, TransferStatus, TransportType, WalletTransactionType,
-    bdk_wallet::bitcoin::{
-        OutPoint as BitcoinOutPoint,
-        Psbt,
-        Txid,
-        secp256k1::SecretKey,
-    },
+    bdk_wallet::bitcoin::{OutPoint as BitcoinOutPoint, Psbt, Txid, secp256k1::SecretKey},
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
@@ -50,9 +45,7 @@ use rgb_lib::{
         TransferTransportEndpoint, TransportEndpoint as RgbLibTransportEndpoint, TypeOfTransition,
         Unspent as RgbLibUnspent, UserRole, Utxo, Wallet as RgbLibWallet, WalletData,
         WalletDescriptors, WitnessData,
-        rust_only::{
-            AssetColoringInfo as RgbAssetColoringInfo, ColoringInfo as RgbColoringInfo,
-        },
+        rust_only::{AssetColoringInfo as RgbAssetColoringInfo, ColoringInfo as RgbColoringInfo},
         vss::{
             VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
             VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
@@ -169,10 +162,11 @@ pub struct OutpointAssignments {
 fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, RgbLibError> {
     let mut asset_info_map = HashMap::new();
     for asset in coloring_info.assets {
-        let contract_id =
-            ContractId::from_str(&asset.asset_id).map_err(|e| RgbLibError::InvalidColoringInfo {
+        let contract_id = ContractId::from_str(&asset.asset_id).map_err(|e| {
+            RgbLibError::InvalidColoringInfo {
                 details: format!("invalid asset_id '{}': {e}", asset.asset_id),
-            })?;
+            }
+        })?;
         asset_info_map.insert(
             contract_id,
             RgbAssetColoringInfo {
@@ -1242,9 +1236,11 @@ impl Wallet {
         let mut psbt = Psbt::from_str(&psbt)?;
         let coloring = to_rgb_coloring_info(coloring_info)?;
         let input_outpoints = to_bitcoin_outpoints(input_outpoints)?;
-        let transfers = self
-            ._get_wallet()
-            .color_psbt_for_outpoints_and_consume(&mut psbt, coloring, input_outpoints)?;
+        let transfers = self._get_wallet().color_psbt_for_outpoints_and_consume(
+            &mut psbt,
+            coloring,
+            input_outpoints,
+        )?;
 
         let mut consignments = Vec::with_capacity(transfers.len());
         for transfer in &transfers {
@@ -1285,12 +1281,9 @@ impl Wallet {
         blinding: u64,
     ) -> Result<AcceptTransferResult, RgbLibError> {
         let transfer = load_rgb_transfer(&consignment)?;
-        let (transfer, assignments) = self._get_wallet().accept_transfer_from_consignment(
-            transfer,
-            txid,
-            vout,
-            blinding,
-        )?;
+        let (transfer, assignments) = self
+            ._get_wallet()
+            .accept_transfer_from_consignment(transfer, txid, vout, blinding)?;
         Ok(AcceptTransferResult {
             consignment: save_rgb_transfer(&transfer)?,
             assignments: assignments.into_iter().map(Into::into).collect(),
