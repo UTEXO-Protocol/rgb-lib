@@ -524,6 +524,19 @@ pub trait WalletOnline: WalletOffline {
                 });
             }
 
+            // a transfer waiting for the counterparty's broadcast can only be failed once it has
+            // expired, since the TX may still be broadcast before then
+            if batch_transfer.status == TransferStatus::WaitingBroadcast {
+                let now = now().unix_timestamp();
+                let expired = batch_transfer.expiration.unwrap_or(now) < now;
+                if !expired {
+                    return Ok(FailTransfersOutcome {
+                        transfers_changed: false,
+                        cannot_fail: true,
+                    });
+                }
+            }
+
             if no_asset_only {
                 let asset_transfers = batch_transfer.get_asset_transfers(&db_data.asset_transfers);
                 let connected_assets = asset_transfers.iter().any(|t| t.asset_id.is_some());
@@ -958,6 +971,20 @@ pub trait WalletOnline: WalletOffline {
         txids
     }
 
+    // return the signed witness tx embedded in the consignment, if present
+    fn donation_signed_tx(pub_witness: &PubWitness) -> Option<BdkTransaction> {
+        pub_witness
+            .tx()
+            .filter(|tx| {
+                !tx.input.is_empty()
+                    && tx
+                        .input
+                        .iter()
+                        .all(|i| !i.witness.is_empty() || !i.script_sig.is_empty())
+            })
+            .cloned()
+    }
+
     fn ack_consignment(
         &self,
         txn: &DbTxn,
@@ -965,6 +992,7 @@ pub trait WalletOnline: WalletOffline {
         recipient_id: String,
         updated_batch_transfer: &mut DbBatchTransferActMod,
         proxy_url: String,
+        signed_tx: Option<BdkTransaction>,
     ) -> Result<Option<DbBatchTransfer>, Error> {
         debug!(self.logger(), "ACKing consignment...");
 
@@ -999,7 +1027,20 @@ pub trait WalletOnline: WalletOffline {
             }
         };
 
-        updated_batch_transfer.status = ActiveValue::Set(TransferStatus::WaitingConfirmations);
+        updated_batch_transfer.status = if let Some(tx) = signed_tx {
+            debug!(
+                self.logger(),
+                "Consignment contains the signed TX, broadcasting it"
+            );
+            self.broadcast_tx(tx)?;
+            ActiveValue::Set(TransferStatus::WaitingConfirmations)
+        } else {
+            debug!(
+                self.logger(),
+                "Consignment doesn't contain the signed TX, waiting for broadcast"
+            );
+            ActiveValue::Set(TransferStatus::WaitingBroadcast)
+        };
 
         Ok(Some(txn.update_batch_transfer(updated_batch_transfer)?))
     }
@@ -1503,12 +1544,15 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
+        let signed_tx = Self::donation_signed_tx(&anchored_bundle.pub_witness);
+
         self.ack_consignment(
             txn,
             batch_transfer,
             proxy_rid.clone(),
             &mut updated_batch_transfer,
             proxy_url,
+            signed_tx,
         )
     }
 
@@ -1546,6 +1590,15 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
+        let witness_id = RgbTxid::from_str(txid).expect("batch transfer txid should be valid");
+        // the bundle sending to us is usually the last one, so iterate in reverse
+        let signed_tx = valid_consignment
+            .bundles
+            .iter()
+            .rev()
+            .find(|ab| ab.witness_id() == witness_id)
+            .and_then(|ab| Self::donation_signed_tx(&ab.pub_witness));
+
         let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
         let tte_data = txn.get_transfer_transport_endpoints_data(transfer.idx)?;
         let (_, transport_endpoint) = tte_data
@@ -1558,6 +1611,7 @@ pub trait WalletOnline: WalletOffline {
             proxy_rid,
             &mut updated_batch_transfer,
             transport_endpoint.endpoint,
+            signed_tx,
         )
     }
 
@@ -1637,6 +1691,17 @@ pub trait WalletOnline: WalletOffline {
                     })?,
             ));
         } else if batch_transfer_transfers.iter().all(|t| t.ack == Some(true)) {
+            // don't broadcast a transfer that has expired: past its expiration the recipient is
+            // allowed to fail it, so broadcasting now could complete a transfer the recipient has
+            // already given up on
+            let now = now().unix_timestamp();
+            if batch_transfer.expiration.unwrap_or(now) < now {
+                debug!(
+                    self.logger(),
+                    "Transfer expired before the ACK was seen, failing it instead of broadcasting"
+                );
+                return Ok(Some(self.fail_batch_transfer(txn, batch_transfer)?));
+            }
             match self.set_hub_accept_status(batch_transfer.idx)? {
                 Some(true) => {}
                 Some(false) => return Ok(Some(self.fail_batch_transfer(txn, batch_transfer)?)),
@@ -1700,11 +1765,20 @@ pub trait WalletOnline: WalletOffline {
         let confirmations = self.indexer().get_tx_confirmations(&txid)?;
         debug!(self.logger(), "Confirmations: {:?}", confirmations);
 
-        if let Some(confirmations) = confirmations {
-            if confirmations < batch_transfer.min_confirmations as u64 {
-                return Ok(None);
+        let Some(confirmations) = confirmations else {
+            return Ok(None);
+        };
+
+        if confirmations < batch_transfer.min_confirmations as u64 {
+            if batch_transfer.status == TransferStatus::WaitingBroadcast {
+                let mut updated_batch_transfer: DbBatchTransferActMod =
+                    batch_transfer.clone().into();
+                updated_batch_transfer.status =
+                    ActiveValue::Set(TransferStatus::WaitingConfirmations);
+                return Ok(Some(
+                    txn.update_batch_transfer(&mut updated_batch_transfer)?,
+                ));
             }
-        } else {
             return Ok(None);
         }
 
@@ -1802,7 +1876,7 @@ pub trait WalletOnline: WalletOffline {
         skip_sync: bool,
     ) -> Result<Option<DbBatchTransfer>, Error> {
         debug!(self.logger(), "Refreshing transfer: {:?}", transfer);
-        let incoming = transfer.incoming(&db_data.asset_transfers, &db_data.transfers);
+        let incoming = transfer.incoming;
         if !filter.is_empty() {
             let requested = RefreshFilter {
                 status: RefreshTransferStatus::try_from(transfer.status).expect("pending status"),
@@ -1820,7 +1894,7 @@ pub trait WalletOnline: WalletOffline {
                 self.wait_counterparty(txn, transfer, db_data, incoming)
             }
             TransferStatus::WaitingSafeHeight => self.wait_safe_height(txn, transfer, db_data),
-            TransferStatus::WaitingConfirmations => {
+            TransferStatus::WaitingBroadcast | TransferStatus::WaitingConfirmations => {
                 self.wait_confirmations(txn, transfer, db_data, incoming, skip_sync)
             }
             _ => Ok(None),
@@ -2827,6 +2901,7 @@ pub trait WalletOnline: WalletOffline {
             expiration: ActiveValue::Set(info_contents.expiration_timestamp),
             created_at: ActiveValue::Set(info_contents.created_at),
             min_confirmations: ActiveValue::Set(info_contents.min_confirmations),
+            incoming: ActiveValue::Set(false),
             ..Default::default()
         };
         let batch_transfer_idx = txn.set_batch_transfer(batch_transfer)?;
@@ -2846,7 +2921,6 @@ pub trait WalletOnline: WalletOffline {
                 let transfer = DbTransferActMod {
                     asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
                     requested_assignment: ActiveValue::Set(Some(Assignment::LinkRight)),
-                    incoming: ActiveValue::Set(false),
                     recipient_id: ActiveValue::Set(None),
                     recipient_type: ActiveValue::Set(None),
                     ..Default::default()
@@ -2983,7 +3057,6 @@ pub trait WalletOnline: WalletOffline {
                 let transfer = DbTransferActMod {
                     asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
                     requested_assignment: ActiveValue::Set(Some(req_ass)),
-                    incoming: ActiveValue::Set(false),
                     recipient_id: ActiveValue::Set(rcpt_id),
                     recipient_type: ActiveValue::Set(rcpt_type),
                     ..Default::default()
@@ -3061,16 +3134,10 @@ pub trait WalletOnline: WalletOffline {
         // in a send-to-oneself, the txid is shared between send and receive transfers; only the
         // outgoing batch transfer should be updated here, incoming ones must be ignored so the send
         // transfers are created
-        let existing = match txn.get_batch_transfer_by_txid(&txid)? {
-            Some(batch_transfer) => {
-                let asset_transfers = txn.iter_asset_transfers()?;
-                let transfers = txn.iter_transfers()?;
-                let outgoing = !batch_transfer.incoming(&asset_transfers, &transfers);
-                outgoing.then_some(batch_transfer)
-            }
-            None => None,
-        };
-        if let Some(existing) = existing {
+        if let Some(existing) = txn
+            .get_batch_transfer_by_txid(&txid)?
+            .filter(|batch_transfer| !batch_transfer.incoming)
+        {
             let mut updated: DbBatchTransferActMod = existing.clone().into();
             updated.status = ActiveValue::Set(status);
             txn.update_batch_transfer(&mut updated)?;
@@ -3495,8 +3562,18 @@ pub trait WalletOnline: WalletOffline {
     }
 
     fn send_end_impl(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<OperationResult, Error> {
-        let (txid, transfer_dir, mut info_contents, fascia) =
+        let (txid, transfer_dir, mut info_contents, mut fascia) =
             self.get_transfer_end_data(signed_psbt)?;
+
+        // for donations, embed the signed transaction in the consignment so also the recipient can
+        // broadcast it
+        if info_contents.donation {
+            let tx = signed_psbt
+                .clone()
+                .extract_tx()
+                .map_err(InternalError::from)?;
+            fascia.update_pub_witness(PubWitness::with(tx));
+        }
 
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
 
@@ -4292,8 +4369,9 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
     /// If no `batch_transfer_idx` is provided, only expired transfers will be failed,
     /// and if `no_asset_only` is true transfers with an associated asset ID will be skipped.
     ///
-    /// Transfers are eligible if they remain in status [`TransferStatus::WaitingCounterparty`]
-    /// after a `refresh` has been performed.
+    /// Transfers are eligible if they remain in a fallible status after a `refresh` has been
+    /// performed. A transfer in status [`TransferStatus::WaitingBroadcast`] is an exception: it can
+    /// only be failed once it has expired, since the TX may still be broadcast before then.
     fn fail_transfers(
         &mut self,
         online: Online,

@@ -154,21 +154,6 @@ impl WalletOffline for MpcWallet {
         std::iter::empty()
     }
 
-    fn get_uncolorable_btc_sum(&self) -> Result<u64, Error> {
-        #[cfg(any(feature = "electrum", feature = "esplora"))]
-        {
-            if self.online_data().is_none() {
-                return Ok(0);
-            }
-            let utxos = self.query_vanilla_utxos()?;
-            Ok(utxos.iter().map(|(_, txout, _)| txout.value.to_sat()).sum())
-        }
-        #[cfg(not(any(feature = "electrum", feature = "esplora")))]
-        {
-            Ok(0)
-        }
-    }
-
     fn get_btc_balance_impl(
         &mut self,
         txn: &DbTxn,
@@ -784,7 +769,7 @@ impl MpcWallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
@@ -795,7 +780,7 @@ impl MpcWallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             RecipientType::Blind,
         )?;
@@ -810,7 +795,7 @@ impl MpcWallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -969,7 +954,7 @@ impl MpcWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending...");
         self.check_online(online)?;
@@ -980,7 +965,7 @@ impl MpcWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             true,
             None,
         )?;
@@ -1001,7 +986,7 @@ impl MpcWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         dry_run: bool,
     ) -> Result<SendBeginResult, Error> {
         info!(self.logger(), "Sending (begin)...");
@@ -1013,7 +998,7 @@ impl MpcWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             dry_run,
             None,
         )?;

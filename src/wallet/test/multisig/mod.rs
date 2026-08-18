@@ -1350,7 +1350,14 @@ fn offline() {
     assert_matches!(result, Err(Error::Offline));
 
     // wallet APIs
-    let result = wallet.blind_receive(fake_online, None, Assignment::Any, None, vec![], 0);
+    let result = wallet.blind_receive(
+        fake_online,
+        None,
+        Assignment::Any,
+        default_rcv_expiration(),
+        vec![],
+        0,
+    );
     assert_matches!(result, Err(Error::Offline));
 
     let result = wallet.burn_init(fake_online, "aid".into(), 0, 0, 0);
@@ -1398,7 +1405,14 @@ fn offline() {
     let result = wallet.send_btc_init(fake_online, "addr".into(), 0, 0, false);
     assert_matches!(result, Err(Error::Offline));
 
-    let result = wallet.send_init(fake_online, HashMap::new(), false, 0, 0, None);
+    let result = wallet.send_init(
+        fake_online,
+        HashMap::new(),
+        false,
+        0,
+        0,
+        default_send_expiration(),
+    );
     assert_matches!(result, Err(Error::Offline));
 
     let result = wallet.sync(
@@ -1410,7 +1424,14 @@ fn offline() {
     );
     assert_matches!(result, Err(Error::Offline));
 
-    let result = wallet.witness_receive(fake_online, None, Assignment::Any, None, vec![], 0);
+    let result = wallet.witness_receive(
+        fake_online,
+        None,
+        Assignment::Any,
+        default_rcv_expiration(),
+        vec![],
+        0,
+    );
     assert_matches!(result, Err(Error::Offline));
 }
 

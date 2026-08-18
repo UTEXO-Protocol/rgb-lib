@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bdk_wallet::bitcoin::secp256k1::SecretKey;
-// Note: this is the RustCrypto crate (streaming AEAD + XChaCha20). The similarly
-// named `chacha20-poly1305` (rust-bitcoin, stateless-only) is a transitive dep
+// Note: this is the RustCrypto crate (XChaCha20). The similarly named
+// `chacha20-poly1305` (rust-bitcoin, stateless-only) is a transitive dep
 // of vss-client-ng via bitreq — they are not interchangeable.
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, aead::stream};
+use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, aead::Aead};
 use hkdf::Hkdf;
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,7 @@ use zip::write::SimpleFileOptions;
 use crate::error::Error;
 use crate::utils::LOG_FILE;
 use crate::utils::setup_logger;
+use crate::wallet::backup::stream_be32_nonce;
 
 /// Whether auto-backup uploads block the calling operation or run asynchronously.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -780,7 +781,7 @@ pub fn derive_encryption_key(
             details: format!("HKDF expansion failed: {e}"),
         })?;
 
-    Ok(Key::clone_from_slice(&key_bytes))
+    Ok(Key::from(key_bytes))
 }
 
 /// Encrypt data using XChaCha20-Poly1305 with a key derived from `signing_key`
@@ -796,10 +797,8 @@ pub fn encrypt_data(
 ) -> Result<Vec<u8>, Error> {
     let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = metadata.nonce_bytes()?;
-    let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
-
-    let mut stream_encryptor = stream::EncryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = metadata.nonce_bytes()?;
+    let mut position: u32 = 0;
     let mut encrypted = Vec::new();
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_ENCRYPT];
     let mut reader = std::io::Cursor::new(data);
@@ -808,23 +807,25 @@ pub fn encrypt_data(
         let read_count = reader.read(&mut buffer).map_err(|e| Error::Internal {
             details: format!("Failed to read data: {e}"),
         })?;
+        let is_last = read_count != BACKUP_BUFFER_LEN_ENCRYPT;
+        if !is_last && position == u32::MAX {
+            return Err(Error::Internal {
+                details: "data too large".to_string(),
+            });
+        }
 
-        if read_count == BACKUP_BUFFER_LEN_ENCRYPT {
-            let ciphertext = stream_encryptor
-                .encrypt_next(buffer.as_slice())
+        let nonce = stream_be32_nonce(&nonce_prefix, position, is_last);
+        let ciphertext =
+            aead.encrypt(&nonce, &buffer[..read_count])
                 .map_err(|e| Error::Internal {
                     details: format!("Encryption error: {e}"),
                 })?;
-            encrypted.extend(ciphertext);
-        } else {
-            let ciphertext = stream_encryptor
-                .encrypt_last(&buffer[..read_count])
-                .map_err(|e| Error::Internal {
-                    details: format!("Encryption error: {e}"),
-                })?;
-            encrypted.extend(ciphertext);
+        encrypted.extend(ciphertext);
+
+        if is_last {
             break;
         }
+        position += 1;
     }
 
     Ok(encrypted)
@@ -844,10 +845,8 @@ pub fn decrypt_data(
 ) -> Result<Vec<u8>, Error> {
     let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = metadata.nonce_bytes()?;
-    let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
-
-    let mut stream_decryptor = stream::DecryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = metadata.nonce_bytes()?;
+    let mut position: u32 = 0;
     let mut decrypted = Vec::new();
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_DECRYPT];
     let mut reader = std::io::Cursor::new(encrypted);
@@ -858,23 +857,33 @@ pub fn decrypt_data(
         })?;
 
         if read_count == BACKUP_BUFFER_LEN_DECRYPT {
-            let cleartext = stream_decryptor
-                .decrypt_next(buffer.as_slice())
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            if position == u32::MAX {
+                return Err(Error::Internal {
+                    details: "data too large".to_string(),
+                });
+            }
+            let nonce = stream_be32_nonce(&nonce_prefix, position, false);
+            let cleartext =
+                aead.decrypt(&nonce, buffer.as_slice())
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
         } else if read_count == 0 {
             break;
         } else {
-            let cleartext = stream_decryptor
-                .decrypt_last(&buffer[..read_count])
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            let nonce = stream_be32_nonce(&nonce_prefix, position, true);
+            let cleartext =
+                aead.decrypt(&nonce, &buffer[..read_count])
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
             break;
         }
+        position += 1;
     }
 
     Ok(decrypted)

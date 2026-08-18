@@ -175,10 +175,7 @@ use bdk_wallet::{
     },
     coin_selection::InsufficientFunds,
 };
-use chacha20poly1305::{
-    Key, KeyInit, XChaCha20Poly1305,
-    aead::{generic_array::GenericArray, stream},
-};
+use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce, aead::Aead};
 use file_format::FileFormat;
 use psrgbt::{RgbOutExt, RgbPsbtExt};
 use rand::{RngExt, distr::Alphanumeric};
@@ -234,10 +231,7 @@ use schemata::{
     CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
     OS_INFLATION, OS_LINK, TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
 };
-use scrypt::{
-    Params, Scrypt,
-    password_hash::{PasswordHasher, Salt, SaltString, rand_core::OsRng},
-};
+use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
     ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DatabaseTransaction,
     DbErr, DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveValue, JsonValue, QueryFilter,
@@ -253,7 +247,6 @@ use strict_encoding::{DecodeError, DeserializeError, FieldName};
 use strict_types::StrictDumb;
 use tempfile::TempDir;
 use time::OffsetDateTime;
-use typenum::consts::U32;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use url::Url;
 use walkdir::WalkDir;

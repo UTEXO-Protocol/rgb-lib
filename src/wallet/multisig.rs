@@ -399,7 +399,7 @@ pub struct MultisigVotingStatus {
 struct ReceiveMetadata {
     invoice: String,
     min_confirmations: u8,
-    expiration_timestamp: Option<i64>,
+    expiration_timestamp: i64,
     secret_seal: Option<GraphSeal>,
 }
 
@@ -1518,7 +1518,7 @@ impl MultisigWallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
         recipient_type: RecipientType,
@@ -1531,7 +1531,7 @@ impl MultisigWallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             recipient_type,
         )?;
@@ -1562,7 +1562,7 @@ impl MultisigWallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -1576,7 +1576,7 @@ impl MultisigWallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
@@ -1595,13 +1595,13 @@ impl MultisigWallet {
         online: Online,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via blinded UTXO for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via blinded UTXO for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -1629,7 +1629,7 @@ impl MultisigWallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
@@ -1648,13 +1648,13 @@ impl MultisigWallet {
         online: Online,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via witness TX for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via witness TX for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -1863,7 +1863,7 @@ impl MultisigWallet {
             recipient_id: invoice_data.recipient_id.clone(),
             endpoints,
             created_at: now().unix_timestamp(),
-            expiration_timestamp: invoice_data.expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp: receive_metadata.expiration_timestamp,
             blind_seal,
             recipient_type_full,
             script_pubkey,
@@ -1874,7 +1874,7 @@ impl MultisigWallet {
         Ok(ReceiveData {
             invoice: receive_metadata.invoice,
             recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -2343,8 +2343,12 @@ impl MultisigWallet {
     /// the transaction anchoring the transfer for it to be considered final and move (while
     /// refreshing) to the [`TransferStatus::Settled`] status.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
-    /// transfer.
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
+    /// transfer. This should be set to the same value specified by the recipient's invoice, so
+    /// that sender and recipient enforce the same deadline; once it passes, the recipient is
+    /// allowed to fail the transfer and the sender will avoid broadcasting it even if a late ACK is
+    /// received. In case of a batch transfer, set it to the minimum (earliest) expiration across
+    /// the recipients' invoices.
     ///
     /// Returns a PSBT ready to be signed and the operation index on the hub.
     pub fn send_init(
@@ -2354,7 +2358,7 @@ impl MultisigWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
     ) -> Result<InitOperationResult, Error> {
         info!(self.logger(), "Initiate sending...");
         self.check_online(online)?;
@@ -2366,7 +2370,7 @@ impl MultisigWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             true,
             None,
         )?;

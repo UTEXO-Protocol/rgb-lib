@@ -487,10 +487,14 @@ pub(crate) trait OfflineSigParty {
     }
 
     fn get_test_transfer_recipient(&self, recipient_id: &str) -> DbTransfer {
-        let mut transfers = self
-            .db_transfers()
-            .into_iter()
-            .filter(|t| t.recipient_id == Some(recipient_id.to_string()) && t.incoming);
+        let asset_transfers = self.db_asset_transfers();
+        let batch_transfers = self.db_batch_transfers();
+        let mut transfers = self.db_transfers().into_iter().filter(|t| {
+            t.recipient_id == Some(recipient_id.to_string())
+                && t.related_transfers(&asset_transfers, &batch_transfers)
+                    .1
+                    .incoming
+        });
         let transfer = transfers.next().unwrap();
         assert!(transfers.next().is_none());
         transfer
@@ -789,10 +793,6 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
                     if let Some(ref e) = rt.failure {
                         eprintln!("refresh of {i} failure: {e} ({e:?})");
                         match e {
-                            Error::Internal { details } => {
-                                println!("refresh of {i} internal error: {e}, details: {details}");
-                                non_fatal_error = true;
-                            }
                             Error::InvalidTxid => {
                                 println!("refresh of {i} invalid TXID: {e}");
                                 non_fatal_error = true;
@@ -982,7 +982,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .blind_receive(
                 asset_id,
                 Assignment::Any,
-                expiration,
+                expiration.unwrap_or_else(default_rcv_expiration),
                 TRANSPORT_ENDPOINTS.clone(),
                 MIN_CONFIRMATIONS,
             )
@@ -993,7 +993,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         self.wlt_mut().blind_receive(
             None,
             Assignment::Any,
-            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -1008,7 +1008,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .blind_receive(
                 None,
                 Assignment::Any,
-                expiration,
+                expiration.unwrap_or_else(default_rcv_expiration),
                 transport_endpoints,
                 MIN_CONFIRMATIONS,
             )
@@ -1144,7 +1144,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .witness_receive(
                 None,
                 Assignment::Any,
-                Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+                default_rcv_expiration(),
                 TRANSPORT_ENDPOINTS.clone(),
                 MIN_CONFIRMATIONS,
             )
@@ -1404,7 +1404,7 @@ impl SinglesigParty {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
+            default_send_expiration(),
             None,
         )
     }
@@ -1420,7 +1420,7 @@ impl SinglesigParty {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             false,
             None,
         )
@@ -1478,7 +1478,7 @@ impl SinglesigParty {
                 false,
                 fee_rate,
                 MIN_CONFIRMATIONS,
-                expiration_timestamp,
+                expiration_timestamp.unwrap_or_else(default_send_expiration),
                 None,
             )
             .unwrap()

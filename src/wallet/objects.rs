@@ -1220,6 +1220,7 @@ impl Invoice {
                 expiration_timestamp: decoded.expiry.map(|t| t as u64),
                 transport_endpoints,
                 network,
+                unknown_query_params: decoded.unknown_query.into_iter().collect(),
             },
         })
     }
@@ -1236,7 +1237,7 @@ impl Invoice {
 }
 
 /// The data of an RGB invoice.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct InvoiceData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
@@ -1259,6 +1260,8 @@ pub struct InvoiceData {
     pub expiration_timestamp: Option<u64>,
     /// Transport endpoints
     pub transport_endpoints: Vec<String>,
+    /// Unknown query parameters carried by the invoice
+    pub unknown_query_params: HashMap<String, String>,
 }
 
 /// An RGB transport endpoint.
@@ -1472,7 +1475,7 @@ pub struct ReceiveData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
     pub recipient_id: String,
     /// Expiration of the receive operation
-    pub expiration_timestamp: Option<u64>,
+    pub expiration_timestamp: u64,
     /// Batch transfer idx
     pub batch_transfer_idx: i32,
 }
@@ -1485,7 +1488,7 @@ pub struct ReceiveDataInternal {
     pub(crate) recipient_id: String,
     pub(crate) endpoints: Vec<String>,
     pub(crate) created_at: i64,
-    pub(crate) expiration_timestamp: Option<i64>,
+    pub(crate) expiration_timestamp: i64,
     pub(crate) recipient_type_full: RecipientTypeFull,
     pub(crate) blind_seal: Option<GraphSeal>,
     pub(crate) script_pubkey: Option<ScriptBuf>,
@@ -1860,6 +1863,8 @@ pub enum RefreshTransferStatus {
     WaitingCounterparty,
     /// Waiting for the safe height to be reached
     WaitingSafeHeight,
+    /// Waiting for the transfer transaction to be broadcasted
+    WaitingBroadcast,
     /// Waiting for the transfer transaction to reach the minimum number of confirmations
     WaitingConfirmations,
 }
@@ -1872,8 +1877,9 @@ impl TryFrom<TransferStatus> for RefreshTransferStatus {
         match x {
             TransferStatus::WaitingCounterparty => Ok(RefreshTransferStatus::WaitingCounterparty),
             TransferStatus::WaitingSafeHeight => Ok(RefreshTransferStatus::WaitingSafeHeight),
+            TransferStatus::WaitingBroadcast => Ok(RefreshTransferStatus::WaitingBroadcast),
             TransferStatus::WaitingConfirmations => Ok(RefreshTransferStatus::WaitingConfirmations),
-            _ => Err("RefreshTransferStatus only accepts pending statuses"),
+            _ => Err("RefreshTransferStatus only accepts waiting statuses"),
         }
     }
 }
@@ -2082,4 +2088,20 @@ pub enum TryFailBatchTransferOutcome {
 pub struct FailTransfersOutcome {
     pub transfers_changed: bool,
     pub cannot_fail: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::Iterable;
+
+    #[test]
+    fn refresh_transfer_status_matches_waiting() {
+        for status in TransferStatus::iter() {
+            assert_eq!(
+                status.waiting(),
+                RefreshTransferStatus::try_from(status).is_ok(),
+            );
+        }
+    }
 }

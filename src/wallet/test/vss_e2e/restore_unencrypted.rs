@@ -36,7 +36,7 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -60,7 +60,7 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");
@@ -316,7 +316,7 @@ fn scenario_2_2_unencrypted_restore_without_bdk_db_restores_rgb_state_only() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -340,7 +340,7 @@ fn scenario_2_2_unencrypted_restore_without_bdk_db_restores_rgb_state_only() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");

@@ -104,17 +104,6 @@ pub trait WalletOffline: WalletBackup {
             .filter(move |u| u.keychain == keychain)
     }
 
-    fn internal_outputs(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-        self.filter_outputs(KeychainKind::Internal)
-    }
-
-    fn get_uncolorable_btc_sum(&self) -> Result<u64, Error> {
-        Ok(self
-            .internal_unspents()
-            .map(|u| u.txout.value.to_sat())
-            .sum())
-    }
-
     fn get_available_allocations<T>(
         &self,
         unspents: T,
@@ -382,6 +371,7 @@ pub trait WalletOffline: WalletBackup {
             status: ActiveValue::Set(TransferStatus::Settled),
             created_at: ActiveValue::Set(issue_data.asset_data.added_at),
             min_confirmations: ActiveValue::Set(0),
+            incoming: ActiveValue::Set(true),
             ..Default::default()
         };
         let batch_transfer_idx = txn.set_batch_transfer(batch_transfer)?;
@@ -394,7 +384,6 @@ pub trait WalletOffline: WalletBackup {
         let asset_transfer_idx = txn.set_asset_transfer(asset_transfer)?;
         let transfer = DbTransferActMod {
             asset_transfer_idx: ActiveValue::Set(asset_transfer_idx),
-            incoming: ActiveValue::Set(true),
             ..Default::default()
         };
         txn.set_transfer(transfer)?;
@@ -984,7 +973,7 @@ pub trait WalletOffline: WalletBackup {
         txn: &DbTxn,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<i64>,
+        expiration_timestamp: i64,
         transport_endpoints: Vec<String>,
         recipient_type: RecipientType,
     ) -> Result<ReceiveDataInternal, Error> {
@@ -1109,15 +1098,10 @@ pub trait WalletOffline: WalletBackup {
             _ => return Err(Error::InvalidAssignment),
         };
         let created_at = now().unix_timestamp();
-        let expiration_timestamp = if let Some(exp) = expiration_timestamp {
-            if exp < created_at {
-                return Err(Error::InvalidExpiration);
-            }
-            invoice_builder = invoice_builder.set_expiry_timestamp(exp);
-            Some(exp)
-        } else {
-            None
-        };
+        if expiration_timestamp < created_at {
+            return Err(Error::InvalidExpiration);
+        }
+        invoice_builder = invoice_builder.set_expiry_timestamp(expiration_timestamp);
         let invoice = invoice_builder.finish();
         let invoice_string = invoice.to_string();
 
@@ -1143,9 +1127,10 @@ pub trait WalletOffline: WalletBackup {
     ) -> Result<i32, Error> {
         let batch_transfer = DbBatchTransferActMod {
             status: ActiveValue::Set(TransferStatus::WaitingCounterparty),
-            expiration: ActiveValue::Set(receive_data_internal.expiration_timestamp),
+            expiration: ActiveValue::Set(Some(receive_data_internal.expiration_timestamp)),
             created_at: ActiveValue::Set(receive_data_internal.created_at),
             min_confirmations: ActiveValue::Set(min_confirmations),
+            incoming: ActiveValue::Set(true),
             ..Default::default()
         };
         let batch_transfer_idx = txn.set_batch_transfer(batch_transfer)?;
@@ -1161,7 +1146,6 @@ pub trait WalletOffline: WalletBackup {
             requested_assignment: ActiveValue::Set(Some(
                 receive_data_internal.detected_assignment.clone(),
             )),
-            incoming: ActiveValue::Set(true),
             recipient_id: ActiveValue::Set(Some(receive_data_internal.recipient_id.clone())),
             recipient_type: ActiveValue::Set(Some(
                 receive_data_internal.recipient_type_full.clone(),
@@ -2076,7 +2060,7 @@ pub trait WalletOffline: WalletBackup {
             .map(|c| c.assignment)
             .collect();
 
-        let kind = if transfer.incoming {
+        let kind = if batch_transfer.incoming {
             if filtered_coloring.clone().count() > 0
                 && filtered_coloring
                     .clone()
