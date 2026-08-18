@@ -708,9 +708,7 @@ impl Wallet {
             .iter()
             .map(|a| hex::encode(a.digest))
             .collect::<HashSet<_>>();
-        runtime
-            .import_contract(valid_contract, self.blockchain_resolver())
-            .expect("failure importing validated contract");
+        runtime.import_contract(valid_contract, self.blockchain_resolver())?;
 
         let received_rgb_assignments =
             self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
