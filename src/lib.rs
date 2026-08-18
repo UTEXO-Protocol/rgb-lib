@@ -257,7 +257,7 @@ use typenum::consts::U32;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use url::Url;
 use walkdir::WalkDir;
-use zip::write::SimpleFileOptions;
+use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 #[cfg(feature = "electrum")]
 use crate::utils::INDEXER_BATCH_SIZE;
@@ -265,8 +265,8 @@ use crate::utils::INDEXER_BATCH_SIZE;
 use crate::utils::INDEXER_PARALLEL_REQUESTS;
 #[cfg(test)]
 use crate::wallet::test::{
-    mock_asset_terms, mock_chain_net, mock_contract_details, mock_local_version, mock_token_data,
-    skip_build_dag, skip_check_fee_rate,
+    mock_asset_terms, mock_chain_net, mock_contract_details, mock_local_version,
+    mock_send_end_crash, mock_token_data, skip_build_dag, skip_check_fee_rate,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[cfg(test)]
