@@ -295,7 +295,12 @@ impl WalletOnline for MpcWallet {
                 value: BdkAmount::from_sat(*amount),
                 script_pubkey: script.clone(),
             });
-            required_output_value += amount;
+            required_output_value =
+                required_output_value.checked_add(*amount).ok_or_else(|| {
+                    Error::InvalidRecipientData {
+                        details: s!("total recipient amount exceeds u64::MAX"),
+                    }
+                })?;
         }
 
         // Calculate total from colored inputs
@@ -307,9 +312,14 @@ impl WalletOnline for MpcWallet {
         // We need vanilla inputs to cover fees + witness recipient amounts
         let num_outputs = outputs.len() + 1; // +1 for change
         let estimated_fee =
-            mpc_psbt::calculate_fee(selected_inputs.len() + 1, num_outputs, fee_rate);
-        let needed_from_vanilla =
-            (required_output_value + estimated_fee).saturating_sub(colored_total);
+            mpc_psbt::calculate_fee(selected_inputs.len() + 1, num_outputs, fee_rate)?;
+        let required_with_fee = required_output_value.checked_add(estimated_fee).ok_or(
+            Error::InsufficientBitcoins {
+                needed: u64::MAX,
+                available: colored_total,
+            },
+        )?;
+        let needed_from_vanilla = required_with_fee.saturating_sub(colored_total);
 
         if needed_from_vanilla > 0 {
             let available: Vec<(OutPoint, TxOut)> = vanilla_utxos
@@ -326,11 +336,17 @@ impl WalletOnline for MpcWallet {
             .iter()
             .map(|(_, txout)| txout.value.to_sat())
             .sum();
-        let fee = mpc_psbt::calculate_fee(selected_inputs.len(), num_outputs, fee_rate);
+        let fee = mpc_psbt::calculate_fee(selected_inputs.len(), num_outputs, fee_rate)?;
 
-        if total_input < required_output_value + fee {
+        let needed = required_output_value
+            .checked_add(fee)
+            .ok_or(Error::InsufficientBitcoins {
+                needed: u64::MAX,
+                available: total_input,
+            })?;
+        if total_input < needed {
             return Err(Error::InsufficientBitcoins {
-                needed: required_output_value + fee,
+                needed,
                 available: total_input,
             });
         }
@@ -427,13 +443,13 @@ impl WalletOnline for MpcWallet {
                             .iter()
                             .map(|(_, txout)| txout.value.to_sat())
                             .sum();
+                        let fee = mpc_psbt::calculate_fee(
+                            available.len(),
+                            num_outputs,
+                            fee_rate_checked,
+                        )?;
                         return Err(Error::InsufficientBitcoins {
-                            needed: target
-                                + mpc_psbt::calculate_fee(
-                                    available.len(),
-                                    num_outputs,
-                                    fee_rate_checked,
-                                ),
+                            needed: target.saturating_add(fee),
                             available: total,
                         });
                     }
@@ -455,7 +471,7 @@ impl WalletOnline for MpcWallet {
         let (selected, total) =
             mpc_psbt::select_coins(&available, target, fee_rate_checked, num_outputs)?;
 
-        let fee = mpc_psbt::calculate_fee(selected.len(), num_outputs, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(selected.len(), num_outputs, fee_rate_checked)?;
         let change = total - target - fee;
 
         let mut outputs = colored_outputs;
@@ -510,7 +526,7 @@ impl WalletOnline for MpcWallet {
 
         let (selected, total) = mpc_psbt::select_coins(&available, amount, fee_rate_checked, 2)?;
 
-        let fee = mpc_psbt::calculate_fee(selected.len(), 2, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(selected.len(), 2, fee_rate_checked)?;
         let change = total - amount - fee;
 
         let mut outputs = vec![TxOut {
@@ -572,11 +588,11 @@ impl WalletOnline for MpcWallet {
             .iter()
             .map(|(_, txout)| txout.value.to_sat())
             .sum();
-        let fee = mpc_psbt::calculate_fee(all_inputs.len(), 1, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(all_inputs.len(), 1, fee_rate_checked)?;
 
         if total <= fee {
             return Err(Error::InsufficientBitcoins {
-                needed: fee + 1,
+                needed: fee.saturating_add(1),
                 available: total,
             });
         }
