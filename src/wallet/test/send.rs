@@ -9444,3 +9444,248 @@ fn out_of_band_consignment_multiple_receives() {
         amount_1 + amount_2
     );
 }
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn out_of_band_witness_reuse() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_nia(None);
+
+    // receiver with address reuse: witness invoices share the pinned script
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut rcv_wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
+    fund_wallet(rcv_wallet.get_address().unwrap());
+    rcv_wallet
+        .create_utxos(rcv_online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+    let mut rcv_party = party!(rcv_wallet, rcv_online);
+
+    // out-of-band witness invoice: the invoice nonce is present under address reuse
+    let receive_data = rcv_party
+        .wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            default_rcv_expiration(),
+            vec![],
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let rcv_transfer = rcv_party.get_test_transfer_recipient(&receive_data.recipient_id);
+    assert!(
+        rcv_party
+            .db_transfer_transport_endpoints_data(rcv_transfer.idx)
+            .is_empty()
+    );
+
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: vec![],
+        }],
+    )]);
+    let operation_result = party.send(recipient_map, FEE_RATE, None);
+    let txid = operation_result.txid;
+    assert!(!txid.is_empty());
+
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid)
+        .to_string_lossy()
+        .to_string();
+
+    let refreshed = rcv_party
+        .wallet
+        .provide_out_of_band_consignment(rcv_party.online, consignment_path, vec![])
+        .unwrap();
+    assert_eq!(refreshed.len(), 1);
+    assert_eq!(
+        refreshed.into_values().next().unwrap().updated_status,
+        Some(TransferStatus::WaitingBroadcast)
+    );
+
+    // the consignment file lands at the proxy-routing-id-keyed path
+    let transfers = rcv_party.list_transfers(Some(&asset.asset_id));
+    let t = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_data.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t.status, TransferStatus::WaitingBroadcast);
+    let proxy_rid = t.proxy_recipient_id.clone().unwrap();
+    assert_ne!(proxy_rid, receive_data.recipient_id);
+    let rcv_consignment_path = t.consignment_path.clone().unwrap();
+    assert!(rcv_consignment_path.contains(&proxy_rid));
+    assert!(Path::new(&rcv_consignment_path).exists());
+
+    // sender records the out-of-band ACK, completing and broadcasting the batch
+    let res = party
+        .wallet
+        .provide_out_of_band_ack(party.online, receive_data.recipient_id.clone())
+        .unwrap()
+        .expect("recording the only recipient's ACK should complete and broadcast the batch");
+    assert_eq!(res.txid, txid);
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
+
+    // later refresh stages find the consignment at the proxy-routing-id-keyed path and settle
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset.asset_id));
+    let transfers = rcv_party.list_transfers(Some(&asset.asset_id));
+    let t = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_data.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t.status, TransferStatus::Settled);
+    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::Settled));
+    assert_eq!(rcv_party.get_asset_balance(&asset.asset_id).settled, amount);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn out_of_band_reuse_ambiguous() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    // two allocations so a second send is possible while the first is pending
+    let asset = party.issue_asset_nia(Some(&[AMOUNT, AMOUNT * 2]));
+
+    // receiver with address reuse
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut rcv_wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
+    fund_wallet(rcv_wallet.get_address().unwrap());
+    rcv_wallet
+        .create_utxos(rcv_online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+    let mut rcv_party = party!(rcv_wallet, rcv_online);
+
+    // two pending out-of-band witness invoices on the same reused script
+    let receive_1 = rcv_party
+        .wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            default_rcv_expiration(),
+            vec![],
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let receive_2 = rcv_party
+        .wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            default_rcv_expiration(),
+            vec![],
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    assert_eq!(receive_1.recipient_id, receive_2.recipient_id);
+    assert_ne!(receive_1.batch_transfer_idx, receive_2.batch_transfer_idx);
+
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_1.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: vec![],
+        }],
+    )]);
+    let operation_result = party.send(recipient_map, FEE_RATE, None);
+    let txid = operation_result.txid;
+
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid)
+        .to_string_lossy()
+        .to_string();
+
+    // the consignment could pay either pending invoice: refuse to guess
+    let result = rcv_party.wallet.provide_out_of_band_consignment(
+        rcv_party.online,
+        consignment_path,
+        vec![],
+    );
+    assert!(matches!(
+        result,
+        Err(Error::CannotProvideOutOfBandConsignment { details }) if details.contains("ambiguous")
+    ));
+
+    // neither receive was processed
+    let transfers = rcv_party.list_transfers(None);
+    for batch_idx in [receive_1.batch_transfer_idx, receive_2.batch_transfer_idx] {
+        let t = transfers
+            .iter()
+            .find(|t| t.batch_transfer_idx == batch_idx)
+            .unwrap();
+        assert_eq!(t.status, TransferStatus::WaitingCounterparty);
+    }
+
+    // sender-side ambiguity: a second pending outgoing transfer to the same recipient ID
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_1.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: vec![],
+        }],
+    )]);
+    let txid_2 = party.send(recipient_map, FEE_RATE, None).txid;
+    assert_ne!(txid, txid_2);
+    let result = party
+        .wallet
+        .provide_out_of_band_ack(party.online, receive_1.recipient_id.clone());
+    assert!(matches!(
+        result,
+        Err(Error::CannotProvideOutOfBandAck { details }) if details.contains("ambiguous")
+    ));
+}
