@@ -990,7 +990,6 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn upsert_witness(
         &mut self,
         witness_id: RgbTxid,

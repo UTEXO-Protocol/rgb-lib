@@ -78,7 +78,7 @@ pub use rgbstd::{
     ChainNet, ContractId, Txid as RgbTxid,
     containers::{
         ConsignmentExt, Contract as RgbContract, Fascia, FileContent, PubWitness,
-        Transfer as RgbTransfer,
+        Transfer as RgbTransfer, WitnessBundle,
     },
     persistence::UpdateRes,
     schema::SchemaId,

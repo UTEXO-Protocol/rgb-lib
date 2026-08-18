@@ -72,9 +72,9 @@ pub trait WalletOffline: WalletBackup {
     }
 
     fn check_transport_endpoints(&self, transport_endpoints: &[String]) -> Result<(), Error> {
-        if transport_endpoints.is_empty() {
+        if transport_endpoints.iter().any(String::is_empty) {
             return Err(Error::InvalidTransportEndpoints {
-                details: s!("must provide at least a transport endpoint"),
+                details: s!("transport endpoints cannot be empty strings"),
             });
         }
         if transport_endpoints.len() > MAX_TRANSPORT_ENDPOINTS {
@@ -1035,16 +1035,21 @@ pub trait WalletOffline: WalletBackup {
             (None, None)
         };
 
-        self.check_transport_endpoints(&transport_endpoints)?;
-        let mut transport_endpoints_dedup = transport_endpoints.clone();
-        transport_endpoints_dedup.sort();
-        transport_endpoints_dedup.dedup();
-        if transport_endpoints_dedup.len() != transport_endpoints.len() {
-            return Err(Error::InvalidTransportEndpoints {
-                details: s!("no duplicate transport endpoints allowed"),
-            });
-        }
-        let endpoints = self.convert_transport_endpoints(&transport_endpoints)?;
+        let out_of_band = transport_endpoints.is_empty();
+        let endpoints = if out_of_band {
+            vec![]
+        } else {
+            self.check_transport_endpoints(&transport_endpoints)?;
+            let mut transport_endpoints_dedup = transport_endpoints.clone();
+            transport_endpoints_dedup.sort();
+            transport_endpoints_dedup.dedup();
+            if transport_endpoints_dedup.len() != transport_endpoints.len() {
+                return Err(Error::InvalidTransportEndpoints {
+                    details: s!("no duplicate transport endpoints allowed"),
+                });
+            }
+            self.convert_transport_endpoints(&transport_endpoints)?
+        };
 
         let mut invoice_builder = RgbInvoiceBuilder::new(beneficiary);
         if let Some(schema) = schema {
@@ -1053,24 +1058,26 @@ pub trait WalletOffline: WalletBackup {
         if let Some(contract_id) = contract_id {
             invoice_builder = invoice_builder.set_contract(contract_id);
         }
-        let nonce_for_invoice: &[u8] = match &recipient_type_full {
-            RecipientTypeFull::Witness {
-                recipient_nonce, ..
-            } => recipient_nonce.as_slice(),
-            RecipientTypeFull::Blind { .. } => &[],
-        };
-        let decorated_transports: Vec<String> = transport_endpoints
-            .iter()
-            .map(|ep| {
-                if nonce_for_invoice.is_empty() {
-                    ep.clone()
-                } else {
-                    crate::utils::append_recipient_nonce(ep, nonce_for_invoice)
-                }
-            })
-            .collect();
-        let transports: Vec<&str> = decorated_transports.iter().map(AsRef::as_ref).collect();
-        invoice_builder = invoice_builder.add_transports(transports).unwrap();
+        if !out_of_band {
+            let nonce_for_invoice: &[u8] = match &recipient_type_full {
+                RecipientTypeFull::Witness {
+                    recipient_nonce, ..
+                } => recipient_nonce.as_slice(),
+                RecipientTypeFull::Blind { .. } => &[],
+            };
+            let decorated_transports: Vec<String> = transport_endpoints
+                .iter()
+                .map(|ep| {
+                    if nonce_for_invoice.is_empty() {
+                        ep.clone()
+                    } else {
+                        crate::utils::append_recipient_nonce(ep, nonce_for_invoice)
+                    }
+                })
+                .collect();
+            let transports: Vec<&str> = decorated_transports.iter().map(AsRef::as_ref).collect();
+            invoice_builder = invoice_builder.add_transports(transports).unwrap();
+        }
         let detected_assignment = match (&assignment, schema) {
             (
                 Assignment::Fungible(amt),

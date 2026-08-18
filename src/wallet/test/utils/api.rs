@@ -218,12 +218,6 @@ pub(crate) trait OfflineSigParty {
         db_data
     }
 
-    fn db_del_transfer_transport_endpoint(&self, idx: i32) {
-        let txn = self.wlt().database().begin_transaction().unwrap();
-        txn.del_transfer_transport_endpoint(idx).unwrap();
-        txn.commit().unwrap();
-    }
-
     fn db_get_or_insert_media(&self, digest: &str, mime: &str) -> i32 {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let media_idx = txn
@@ -1363,7 +1357,10 @@ impl SinglesigParty {
             .unwrap();
         drop(runtime);
 
-        rcv_party.wallet.save_new_asset(consignment, txid).unwrap();
+        rcv_party
+            .wallet
+            .save_new_asset(rcv_party.online, consignment, txid)
+            .unwrap();
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]

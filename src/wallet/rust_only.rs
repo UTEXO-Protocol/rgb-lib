@@ -635,27 +635,29 @@ impl Wallet {
         Ok(consignment_paths)
     }
 
-    /// Accept an RGB transfer using a TXID to retrieve its consignment.
+    /// Accept an RGB transfer using a consignment received out-of-band.
+    ///
+    /// Returns the consignment, the received assignments and the hex-encoded digests of the media
+    /// attachments defined in the consignment.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn accept_transfer(
+    pub fn accept_transfer_consignment(
         &mut self,
+        online: Online,
+        consignment_path: PathBuf,
         txid: String,
         vout: u32,
-        consignment_endpoint: RgbTransport,
         blinding: u64,
-    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
-        info!(self.logger(), "Accepting transfer...");
+    ) -> Result<(RgbTransfer, Vec<Assignment>, HashSet<String>), Error> {
+        info!(self.logger(), "Accepting transfer consignment...");
+        self.check_online(online)?;
         let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
-        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
-
-        let consignment_res = self.get_consignment(&proxy_url, txid.clone())?;
-        let consignment_bytes = general_purpose::STANDARD
-            .decode(consignment_res.consignment)
-            .map_err(InternalError::from)?;
-        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
+        let consignment =
+            RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidFilePath {
+                file_path: consignment_path.to_string_lossy().to_string(),
+            })?;
 
         let schema_id = consignment.schema_id().to_string();
         let asset_schema: AssetSchema = schema_id.try_into()?;
@@ -701,6 +703,11 @@ impl Wallet {
         debug!(self.logger(), "Consignment validity: {:?}", validity);
 
         let valid_contract = valid_consignment.clone().into_valid_contract();
+        let media_digests = self
+            .extract_attachments(&valid_contract, asset_schema)
+            .iter()
+            .map(|a| hex::encode(a.digest))
+            .collect::<HashSet<_>>();
         runtime
             .import_contract(valid_contract, self.blockchain_resolver())
             .expect("failure importing validated contract");
@@ -714,6 +721,7 @@ impl Wallet {
         Ok((
             consignment,
             received_rgb_assignments.into_values().collect(),
+            media_digests,
         ))
     }
 
@@ -738,8 +746,9 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn get_tx_height(&self, txid: String) -> Result<Option<u32>, Error> {
+    pub fn get_tx_height(&self, online: Online, txid: String) -> Result<Option<u32>, Error> {
         info!(self.logger(), "Getting TX height...");
+        self.check_online(online)?;
         let height = self.tx_height(txid)?;
         info!(self.logger(), "Get TX height completed");
         Ok(height)
@@ -752,10 +761,12 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn update_witnesses(
         &self,
+        online: Online,
         after_height: u32,
         force_witnesses: Vec<RgbTxid>,
     ) -> Result<UpdateRes, Error> {
         info!(self.logger(), "Updating witnesses...");
+        self.check_online(online)?;
         let update_res = self.rgb_runtime()?.update_witnesses(
             self.blockchain_resolver(),
             after_height,
@@ -769,7 +780,6 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn upsert_witness(
         &self,
         witness_id: RgbTxid,
@@ -780,26 +790,6 @@ impl Wallet {
         Ok(())
     }
 
-    /// Post a consignment to the proxy server.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn post_consignment<P: AsRef<Path>>(
-        &self,
-        proxy_url: &str,
-        recipient_id: String,
-        consignment_path: P,
-        txid: String,
-        vout: Option<u32>,
-    ) -> Result<(), Error> {
-        info!(self.logger(), "Posting consignment...");
-        let proxy_client = ProxyClient::new(proxy_url)?;
-        self.post_consignment_to_proxy(&proxy_client, recipient_id, consignment_path, txid, vout)?;
-        info!(self.logger(), "Post consignment completed");
-        Ok(())
-    }
-
     /// Extract the metadata of a new RGB asset and save the asset into the DB.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -807,10 +797,12 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn save_new_asset(
         &self,
+        online: Online,
         consignment: RgbTransfer,
         offchain_txid: String,
     ) -> Result<(), Error> {
         info!(self.logger(), "Saving new asset...");
+        self.check_online(online)?;
         let contract_id = consignment.contract_id();
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
         let resolver = OffchainResolver {
@@ -917,6 +909,47 @@ impl Wallet {
     /// it only if you know what you're doing</div>
     pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
         self.send_consignment_path(asset_id, transfer_id)
+    }
+
+    /// Complete the donation send operation by updating the DB only. This will also broadcast the
+    /// transaction to update the DB with the new UTXOs and BDK.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn send_end_db_update_only(
+        &mut self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, Error> {
+        info!(self.logger(), "Sending (end) db update only...");
+        self.check_online(online)?;
+        let psbt = Psbt::from_str(&signed_psbt)?;
+        let txn = self.database().begin_transaction()?;
+
+        // this will also update the DB with the new UTXOs and BDK
+        self.broadcast_psbt(&txn, &psbt)?;
+
+        let (txid, _, info_contents, _) = self.get_transfer_end_data(&psbt)?;
+
+        let batch_transfer_idx = self.update_or_save_transfers(
+            &txn,
+            txid.clone(),
+            &info_contents,
+            TransferStatus::WaitingConfirmations,
+            true,
+        )?;
+
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+
+        info!(self.logger(), "Send (end) db update only completed");
+        Ok(OperationResult {
+            txid,
+            batch_transfer_idx,
+            entropy: info_contents.entropy,
+        })
     }
 }
 

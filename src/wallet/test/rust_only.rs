@@ -121,7 +121,7 @@ fn success() {
     // check that the two color_psbt* methods produce matching PSBTs (no additional changes)
     assert_eq!(psbt, psbt_copy);
 
-    // push consignment to proxy
+    // save consignment to file
     let txid = psbt_copy.unsigned_tx.compute_txid().to_string();
     let transfers_dir = party_send.wallet.get_transfers_dir().join(&txid);
     let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
@@ -132,22 +132,17 @@ fn success() {
         .unwrap()
         .save_file(&consignment_path)
         .unwrap();
-    party_send
-        .wallet
-        .post_consignment(
-            PROXY_URL,
-            txid.clone(),
-            consignment_path,
-            txid.clone(),
-            Some(vout),
-        )
-        .unwrap();
 
     // accept transfer
-    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
     recv_party
         .wallet
-        .accept_transfer(txid.clone(), vout, consignment_endpoint, blinding)
+        .accept_transfer_consignment(
+            recv_party.online,
+            consignment_path,
+            txid.clone(),
+            vout,
+            blinding,
+        )
         .unwrap();
 
     // consume fascia
@@ -780,51 +775,6 @@ fn color_psbt_overflow_fail() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn post_consignment_fail() {
-    initialize();
-
-    // wallets
-    let party = get_empty_party!();
-
-    // fake data
-    let fake_txid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let transfers_dir = party.wallet.get_transfers_dir().join(fake_txid);
-    let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
-    std::fs::create_dir_all(&transfers_dir).unwrap();
-    std::fs::File::create(&consignment_path).unwrap();
-
-    // proxy error
-    let invalid_proxy_url = "http://127.6.6.6:7777/json-rpc";
-    let result = party.wallet.post_consignment(
-        invalid_proxy_url,
-        fake_txid.to_string(),
-        consignment_path.clone(),
-        fake_txid.to_string(),
-        Some(0),
-    );
-    assert_matches!(
-        result,
-        Err(Error::Proxy { details: m })
-        if m.contains("error sending request for url")
-            || m.contains("request or response body error for url"));
-
-    // invalid transport endpoint
-    let invalid_proxy_url = &format!("http://{PROXY_HOST_MOD_API}");
-    let result = party.wallet.post_consignment(
-        invalid_proxy_url,
-        fake_txid.to_string(),
-        consignment_path.clone(),
-        fake_txid.to_string(),
-        Some(0),
-    );
-    assert!(
-        matches!(result, Err(Error::InvalidTransportEndpoint { details: m }) if m == "invalid result")
-    );
-}
-
-#[cfg(feature = "electrum")]
-#[test]
-#[parallel]
 fn check_indexer_url_electrum_success() {
     initialize();
 
@@ -890,17 +840,48 @@ fn check_proxy_url_fail() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn accept_transfer_fail() {
+fn accept_transfer_consignment_fail() {
     initialize();
+
+    // === offline tests
+
+    let mut offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+    let result = offline_party.wallet.accept_transfer_consignment(
+        Online { id: 0 },
+        PathBuf::from(s!("anyConsignmentPath")),
+        FAKE_TXID.to_string(),
+        0,
+        0,
+    );
+    assert_matches!(result, Err(Error::Offline));
+
+    // === online tests
 
     let mut party = get_empty_party!();
 
     // invalid txid
-    let consignment_endpoint = RgbTransport::from_str(&PROXY_ENDPOINT).unwrap();
-    let result = party
-        .wallet
-        .accept_transfer(s!("invalidTxid"), 0, consignment_endpoint, 0);
+    let consignment_path = party.wallet.get_transfers_dir().join(CONSIGNMENT_FILE);
+    let result = party.wallet.accept_transfer_consignment(
+        party.online,
+        consignment_path,
+        s!("invalidTxid"),
+        0,
+        0,
+    );
     assert_matches!(result, Err(Error::InvalidTxid));
+
+    // invalid consignment path
+    let result = party.wallet.accept_transfer_consignment(
+        party.online,
+        PathBuf::from(s!("invalidConsignmentPath")),
+        FAKE_TXID.to_string(),
+        0,
+        0,
+    );
+    assert_matches!(result, Err(Error::InvalidFilePath { file_path: m }) if m == "invalidConsignmentPath");
 }
 
 #[cfg(feature = "electrum")]
@@ -909,11 +890,40 @@ fn accept_transfer_fail() {
 fn get_tx_height_fail() {
     initialize();
 
+    // === offline tests
+
+    let offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+    let result = offline_party
+        .wallet
+        .get_tx_height(Online { id: 0 }, FAKE_TXID.to_string());
+    assert_matches!(result, Err(Error::Offline));
+
+    // === online tests
+
     let party = get_empty_party!();
 
     // invalid txid
-    let result = party.wallet.get_tx_height(s!("invalidTxid"));
+    let result = party.wallet.get_tx_height(party.online, s!("invalidTxid"));
     assert_matches!(result, Err(Error::InvalidTxid));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn update_witnesses_fail() {
+    initialize();
+
+    let offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+    let result = offline_party
+        .wallet
+        .update_witnesses(Online { id: 0 }, 0, vec![]);
+    assert_matches!(result, Err(Error::Offline));
 }
 
 #[cfg(feature = "electrum")]
@@ -924,8 +934,63 @@ fn update_witnesses_success() {
 
     let party = get_empty_party!();
 
-    let result = party.wallet.update_witnesses(0, vec![]);
+    let result = party.wallet.update_witnesses(party.online, 0, vec![]);
     assert!(result.is_ok());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn save_new_asset_fail() {
+    initialize();
+
+    let offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_empty_party!();
+    let asset = party.issue_asset_nia(None);
+    let receive_data = rcv_party.witness_receive();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(10),
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = party.send_retry(&recipient_map);
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid);
+    let consignment = RgbTransfer::load_file(consignment_path).unwrap();
+
+    let result = offline_party
+        .wallet
+        .save_new_asset(Online { id: 0 }, consignment, txid);
+    assert_matches!(result, Err(Error::Offline));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn send_end_db_update_only_fail() {
+    initialize();
+
+    let mut offline_party = {
+        let wallet = get_test_wallet(true, None);
+        party!(wallet, Online { id: 0 })
+    };
+    let result = offline_party
+        .wallet
+        .send_end_db_update_only(Online { id: 0 }, s!(""));
+    assert_matches!(result, Err(Error::Offline));
 }
 
 #[cfg(feature = "electrum")]
