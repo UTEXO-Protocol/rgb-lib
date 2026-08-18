@@ -4,8 +4,12 @@
 //! `fetch_consignment_by_recipient_id`, `accept_transfer_from_consignment`) that operate on
 //! escrow outpoints without treating them as wallet UTXOs.
 //!
-//! UniFFI exports [`Wallet::color_psbt_and_consume`] (consignment bytes). Proxy
-//! `post_consignment` stays rust-only / HTTP in the client — not part of the UniFFI surface.
+//! UniFFI exports [`Wallet::color_psbt_and_consume`],
+//! [`Wallet::color_psbt_for_outpoints_and_consume`],
+//! [`Wallet::fetch_consignment_by_recipient_id`],
+//! [`Wallet::accept_transfer_from_consignment`], and
+//! [`Wallet::contract_assignments_for_outpoints`].
+//! Proxy `post_consignment` stays rust-only / HTTP in the client.
 use super::*;
 use rgbstd::Operation as _;
 

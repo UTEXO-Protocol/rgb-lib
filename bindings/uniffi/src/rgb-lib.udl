@@ -287,6 +287,22 @@ dictionary ColorPsbtResult {
   sequence<sequence<u8>> consignments;
 };
 
+dictionary FetchConsignmentResult {
+  sequence<u8> consignment;
+  string txid;
+  u32 vout;
+};
+
+dictionary AcceptTransferResult {
+  sequence<u8> consignment;
+  sequence<Assignment> assignments;
+};
+
+dictionary OutpointAssignments {
+  Outpoint outpoint;
+  sequence<Assignment> assignments;
+};
+
 interface RecipientInfo {
   [Throws=RgbLibError]
   constructor(string recipient_id);
@@ -919,6 +935,23 @@ interface Wallet {
   // Posting to the RGB proxy is the caller's responsibility (HTTP multipart).
   [Throws=RgbLibError]
   ColorPsbtResult color_psbt_and_consume(string psbt, ColoringInfo coloring_info);
+
+  // Same as color_psbt_and_consume, but color only the explicitly provided input outpoints.
+  [Throws=RgbLibError]
+  ColorPsbtResult color_psbt_for_outpoints_and_consume(
+    string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints);
+
+  [Throws=RgbLibError]
+  FetchConsignmentResult fetch_consignment_by_recipient_id(
+    string recipient_id, string consignment_endpoint);
+
+  [Throws=RgbLibError]
+  AcceptTransferResult accept_transfer_from_consignment(
+    sequence<u8> consignment, string txid, u32 vout, u64 blinding);
+
+  [Throws=RgbLibError]
+  sequence<OutpointAssignments> contract_assignments_for_outpoints(
+    string asset_id, sequence<Outpoint> outpoints);
 
   [Throws=RgbLibError]
   string finalize_psbt(string signed_psbt);

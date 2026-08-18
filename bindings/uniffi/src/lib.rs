@@ -20,9 +20,11 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, ContractId, Error as RgbLibError,
-    FileContent, TransferStatus, TransportType, WalletTransactionType,
+    FileContent, RgbTransfer, RgbTransport, TransferStatus, TransportType, WalletTransactionType,
     bdk_wallet::bitcoin::{
+        OutPoint as BitcoinOutPoint,
         Psbt,
+        Txid,
         secp256k1::SecretKey,
     },
     keys::{Keys, WitnessVersion},
@@ -142,6 +144,25 @@ pub struct ColorPsbtResult {
     pub consignments: Vec<Vec<u8>>,
 }
 
+/// Consignment fetched from the proxy by `recipient_id`.
+pub struct FetchConsignmentResult {
+    pub consignment: Vec<u8>,
+    pub txid: String,
+    pub vout: u32,
+}
+
+/// Result of accepting a transfer from consignment bytes.
+pub struct AcceptTransferResult {
+    pub consignment: Vec<u8>,
+    pub assignments: Vec<Assignment>,
+}
+
+/// RGB assignments on a (possibly foreign) outpoint.
+pub struct OutpointAssignments {
+    pub outpoint: Outpoint,
+    pub assignments: Vec<Assignment>,
+}
+
 fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, RgbLibError> {
     let mut asset_info_map = HashMap::new();
     for asset in coloring_info.assets {
@@ -161,6 +182,39 @@ fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, 
         asset_info_map,
         static_blinding: coloring_info.static_blinding,
         nonce: coloring_info.nonce,
+    })
+}
+
+fn to_bitcoin_outpoints(outpoints: Vec<Outpoint>) -> Result<Vec<BitcoinOutPoint>, RgbLibError> {
+    outpoints
+        .into_iter()
+        .map(|outpoint| {
+            let txid = Txid::from_str(&outpoint.txid).map_err(|_| RgbLibError::InvalidTxid)?;
+            Ok(BitcoinOutPoint {
+                txid,
+                vout: outpoint.vout,
+            })
+        })
+        .collect()
+}
+
+fn load_rgb_transfer(bytes: &[u8]) -> Result<RgbTransfer, RgbLibError> {
+    RgbTransfer::load(bytes).map_err(|e| RgbLibError::Internal {
+        details: format!("load consignment: {e}"),
+    })
+}
+
+fn save_rgb_transfer(transfer: &RgbTransfer) -> Result<Vec<u8>, RgbLibError> {
+    let mut buf = Vec::new();
+    transfer.save(&mut buf).map_err(|e| RgbLibError::Internal {
+        details: format!("serialize consignment: {e}"),
+    })?;
+    Ok(buf)
+}
+
+fn parse_rgb_transport(endpoint: &str) -> Result<RgbTransport, RgbLibError> {
+    RgbTransport::from_str(endpoint).map_err(|e| RgbLibError::InvalidTransportEndpoint {
+        details: e.to_string(),
     })
 }
 
@@ -1147,6 +1201,91 @@ impl Wallet {
             psbt: psbt.to_string(),
             consignments,
         })
+    }
+
+    fn color_psbt_for_outpoints_and_consume(
+        &self,
+        psbt: String,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<Outpoint>,
+    ) -> Result<ColorPsbtResult, RgbLibError> {
+        let mut psbt = Psbt::from_str(&psbt)?;
+        let coloring = to_rgb_coloring_info(coloring_info)?;
+        let input_outpoints = to_bitcoin_outpoints(input_outpoints)?;
+        let transfers = self
+            ._get_wallet()
+            .color_psbt_for_outpoints_and_consume(&mut psbt, coloring, input_outpoints)?;
+
+        let mut consignments = Vec::with_capacity(transfers.len());
+        for transfer in &transfers {
+            let mut buf = Vec::new();
+            transfer.save(&mut buf).map_err(|e| RgbLibError::Internal {
+                details: format!("serialize consignment: {e}"),
+            })?;
+            consignments.push(buf);
+        }
+
+        Ok(ColorPsbtResult {
+            psbt: psbt.to_string(),
+            consignments,
+        })
+    }
+
+    fn fetch_consignment_by_recipient_id(
+        &self,
+        recipient_id: String,
+        consignment_endpoint: String,
+    ) -> Result<FetchConsignmentResult, RgbLibError> {
+        let endpoint = parse_rgb_transport(&consignment_endpoint)?;
+        let (transfer, txid, vout) = self
+            ._get_wallet()
+            .fetch_consignment_by_recipient_id(recipient_id, endpoint)?;
+        Ok(FetchConsignmentResult {
+            consignment: save_rgb_transfer(&transfer)?,
+            txid,
+            vout,
+        })
+    }
+
+    fn accept_transfer_from_consignment(
+        &self,
+        consignment: Vec<u8>,
+        txid: String,
+        vout: u32,
+        blinding: u64,
+    ) -> Result<AcceptTransferResult, RgbLibError> {
+        let transfer = load_rgb_transfer(&consignment)?;
+        let (transfer, assignments) = self._get_wallet().accept_transfer_from_consignment(
+            transfer,
+            txid,
+            vout,
+            blinding,
+        )?;
+        Ok(AcceptTransferResult {
+            consignment: save_rgb_transfer(&transfer)?,
+            assignments: assignments.into_iter().map(Into::into).collect(),
+        })
+    }
+
+    fn contract_assignments_for_outpoints(
+        &self,
+        asset_id: String,
+        outpoints: Vec<Outpoint>,
+    ) -> Result<Vec<OutpointAssignments>, RgbLibError> {
+        let contract_id =
+            ContractId::from_str(&asset_id).map_err(|e| RgbLibError::InvalidColoringInfo {
+                details: format!("invalid asset_id '{asset_id}': {e}"),
+            })?;
+        let map = self
+            ._get_wallet()
+            .contract_assignments_for_outpoints(contract_id, outpoints)?;
+        Ok(map
+            .into_iter()
+            .map(|(outpoint, assignments)| OutpointAssignments {
+                outpoint,
+                assignments: assignments.into_iter().map(Into::into).collect(),
+            })
+            .collect())
     }
 
     fn finalize_psbt(&self, signed_psbt: String) -> Result<String, RgbLibError> {
