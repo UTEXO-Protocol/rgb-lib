@@ -25,6 +25,18 @@ pub struct ColoringInfo {
     pub nonce: Option<u64>,
 }
 
+/// Result of importing an RGB contract without receiving asset allocations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportAssetContractResult {
+    /// Imported contract ID.
+    pub asset_id: String,
+    /// Whether the wallet's RGB stock and asset database both contained the contract before the
+    /// call.
+    pub already_imported: bool,
+    /// Metadata derived from the validated contract.
+    pub metadata: Metadata,
+}
+
 /// Map of contract ID and list of its beneficiaries
 pub type AssetBeneficiariesMap = BTreeMap<ContractId, Vec<BuilderSeal<GraphSeal>>>;
 
@@ -241,6 +253,112 @@ pub fn validate_consignment(
 
 /// Rust-only APIs of the wallet.
 impl Wallet {
+    /// Export an RGB contract known to this wallet.
+    ///
+    /// The returned consignment contains the public contract definition and genesis metadata, but
+    /// no transfer or allocation state. It can be distributed as public contract metadata and
+    /// imported with [`import_asset_contract`](Wallet::import_asset_contract).
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    pub fn export_asset_contract(&self, asset_id: String) -> Result<RgbContract, Error> {
+        let contract_id = ContractId::from_str(&asset_id).map_err(|error| Error::Internal {
+            details: format!("invalid asset ID: {error}"),
+        })?;
+        self.rgb_runtime()?
+            .export_contract(contract_id)
+            .map_err(Error::from)
+    }
+
+    /// Validate and import an RGB contract without importing any asset allocations.
+    ///
+    /// This registers the contract and its metadata in the wallet. It does not transfer ownership
+    /// and the imported asset therefore starts with a zero balance. Re-importing a fully persisted
+    /// contract is idempotent and returns the existing metadata. If an earlier import was
+    /// interrupted between its RGB stock and database writes, retrying repairs the partial state.
+    ///
+    /// Contract attachments are not embedded in a contract consignment. Contracts declaring
+    /// attachments must be imported through a flow that supplies and verifies those files.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn import_asset_contract(
+        &self,
+        contract: RgbContract,
+    ) -> Result<ImportAssetContractResult, Error> {
+        let contract_id = contract.contract_id();
+        let asset_id = contract_id.to_string();
+
+        let asset_schema: AssetSchema = contract.schema_id().try_into()?;
+        self.check_schema_support(&asset_schema)?;
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem: asset_schema.types(),
+            ..Default::default()
+        };
+        let valid_contract = contract
+            .validate(&DumbResolver, &validation_config)
+            .map_err(|_| Error::InvalidConsignment)?;
+
+        // The RGB runtime lock serializes the stock and database state transition. Persisting the
+        // stock before committing the database makes every interrupted state repairable on retry.
+        let mut runtime = self.rgb_runtime()?;
+        let contract_in_stock = runtime.export_contract(contract_id).is_ok();
+        let txn = self.database().begin_transaction()?;
+        let asset_in_database = txn.get_asset(asset_id.clone())?.is_some();
+        let already_imported = contract_in_stock && asset_in_database;
+
+        if already_imported {
+            drop(txn);
+            drop(runtime);
+            return Ok(ImportAssetContractResult {
+                asset_id: asset_id.clone(),
+                already_imported: true,
+                metadata: self.get_asset_metadata(asset_id)?,
+            });
+        }
+
+        if !asset_in_database
+            && !self
+                .extract_attachments(&valid_contract, asset_schema)
+                .is_empty()
+        {
+            return Err(Error::InvalidAttachments {
+                details: "contract import requires the declared attachment files".to_string(),
+            });
+        }
+
+        if !contract_in_stock {
+            runtime.require_explicit_persistence();
+            runtime.import_contract(valid_contract.clone(), &DumbResolver)?;
+        }
+
+        if !asset_in_database {
+            self.save_new_asset_internal(
+                &txn,
+                &runtime,
+                contract_id,
+                asset_schema,
+                valid_contract,
+                None,
+            )?;
+        }
+        self.update_backup_info(&txn, false)?;
+        if !contract_in_stock {
+            runtime.persist()?;
+        }
+        txn.commit()?;
+        drop(runtime);
+        self.trigger_auto_backup();
+
+        Ok(ImportAssetContractResult {
+            asset_id: asset_id.clone(),
+            already_imported,
+            metadata: self.get_asset_metadata(asset_id)?,
+        })
+    }
+
     /// Color a PSBT.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -677,10 +795,7 @@ impl Wallet {
         offchain_txid: String,
     ) -> Result<(), Error> {
         info!(self.logger(), "Saving new asset...");
-        let runtime = self.rgb_runtime()?;
-
         let contract_id = consignment.contract_id();
-
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
         let resolver = OffchainResolver {
             witness_id,
@@ -694,13 +809,30 @@ impl Wallet {
             trusted_typesystem,
             ..Default::default()
         };
-        let valid_transfer = consignment
-            .clone()
-            .validate(&resolver, &validation_config)
-            .expect("valid consignment");
+        let valid_transfer = match consignment.clone().validate(&resolver, &validation_config) {
+            Ok(consignment) => consignment,
+            Err(ValidationError::InvalidConsignment(error)) => {
+                error!(self.logger(), "Consignment is invalid: {}", error);
+                return Err(Error::InvalidConsignment);
+            }
+            Err(ValidationError::ResolverError(error)) => {
+                return Err(Error::Network {
+                    details: error.to_string(),
+                });
+            }
+        };
         let valid_contract = valid_transfer.clone().into_valid_contract();
 
+        let runtime = self.rgb_runtime()?;
         let txn = self.database().begin_transaction()?;
+        if txn.get_asset(contract_id.to_string())?.is_some() {
+            // Metadata registration is idempotent only when the RGB stock agrees with the database.
+            // A missing stock entry means the caller has not completed transfer acceptance.
+            runtime.export_contract(contract_id)?;
+            drop(txn);
+            info!(self.logger(), "Save new asset completed");
+            return Ok(());
+        }
         self.save_new_asset_internal(
             &txn,
             &runtime,

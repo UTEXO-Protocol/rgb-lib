@@ -297,6 +297,192 @@ fn save_new_asset_success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn import_asset_contract_success() {
+    initialize();
+
+    let mut issuer = get_funded_party!();
+    let recipient = get_empty_party!();
+    let assets = [
+        (issuer.issue_asset_nia(None).asset_id, AssetSchema::Nia),
+        (
+            issuer.issue_asset_cfa(None, None).asset_id,
+            AssetSchema::Cfa,
+        ),
+        (
+            issuer.issue_asset_ifa(None, None, None).asset_id,
+            AssetSchema::Ifa,
+        ),
+        (
+            issuer.issue_asset_uda(None, None, vec![]).asset_id,
+            AssetSchema::Uda,
+        ),
+    ];
+
+    for (asset_id, asset_schema) in assets {
+        let contract = issuer
+            .wallet
+            .export_asset_contract(asset_id.clone())
+            .unwrap();
+        let imported = recipient
+            .wallet
+            .import_asset_contract(contract.clone())
+            .unwrap();
+        assert_eq!(imported.asset_id, asset_id);
+        assert!(!imported.already_imported);
+        assert_eq!(imported.metadata.asset_schema, asset_schema);
+        assert_eq!(imported.metadata.name, NAME);
+        assert_eq!(imported.metadata.precision, PRECISION);
+        assert_eq!(
+            recipient
+                .wallet
+                .get_asset_balance(asset_id.clone())
+                .unwrap(),
+            Balance::default()
+        );
+
+        let repeated = recipient.wallet.import_asset_contract(contract).unwrap();
+        assert_eq!(repeated.asset_id, asset_id);
+        assert!(repeated.already_imported);
+        assert_eq!(repeated.metadata, imported.metadata);
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn import_asset_contract_rejects_missing_attachments() {
+    initialize();
+
+    let mut issuer = get_funded_party!();
+    let recipient = get_empty_party!();
+    let asset = issuer.issue_asset_cfa(None, Some(FILE_STR.to_string()));
+    let contract = issuer.wallet.export_asset_contract(asset.asset_id).unwrap();
+
+    let result = recipient.wallet.import_asset_contract(contract);
+    assert_matches!(result, Err(Error::InvalidAttachments { .. }));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn import_asset_contract_repairs_partial_persistence() {
+    initialize();
+
+    let mut issuer = get_funded_party!();
+    let stock_only_recipient = get_empty_party!();
+    let database_only_recipient = get_empty_party!();
+    let asset = issuer.issue_asset_nia(None);
+    let contract = issuer
+        .wallet
+        .export_asset_contract(asset.asset_id.clone())
+        .unwrap();
+    let validation_config = ValidationConfig {
+        chain_net: stock_only_recipient.wallet.chain_net(),
+        trusted_typesystem: AssetSchema::Nia.types(),
+        ..Default::default()
+    };
+    let valid_contract = contract
+        .clone()
+        .validate(&DumbResolver, &validation_config)
+        .unwrap();
+    let contract_id = valid_contract.contract_id();
+
+    {
+        let mut runtime = stock_only_recipient.wallet.rgb_runtime().unwrap();
+        runtime
+            .import_contract(valid_contract.clone(), &DumbResolver)
+            .unwrap();
+    }
+    assert_matches!(
+        stock_only_recipient
+            .wallet
+            .get_asset_metadata(asset.asset_id.clone()),
+        Err(Error::AssetNotFound { .. })
+    );
+    let repaired = stock_only_recipient
+        .wallet
+        .import_asset_contract(contract.clone())
+        .unwrap();
+    assert!(!repaired.already_imported);
+
+    {
+        // Read metadata from the issuer's stock so the recipient's stock remains untouched. This
+        // deterministically models a database commit that completed before the stock write.
+        let runtime = issuer.wallet.rgb_runtime().unwrap();
+        let txn = database_only_recipient
+            .wallet
+            .database()
+            .begin_transaction()
+            .unwrap();
+        database_only_recipient
+            .wallet
+            .save_new_asset_internal(
+                &txn,
+                &runtime,
+                contract_id,
+                AssetSchema::Nia,
+                valid_contract,
+                None,
+            )
+            .unwrap();
+        txn.commit().unwrap();
+    }
+    assert!(
+        database_only_recipient
+            .wallet
+            .rgb_runtime()
+            .unwrap()
+            .export_contract(contract_id)
+            .is_err()
+    );
+    let repaired = database_only_recipient
+        .wallet
+        .import_asset_contract(contract)
+        .unwrap();
+    assert!(!repaired.already_imported);
+    assert_eq!(repaired.metadata.asset_schema, AssetSchema::Nia);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn import_asset_contract_serializes_concurrent_calls() {
+    initialize();
+
+    let mut issuer = get_funded_party!();
+    let recipient = get_empty_party!();
+    let asset = issuer.issue_asset_nia(None);
+    let contract = issuer
+        .wallet
+        .export_asset_contract(asset.asset_id.clone())
+        .unwrap();
+    let wallet_data = recipient.wallet.wallet_data().clone();
+    let keys = recipient.wallet.get_keys();
+    let first_wallet = recipient.wallet;
+    let second_wallet = Wallet::new(wallet_data.clone(), keys.clone()).unwrap();
+    let first_contract = contract.clone();
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(move || first_wallet.import_asset_contract(first_contract));
+        let second = scope.spawn(move || second_wallet.import_asset_contract(contract));
+        (
+            first.join().unwrap().unwrap(),
+            second.join().unwrap().unwrap(),
+        )
+    });
+
+    assert_eq!(first.asset_id, asset.asset_id);
+    assert_eq!(second.asset_id, asset.asset_id);
+    assert_ne!(first.already_imported, second.already_imported);
+    let wallet = Wallet::new(wallet_data, keys).unwrap();
+    assert_eq!(
+        wallet.get_asset_balance(asset.asset_id).unwrap(),
+        Balance::default()
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn color_psbt_uda() {
     initialize();
 
