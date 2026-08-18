@@ -88,6 +88,21 @@ impl From<SyncOptions> for RgbLibSyncOptions {
     }
 }
 
+pub enum AssetFilter {
+    AnyOrNone,
+    None,
+    Id { asset_id: String },
+}
+impl From<AssetFilter> for RgbLibAssetFilter {
+    fn from(orig: AssetFilter) -> Self {
+        match orig {
+            AssetFilter::AnyOrNone => RgbLibAssetFilter::AnyOrNone,
+            AssetFilter::None => RgbLibAssetFilter::None,
+            AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
+        }
+    }
+}
+
 // temporary solution needed because the Enum attribute doesn't support the Remote one
 pub enum Assignment {
     Fungible { amount: u64 },
@@ -115,20 +130,6 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
             Assignment::LinkRight => RgbLibAssignment::LinkRight,
             Assignment::Any => RgbLibAssignment::Any,
-        }
-    }
-}
-pub enum AssetFilter {
-    AnyOrNone,
-    None,
-    Id { asset_id: String },
-}
-impl From<AssetFilter> for RgbLibAssetFilter {
-    fn from(orig: AssetFilter) -> Self {
-        match orig {
-            AssetFilter::AnyOrNone => RgbLibAssetFilter::AnyOrNone,
-            AssetFilter::None => RgbLibAssetFilter::None,
-            AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
         }
     }
 }

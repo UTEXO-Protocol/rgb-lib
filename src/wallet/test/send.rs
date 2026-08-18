@@ -3569,7 +3569,7 @@ fn send_to_oneself() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn send_to_oneself_crash() {
+fn send_to_oneself_crash_dry_run() {
     initialize();
 
     let amount_1: u64 = 66;
@@ -3627,7 +3627,7 @@ fn send_to_oneself_crash() {
     let crashed = party.wallet.send_end(party.online, signed_psbt.clone());
     assert_matches!(crashed, Err(Error::Internal { .. }));
 
-    // chcek the send transfer was not persisted
+    // check the send transfer was not persisted
     let transfers = party.list_transfers(Some(&asset.asset_id));
     assert_eq!(
         transfers
@@ -3675,6 +3675,106 @@ fn send_to_oneself_crash() {
             .filter(|t| t.kind == TransferKind::ReceiveWitness)
             .count(),
         1
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn send_to_oneself_crash_no_dry_run() {
+    initialize();
+
+    let amount_1: u64 = 66;
+    let amount_2: u64 = 33;
+
+    // wallet
+    let mut party = get_funded_party!();
+
+    // issue
+    let asset = party.issue_asset_nia(None);
+
+    // self-send recipients
+    let receive_data_1 = party.blind_receive();
+    let receive_data_2 = party.witness_receive();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![
+            Recipient {
+                assignment: Assignment::Fungible(amount_1),
+                recipient_id: receive_data_1.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+            Recipient {
+                assignment: Assignment::Fungible(amount_2),
+                recipient_id: receive_data_2.recipient_id.clone(),
+                witness_data: Some(WitnessData {
+                    amount_sat: 1000,
+                    blinding: None,
+                }),
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        ],
+    )]);
+
+    // send_begin with dry_run=false, so the send transfer is persisted with status Initiated
+    let begin = party
+        .wallet
+        .send_begin(
+            party.online,
+            recipient_map.clone(),
+            false,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+            default_send_expiration(),
+            false,
+            None,
+        )
+        .unwrap();
+    let signed_psbt = party.wallet.sign_psbt(begin.psbt, None).unwrap();
+
+    // the send batch transfer exists and already carries the txid
+    let initiated: Vec<_> = party
+        .db_batch_transfers()
+        .into_iter()
+        .filter(|t| t.status == TransferStatus::Initiated)
+        .collect();
+    assert_eq!(initiated.len(), 1);
+    let txid = initiated[0].txid.clone().unwrap();
+    let initiated_idx = initiated[0].idx;
+
+    // first send_end "crashes" after posting the consignment
+    println!("setting MOCK_SEND_END_CRASH");
+    MOCK_SEND_END_CRASH.replace(Some(()));
+    let crashed = party.wallet.send_end(party.online, signed_psbt.clone());
+    assert_matches!(crashed, Err(Error::Internal { .. }));
+
+    // refreshing the incoming transfers accepts the (already posted) consignment and stamps
+    // the send txid onto them, so now 3 batch transfers share the same txid
+    party.wait_for_refresh_raw(None, Some(&[2, 3]));
+    assert_eq!(party.db_batch_transfers_filtered(&txid).len(), 3);
+
+    // completing the send must update the existing send batch transfer, not create a new one
+    let res = party.wallet.send_end(party.online, signed_psbt).unwrap();
+    assert_eq!(res.txid, txid);
+    assert_eq!(res.batch_transfer_idx, initiated_idx);
+
+    let batch_transfers = party.db_batch_transfers_filtered(&txid);
+    assert_eq!(batch_transfers.len(), 3);
+    assert!(
+        batch_transfers
+            .iter()
+            .all(|t| t.status != TransferStatus::Initiated)
+    );
+
+    let transfers = party.list_transfers(Some(&asset.asset_id));
+    assert_eq!(transfers.len(), 5);
+    assert_eq!(
+        transfers
+            .iter()
+            .filter(|t| t.kind == TransferKind::Send)
+            .count(),
+        2
     );
 }
 

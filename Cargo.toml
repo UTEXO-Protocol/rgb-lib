@@ -6,7 +6,7 @@ authors = [
     "Nicola Busanello <nicola.busanello@gmail.com>",
 ]
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.94.0"
 repository = "https://github.com/RGB-Tools/rgb-lib"
 homepage = "https://github.com/RGB-Tools/rgb-lib"
 license = "MIT"
@@ -49,13 +49,13 @@ rustls = { version = "0.23", default-features = false }
 scrypt = { version = "0.12.0", default-features = false, features = [
     "phc",
 ] }
-sea-orm = { version = "1.1.19", default-features = false, features = [
+sea-orm = { version = "2.0.1", default-features = false, features = [
     "macros",
     "runtime-tokio-rustls",
     "sqlx-sqlite",
     "with-json",
 ] }
-sea-query = "0.32.7"
+sea-query = "1.0.1"
 serde = { version = "^1.0", default-features = false, features = [
     "derive",
 ] }

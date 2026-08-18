@@ -2234,14 +2234,15 @@ pub trait WalletOffline: WalletBackup {
         asset_filter: AssetFilter,
         txid: Option<String>,
     ) -> Result<Vec<Transfer>, Error> {
-        let batch_transfer_idx = match txid {
-            Some(txid) => match txn.get_batch_transfer_by_txid(&txid)? {
-                Some(batch_transfer) => Some(batch_transfer.idx),
-                None => return Ok(vec![]),
-            },
-            None => None,
-        };
         let db_data = txn.get_db_data(false)?;
+        let batch_transfer_idxs: Option<HashSet<i32>> = txid.map(|txid| {
+            db_data
+                .batch_transfers
+                .iter()
+                .filter(|b| b.txid.as_deref() == Some(txid.as_str()))
+                .map(|b| b.idx)
+                .collect()
+        });
         let asset_transfer_ids: Vec<i32> = db_data
             .asset_transfers
             .iter()
@@ -2250,7 +2251,11 @@ pub trait WalletOffline: WalletBackup {
                 AssetFilter::None => t.asset_id.is_none(),
                 AssetFilter::Id(asset_id) => t.asset_id.as_ref() == Some(asset_id),
             })
-            .filter(|t| batch_transfer_idx.is_none_or(|idx| t.batch_transfer_idx == idx))
+            .filter(|t| {
+                batch_transfer_idxs
+                    .as_ref()
+                    .is_none_or(|idxs| idxs.contains(&t.batch_transfer_idx))
+            })
             .filter(|t| t.user_driven)
             .map(|t| t.idx)
             .collect();

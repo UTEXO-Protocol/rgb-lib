@@ -426,7 +426,6 @@ where
 /// Operations for multisig wallets.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum Operation {
     // CreateUtxos variants
     /// Create UTXOs operation waiting for user's response (ACK/NACK)
@@ -967,7 +966,6 @@ pub struct OperationInfo {
 /// Response to an operation.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum RespondToOperation {
     /// ACK the operation with a signed PSBT
     Ack(String),
@@ -989,7 +987,6 @@ pub struct InitOperationResult {
 /// The role of the user on the hub.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum UserRole {
     /// A cosigner
     Cosigner,

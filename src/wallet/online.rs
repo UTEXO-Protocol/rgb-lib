@@ -3452,8 +3452,9 @@ pub trait WalletOnline: WalletOffline {
         // outgoing batch transfer should be updated here, incoming ones must be ignored so the send
         // transfers are created
         if let Some(existing) = txn
-            .get_batch_transfer_by_txid(&txid)?
-            .filter(|batch_transfer| !batch_transfer.incoming)
+            .get_batch_transfers_by_txid(&txid)?
+            .into_iter()
+            .find(|batch_transfer| !batch_transfer.incoming)
         {
             let mut updated: DbBatchTransferActMod = existing.clone().into();
             updated.status = ActiveValue::Set(status);

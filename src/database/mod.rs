@@ -25,7 +25,7 @@ fn keychain_from_u8(value: u8) -> Option<KeychainKind> {
     }
 }
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use crate::database::entities::{pending_witness_script, reserved_txo};
+use crate::database::entities::{batch_transfer, pending_witness_script, reserved_txo};
 
 #[derive(Debug, Clone)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -595,14 +595,15 @@ impl DbTxn {
             .collect())
     }
 
-    pub(crate) fn get_batch_transfer_by_txid(
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn get_batch_transfers_by_txid(
         &self,
         txid: &str,
-    ) -> Result<Option<DbBatchTransfer>, Error> {
+    ) -> Result<Vec<DbBatchTransfer>, Error> {
         Ok(block_on(
             BatchTransfer::find()
-                .filter(crate::database::entities::batch_transfer::Column::Txid.eq(txid))
-                .one(self.inner()),
+                .filter(batch_transfer::Column::Txid.eq(txid))
+                .all(self.inner()),
         )?)
     }
 

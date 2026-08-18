@@ -48,6 +48,17 @@ pub struct CResultString {
     inner: *mut c_char,
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+#[unsafe(no_mangle)]
+pub extern "C" fn free_string(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let _ = CString::from_raw(ptr);
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn free_wallet(obj: COpaqueStruct) {
     unsafe {
@@ -201,7 +212,7 @@ pub extern "C" fn rgblib_delete_transfers(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_drain_to_begin(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     address: *const c_char,
     fee_rate: *const c_char,
     dry_run: bool,
@@ -212,7 +223,7 @@ pub extern "C" fn rgblib_drain_to_begin(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_drain_to_end(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     signed_psbt: *const c_char,
 ) -> CResultString {
     drain_to_end(wallet, online, signed_psbt).into()
@@ -332,7 +343,7 @@ pub extern "C" fn rgblib_inflate(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_inflate_begin(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     asset_id: *const c_char,
     inflation_amounts: *const c_char,
     fee_rate: *const c_char,
@@ -354,10 +365,15 @@ pub extern "C" fn rgblib_inflate_begin(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_inflate_end(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     signed_psbt: *const c_char,
 ) -> CResultString {
     inflate_end(wallet, online, signed_psbt).into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rgblib_invoice_data(invoice_string: *const c_char) -> CResultString {
+    invoice_data(invoice_string).into()
 }
 
 #[unsafe(no_mangle)]
@@ -567,7 +583,7 @@ pub extern "C" fn rgblib_send_btc(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_btc_begin(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     address: *const c_char,
     amount: *const c_char,
     fee_rate: *const c_char,
@@ -583,7 +599,7 @@ pub extern "C" fn rgblib_send_btc_begin(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_send_btc_end(
     wallet: &COpaqueStruct,
-    online: &COpaqueStruct,
+    online: *const c_char,
     signed_psbt: *const c_char,
 ) -> CResultString {
     send_btc_end(wallet, online, signed_psbt).into()
@@ -670,11 +686,6 @@ pub extern "C" fn rgblib_witness_receive(
 #[unsafe(no_mangle)]
 pub extern "C" fn rgblib_invoice_new(invoice_string: *const c_char) -> CResult {
     invoice_new(invoice_string).into()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rgblib_invoice_data(invoice: &COpaqueStruct) -> CResultString {
-    invoice_data(invoice).into()
 }
 
 #[unsafe(no_mangle)]

@@ -269,8 +269,8 @@ use schemata::{
 use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
     ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DatabaseTransaction,
-    DbErr, DeriveActiveEnum, EntityTrait, EnumIter, IntoActiveValue, JsonValue, QueryFilter,
-    QueryOrder, QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
+    DbErr, DeriveActiveEnum, EntityTrait, EnumIter, JsonValue, QueryFilter, QueryOrder,
+    QueryResult, TransactionTrait, TryGetError, TryGetable, TryIntoModel,
 };
 use serde::de::{self, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};

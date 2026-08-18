@@ -6,7 +6,7 @@ authors = [
     "Nicola Busanello <nicola.busanello@gmail.com>",
 ]
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.94.0"
 repository = "https://github.com/RGB-Tools/rgb-lib"
 homepage = "https://github.com/RGB-Tools/rgb-lib"
 license = "MIT"
@@ -20,10 +20,9 @@ path = "src/lib.rs"
 tokio = { version = "1", default-features = false, features = [
     "macros"
 ] }
-sea-orm-migration = { version = "1.1.19", default-features = false, features = [
+sea-orm-migration = { version = "2.0.1", default-features = false, features = [
     "cli",
     "runtime-tokio-rustls",
-    "sqlx-mysql",
     "sqlx-postgres",
     "sqlx-sqlite",
 ] }

@@ -21,6 +21,9 @@ These are the officially supported languages:
 
 These are the unofficially supported languages:
 
+> **Note:** These bindings may or may not use an unmodified rgb-lib,
+> we cannot guarantee their reliability and compatibility.
+
 | Language | Tool   | Platform              | Location         |
 | -------- | ------ | --------------------- | ---------------- |
 | Go       | uniffi | Linux, macOS          | [rgb-lib-go]     |
