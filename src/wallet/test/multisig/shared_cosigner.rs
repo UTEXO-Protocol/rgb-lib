@@ -185,36 +185,36 @@ fn shared_cosigner_two_wallets_hub() {
     let mut ms_a2 = get_test_ms_wallet(&keys_a, format!("{random_str}_a2"));
     let online_a2 = ms_go_online(&mut ms_a2, &token_a2);
     let wallet_dir_a = ms_a1.get_wallet_dir();
-    let mut party_a1 = ms_party!(&ss_k1, &mut ms_a1, online_a1, &xpubs_a[0]);
-    let mut party_a2 = ms_party!(&ss_k2, &mut ms_a2, online_a2, &xpubs_a[1]);
+    let asset_a_id = {
+        let mut party_a1 = ms_party!(&ss_k1, &mut ms_a1, online_a1, &xpubs_a[0]);
+        let mut party_a2 = ms_party!(&ss_k2, &mut ms_a2, online_a2, &xpubs_a[1]);
 
-    send_sats_to_address(party_a1.get_address(), Some(20_000));
-    mine(false);
-    let op_a = party_a1.create_utxos_init(false, Some(3), Some(1000), FEE_RATE);
-    operation_complete::<CreateUtxosHandler>(
-        op_a.operation_idx,
-        &mut [&mut party_a1, &mut party_a2],
-        &mut [],
-        &mut [],
-        true,
-    );
-    let IssuedAsset::Nia(asset_a) = issue_asset(
-        &mut party_a1,
-        &mut [&mut party_a2],
-        AssetSchema::Nia,
-        Some(&[1_000_000]),
-        None,
-    ) else {
-        unreachable!()
+        send_sats_to_address(party_a1.get_address(), Some(20_000));
+        mine(false);
+        let op_a = party_a1.create_utxos_init(false, Some(3), Some(1000), FEE_RATE);
+        operation_complete::<CreateUtxosHandler>(
+            op_a.operation_idx,
+            &mut [&mut party_a1, &mut party_a2],
+            &mut [],
+            &mut [],
+            true,
+        );
+        let IssuedAsset::Nia(asset_a) = issue_asset(
+            &mut party_a1,
+            &mut [&mut party_a2],
+            AssetSchema::Nia,
+            Some(&[1_000_000]),
+            None,
+        ) else {
+            unreachable!()
+        };
+        check_asset_balance(
+            &[&party_a1, &party_a2],
+            &asset_a.asset_id,
+            (1_000_000, 1_000_000, 1_000_000),
+        );
+        asset_a.asset_id.clone()
     };
-    check_asset_balance(
-        &[&party_a1, &party_a2],
-        &asset_a.asset_id,
-        (1_000_000, 1_000_000, 1_000_000),
-    );
-    let asset_a_id = asset_a.asset_id.clone();
-    drop(party_a1);
-    drop(party_a2);
     drop(ms_a1);
     drop(ms_a2);
 
@@ -244,36 +244,36 @@ fn shared_cosigner_two_wallets_hub() {
     let wallet_dir_b = ms_b1.get_wallet_dir();
     assert_ne!(wallet_dir_a, wallet_dir_b);
 
-    let mut party_b1 = ms_party!(&ss_k1, &mut ms_b1, online_b1, &xpubs_b[0]);
-    let mut party_b2 = ms_party!(&ss_k3, &mut ms_b2, online_b2, &xpubs_b[1]);
-    send_sats_to_address(party_b1.get_address(), Some(20_000));
-    mine(false);
-    let op_b = party_b1.create_utxos_init(false, Some(3), Some(1000), FEE_RATE);
-    operation_complete::<CreateUtxosHandler>(
-        op_b.operation_idx,
-        &mut [&mut party_b1, &mut party_b2],
-        &mut [],
-        &mut [],
-        true,
-    );
-    let IssuedAsset::Nia(asset_b) = issue_asset(
-        &mut party_b1,
-        &mut [&mut party_b2],
-        AssetSchema::Nia,
-        Some(&[2_000_000]),
-        None,
-    ) else {
-        unreachable!()
+    let asset_b_id = {
+        let mut party_b1 = ms_party!(&ss_k1, &mut ms_b1, online_b1, &xpubs_b[0]);
+        let mut party_b2 = ms_party!(&ss_k3, &mut ms_b2, online_b2, &xpubs_b[1]);
+        send_sats_to_address(party_b1.get_address(), Some(20_000));
+        mine(false);
+        let op_b = party_b1.create_utxos_init(false, Some(3), Some(1000), FEE_RATE);
+        operation_complete::<CreateUtxosHandler>(
+            op_b.operation_idx,
+            &mut [&mut party_b1, &mut party_b2],
+            &mut [],
+            &mut [],
+            true,
+        );
+        let IssuedAsset::Nia(asset_b) = issue_asset(
+            &mut party_b1,
+            &mut [&mut party_b2],
+            AssetSchema::Nia,
+            Some(&[2_000_000]),
+            None,
+        ) else {
+            unreachable!()
+        };
+        check_asset_balance(
+            &[&party_b1, &party_b2],
+            &asset_b.asset_id,
+            (2_000_000, 2_000_000, 2_000_000),
+        );
+        asset_b.asset_id.clone()
     };
-    check_asset_balance(
-        &[&party_b1, &party_b2],
-        &asset_b.asset_id,
-        (2_000_000, 2_000_000, 2_000_000),
-    );
-    let asset_b_id = asset_b.asset_id.clone();
     assert_ne!(asset_a_id, asset_b_id);
-    drop(party_b1);
-    drop(party_b2);
     drop(ms_b1);
     drop(ms_b2);
 
