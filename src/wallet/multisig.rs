@@ -399,8 +399,24 @@ pub struct MultisigVotingStatus {
 struct ReceiveMetadata {
     invoice: String,
     min_confirmations: u8,
+    #[serde(deserialize_with = "deserialize_mandatory_expiration")]
     expiration_timestamp: i64,
     secret_seal: Option<GraphSeal>,
+}
+
+// tolerate a null expiration from coordinators running an older rgb-lib version so the failure is
+// reported as a version mismatch instead of a generic parse error
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn deserialize_mandatory_expiration<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer)?.ok_or_else(|| {
+        serde::de::Error::custom(
+            "expiration timestamp is null: receive data was created by an older rgb-lib version \
+             (expiration is now mandatory)",
+        )
+    })
 }
 
 /// Operations for multisig wallets.
@@ -1796,8 +1812,8 @@ impl MultisigWallet {
         let file = fs::File::open(&metadata_file.filepath)?;
         let reader = io::BufReader::new(file);
         let receive_metadata: ReceiveMetadata =
-            serde_json::from_reader(reader).map_err(|_| Error::MultisigUnexpectedData {
-                details: s!("invalid receive data"),
+            serde_json::from_reader(reader).map_err(|e| Error::MultisigUnexpectedData {
+                details: format!("invalid receive data: {e}"),
             })?;
         let min_confirmations = receive_metadata.min_confirmations;
         let invoice = Invoice::new(receive_metadata.invoice.clone())?;
@@ -2499,6 +2515,19 @@ impl MultisigWallet {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn receive_metadata_null_expiration_names_version_mismatch() {
+        // old coordinators serialize a null expiration
+        let json = r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":null,"secret_seal":null}"#;
+        let err = serde_json::from_str::<ReceiveMetadata>(json).unwrap_err();
+        assert!(err.to_string().contains("older rgb-lib version"));
+
+        let json = r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":123,"secret_seal":null}"#;
+        let metadata = serde_json::from_str::<ReceiveMetadata>(json).unwrap();
+        assert_eq!(metadata.expiration_timestamp, 123);
+    }
 
     #[test]
     fn cosigner_display_and_parse() {
