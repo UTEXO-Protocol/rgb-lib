@@ -67,7 +67,16 @@ impl WalletManifest {
 
     pub(crate) fn write(&self, wallet_dir: &Path) -> Result<(), Error> {
         let json = serde_json::to_string_pretty(self).map_err(InternalError::from)?;
-        fs::write(Self::path(wallet_dir), json)?;
+        let path = Self::path(wallet_dir);
+        if let Ok(existing) = fs::read_to_string(&path)
+            && existing == json
+        {
+            return Ok(());
+        }
+        // atomic replace so a crash mid-write can't leave a torn manifest
+        let tmp_path = wallet_dir.join(format!("{WALLET_MANIFEST_FILE}.tmp"));
+        fs::write(&tmp_path, json)?;
+        fs::rename(&tmp_path, &path)?;
         Ok(())
     }
 

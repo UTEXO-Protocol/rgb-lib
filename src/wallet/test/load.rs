@@ -439,6 +439,67 @@ fn unsupported_manifest_version_fail() {
 
 #[test]
 #[parallel]
+fn corrupt_manifest_fail() {
+    let test_data_dir = create_test_data_dir();
+    let test_data_dir_str = test_data_dir.to_string_lossy().to_string();
+
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+    let wallet = Wallet::new(
+        get_test_wallet_data(&test_data_dir_str),
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let manifest_path = wallet.get_wallet_dir().join(WALLET_MANIFEST_FILE);
+    drop(wallet);
+
+    fs::write(&manifest_path, "{ not json").unwrap();
+
+    // garbled manifest yields a clean error from both open paths
+    let err = Wallet::load(&test_data_dir_str, &keys.master_fingerprint, None)
+        .err()
+        .unwrap();
+    assert_matches!(err, Error::Internal { .. });
+    let err = Wallet::new(
+        get_test_wallet_data(&test_data_dir_str),
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .err()
+    .unwrap();
+    assert_matches!(err, Error::Internal { .. });
+}
+
+#[test]
+#[parallel]
+fn manifest_rewrite_skipped_when_unchanged() {
+    let test_data_dir = create_test_data_dir();
+    let test_data_dir_str = test_data_dir.to_string_lossy().to_string();
+
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+    let wallet = Wallet::new(
+        get_test_wallet_data(&test_data_dir_str),
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let manifest_path = wallet.get_wallet_dir().join(WALLET_MANIFEST_FILE);
+    drop(wallet);
+
+    let mtime_before = fs::metadata(&manifest_path).unwrap().modified().unwrap();
+
+    let wallet = Wallet::new(
+        get_test_wallet_data(&test_data_dir_str),
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    drop(wallet);
+
+    // identical settings leave the manifest untouched and no temp file behind
+    let mtime_after = fs::metadata(&manifest_path).unwrap().modified().unwrap();
+    assert_eq!(mtime_before, mtime_after);
+    assert!(!manifest_path.with_extension("json.tmp").exists());
+}
+
+#[test]
+#[parallel]
 fn wrong_mnemonic_fail() {
     let test_data_dir = create_test_data_dir();
     let test_data_dir_str = test_data_dir.to_string_lossy().to_string();
