@@ -1907,21 +1907,22 @@ pub(super) fn sync_wallets_full(wallets: &mut [&mut MultisigParty]) {
 
 /// Sign a PSBT with a cosigner singlesig wallet.
 pub(super) fn psbt_signed_by_cosigner(unsigned_psbt: &str, cosigner: &Wallet) -> String {
-    cosigner
-        .sign_psbt(unsigned_psbt.to_string(), None)
-        .unwrap()
+    cosigner.sign_psbt(unsigned_psbt.to_string(), None).unwrap()
 }
 
 /// Append bogus taproot script-path signatures from unrelated keys.
 ///
 /// This simulates a PSBT that already has a valid cosigner signature plus extra
 /// `tap_script_sigs` entries that are not from wallet cosigners.
-pub(super) fn psbt_with_foreign_tap_script_sigs(signed_psbt: &str, foreign_signer_count: usize) -> String {
+pub(super) fn psbt_with_foreign_tap_script_sigs(
+    signed_psbt: &str,
+    foreign_signer_count: usize,
+) -> String {
     use bdk_wallet::bitcoin::{
+        TapSighashType, XOnlyPublicKey,
         key::Keypair,
         secp256k1::{self, SecretKey},
         taproot::{Signature as TapSignature, TapLeafHash},
-        TapSighashType, XOnlyPublicKey,
     };
 
     let mut psbt = Psbt::from_str(signed_psbt).unwrap();

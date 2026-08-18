@@ -97,16 +97,10 @@ fn foreign_cosigner_tap_script_sigs_not_validated() {
         strategy: SyncStrategy::FastSync,
     });
     wlt_2
-        .respond_to_operation_res(
-            op_init.operation_idx,
-            RespondToOperation::Ack(psbt.clone()),
-        )
+        .respond_to_operation_res(op_init.operation_idx, RespondToOperation::Ack(psbt.clone()))
         .unwrap();
 
     // finalize_psbt: BDK rejects invalid script-path signatures
-    let err = wlt_1
-        .multisig
-        .finalize_psbt(psbt, None)
-        .unwrap_err();
+    let err = wlt_1.multisig.finalize_psbt(psbt, None).unwrap_err();
     assert_matches!(err, Error::CannotFinalizePsbt);
 }

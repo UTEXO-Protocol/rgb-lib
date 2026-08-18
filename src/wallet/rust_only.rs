@@ -831,10 +831,7 @@ impl Wallet {
             .map(|o| {
                 let txid =
                     crate::bitcoin::Txid::from_str(&o.txid).map_err(|_| Error::InvalidTxid)?;
-                Ok(OutPoint {
-                    txid,
-                    vout: o.vout,
-                })
+                Ok(OutPoint { txid, vout: o.vout })
             })
             .collect::<Result<_, Error>>()?;
 

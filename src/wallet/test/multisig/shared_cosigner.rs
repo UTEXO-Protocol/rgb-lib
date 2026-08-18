@@ -41,8 +41,14 @@ fn shared_cosigner_two_wallets_offline() {
     assert_ne!(desc_a.vanilla, desc_b.vanilla);
 
     // shared cosigner identity
-    assert_eq!(c1.master_fingerprint, keys_a.cosigners[0].master_fingerprint);
-    assert_eq!(c1.master_fingerprint, keys_b.cosigners[0].master_fingerprint);
+    assert_eq!(
+        c1.master_fingerprint,
+        keys_a.cosigners[0].master_fingerprint
+    );
+    assert_eq!(
+        c1.master_fingerprint,
+        keys_b.cosigners[0].master_fingerprint
+    );
     assert_eq!(
         keys_a.cosigners[0].account_xpub_colored,
         keys_b.cosigners[0].account_xpub_colored
@@ -58,7 +64,10 @@ fn shared_cosigner_two_wallets_offline() {
 
     let dir_a = ms_a.get_wallet_dir();
     let dir_b = ms_b.get_wallet_dir();
-    assert_ne!(dir_a, dir_b, "shared K1 must not collapse wallet state dirs");
+    assert_ne!(
+        dir_a, dir_b,
+        "shared K1 must not collapse wallet state dirs"
+    );
     assert!(dir_a.exists());
     assert!(dir_b.exists());
     assert_ne!(
