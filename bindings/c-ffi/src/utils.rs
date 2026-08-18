@@ -8,6 +8,9 @@ pub(crate) enum Error {
     #[error("Error converting string into number")]
     StringToNumberConversion,
 
+    #[error("Unexpected null pointer for a mandatory parameter")]
+    NullPointer,
+
     #[error("Error from rgb-lib: {0}")]
     RgbLib(#[from] RgbLibError),
 
@@ -148,6 +151,9 @@ fn convert_optional_string(ptr: *const c_char) -> Option<String> {
 }
 
 fn ptr_to_num<T: FromStr>(ptr: *const c_char) -> Result<T, Error> {
+    if ptr.is_null() {
+        return Err(Error::NullPointer);
+    }
     ptr_to_string(ptr)
         .parse()
         .map_err(|_| Error::StringToNumberConversion)
@@ -1120,3 +1126,14 @@ mod vss_ffi {
 
 #[cfg(feature = "vss")]
 pub(crate) use vss_ffi::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ptr_to_num_rejects_null() {
+        let res: Result<u64, Error> = ptr_to_num(std::ptr::null());
+        assert!(matches!(res, Err(Error::NullPointer)));
+    }
+}
