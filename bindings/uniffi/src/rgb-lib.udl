@@ -24,6 +24,10 @@ namespace rgb_lib {
 
   [Throws=RgbLibError]
   string restore_from_vss(VssBackupConfig config, string target_dir);
+
+  // Decode a witness recipient_id (`bc:wvout:...`) to a scriptPubKey hex.
+  [Throws=RgbLibError]
+  string script_hex_from_recipient_id(string recipient_id);
 };
 
 [Error, Remote]
