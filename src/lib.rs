@@ -108,12 +108,12 @@ pub use rgbstd::validation::{ValidationConfig, ValidationError};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
     cmp::{Ordering, max, min},
-    collections::{BTreeSet, hash_map::DefaultHasher},
+    collections::hash_map::DefaultHasher,
     hash::Hasher,
     num::NonZeroU32,
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},

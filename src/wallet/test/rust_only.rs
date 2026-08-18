@@ -39,6 +39,9 @@ fn success() {
             .any(|o| o.script_pubkey.is_op_return())
     );
     assert!(psbt.proprietary.is_empty());
+    let witness_utxo_before = psbt.inputs[0].witness_utxo.clone();
+    let tap_internal_key_before = psbt.inputs[0].tap_internal_key;
+    assert!(witness_utxo_before.is_some());
 
     // color PSBT
     assert_eq!(psbt.unsigned_tx.input.len(), 1);
@@ -78,6 +81,8 @@ fn success() {
             .any(|o| o.script_pubkey.is_op_return())
     );
     assert!(!psbt.proprietary.is_empty());
+    assert_eq!(psbt.inputs[0].witness_utxo, witness_utxo_before);
+    assert_eq!(psbt.inputs[0].tap_internal_key, tap_internal_key_before);
     let vout = vout + 1;
 
     // check fascia
@@ -699,6 +704,243 @@ fn color_psbt_fail() {
         .color_psbt(&mut psbt, coloring_info.clone());
     let msg = "total amount in output_map (999) greater than available (666)";
     assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
+}
+
+fn append_op_return(psbt: &mut Psbt) {
+    psbt.unsigned_tx.output.push(TxOut {
+        value: BdkAmount::ZERO,
+        script_pubkey: ScriptBuf::new_op_return([]),
+    });
+    psbt.outputs
+        .push(bdk_wallet::bitcoin::psbt::Output::default());
+}
+
+fn coloring_info_for(asset_id: &str, output_map: HashMap<u32, u64>, blinding: u64) -> ColoringInfo {
+    let asset_coloring_info = AssetColoringInfo {
+        output_map,
+        static_blinding: Some(blinding),
+    };
+    let asset_info_map =
+        HashMap::from_iter([(ContractId::from_str(asset_id).unwrap(), asset_coloring_info)]);
+    ColoringInfo {
+        asset_info_map,
+        static_blinding: Some(blinding),
+        nonce: None,
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_fail() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    output_map.insert(output.0 as u32, AMOUNT);
+    let coloring_info = coloring_info_for(&asset.asset_id, output_map, blinding);
+
+    let result =
+        party_send
+            .wallet
+            .color_psbt_for_outpoints(&mut psbt, coloring_info.clone(), vec![]);
+    assert_matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details: m }) if m == "input_outpoints is empty"
+    );
+
+    let missing = OutPoint::from_str(FAKE_OUTPOINT).unwrap();
+    let result =
+        party_send
+            .wallet
+            .color_psbt_for_outpoints(&mut psbt, coloring_info.clone(), vec![missing]);
+    assert_matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details: m })
+            if m == "input_outpoints must be a subset of PSBT inputs"
+    );
+
+    let result = party_send
+        .wallet
+        .color_psbt_for_outpoints(&mut psbt, coloring_info, vec![input]);
+    assert_matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details: m })
+            if m == "PSBT must include an OP_RETURN output"
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_rejects_omitted_allocations() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(2), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_997_000);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT, AMOUNT]));
+
+    let allocated: Vec<OutPoint> = party_send
+        .list_unspents(true)
+        .into_iter()
+        .filter(|u| u.utxo.colorable && !u.rgb_allocations.is_empty())
+        .map(|u| u.utxo.outpoint.into())
+        .collect();
+    assert!(allocated.len() >= 2);
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder.add_utxo(allocated[0]).unwrap();
+    tx_builder.add_utxo(allocated[1]).unwrap();
+    tx_builder.manually_selected_only();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    append_op_return(&mut psbt);
+
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    output_map.insert(output.0 as u32, AMOUNT);
+    let coloring_info = coloring_info_for(&asset.asset_id, output_map, blinding);
+
+    let result =
+        party_send
+            .wallet
+            .color_psbt_for_outpoints(&mut psbt, coloring_info, vec![allocated[0]]);
+    assert_matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details: m })
+            if m.contains("PSBT inputs omitted from input_outpoints carry RGB allocations")
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_for_outpoints_preserves_metadata_and_consume() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    append_op_return(&mut psbt);
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    let witness_utxo_before = psbt.inputs[0].witness_utxo.clone();
+    let tap_internal_key_before = psbt.inputs[0].tap_internal_key;
+    assert!(witness_utxo_before.is_some());
+
+    let mut output_map = HashMap::new();
+    let output = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap();
+    let vout = output.0 as u32;
+    output_map.insert(vout, AMOUNT);
+    let coloring_info = coloring_info_for(&asset.asset_id, output_map, blinding);
+
+    let transfers = party_send
+        .wallet
+        .color_psbt_for_outpoints_and_consume(&mut psbt, coloring_info, vec![input])
+        .unwrap();
+    assert_eq!(psbt.inputs[0].witness_utxo, witness_utxo_before);
+    assert_eq!(psbt.inputs[0].tap_internal_key, tap_internal_key_before);
+    assert_eq!(transfers.len(), 1);
+
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+    let transfer = transfers.into_iter().next().unwrap();
+    recv_party
+        .wallet
+        .accept_transfer_from_consignment(transfer, txid, vout, blinding)
+        .unwrap();
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn contract_assignments_for_outpoints_includes_empty() {
+    initialize();
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+    let allocated = party_send
+        .list_unspents(true)
+        .into_iter()
+        .find(|u| u.utxo.colorable && !u.rgb_allocations.is_empty())
+        .unwrap()
+        .utxo
+        .outpoint;
+    let empty = Outpoint {
+        txid: FAKE_TXID.to_string(),
+        vout: 0,
+    };
+    let contract_id = ContractId::from_str(&asset.asset_id).unwrap();
+    let map = party_send
+        .wallet
+        .contract_assignments_for_outpoints(contract_id, vec![allocated.clone(), empty.clone()])
+        .unwrap();
+    assert!(map.get(&allocated).is_some_and(|a| !a.is_empty()));
+    assert_eq!(map.get(&empty).map(Vec::as_slice), Some(&[][..]));
 }
 
 #[cfg(feature = "electrum")]

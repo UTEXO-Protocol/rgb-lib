@@ -11,6 +11,7 @@
 //! [`Wallet::contract_assignments_for_outpoints`].
 //! Proxy `post_consignment` stays rust-only / HTTP in the client.
 use super::*;
+use bdk_wallet::bitcoin::Transaction;
 use rgbstd::Operation as _;
 
 /// RGB asset-specific information to color a transaction
@@ -47,6 +48,47 @@ pub struct ImportAssetContractResult {
 
 /// Map of contract ID and list of its beneficiaries
 pub type AssetBeneficiariesMap = BTreeMap<ContractId, Vec<BuilderSeal<GraphSeal>>>;
+
+fn psbt_has_input_signatures(psbt: &Psbt) -> bool {
+    psbt.inputs.iter().any(|input| {
+        !input.partial_sigs.is_empty()
+            || input.tap_key_sig.is_some()
+            || !input.tap_script_sigs.is_empty()
+            || input.final_script_sig.is_some()
+            || input.final_script_witness.is_some()
+    })
+}
+
+fn rebuild_psbt_preserving_maps(
+    psbt: &Psbt,
+    mut unsigned_tx: Transaction,
+    opreturn_first: bool,
+) -> Result<Psbt, Error> {
+    for txin in &mut unsigned_tx.input {
+        txin.script_sig = ScriptBuf::new();
+        txin.witness.clear();
+    }
+    let mut rebuilt = Psbt::from_unsigned_tx(unsigned_tx).map_err(|e| Error::Internal {
+        details: format!("Failed to create PSBT: {e}"),
+    })?;
+    rebuilt.version = psbt.version;
+    rebuilt.xpub = psbt.xpub.clone();
+    rebuilt.proprietary = psbt.proprietary.clone();
+    rebuilt.unknown = psbt.unknown.clone();
+    for (i, input) in psbt.inputs.iter().enumerate() {
+        rebuilt.inputs[i] = input.clone();
+    }
+    if opreturn_first {
+        for (i, output) in psbt.outputs.iter().enumerate() {
+            rebuilt.outputs[i + 1] = output.clone();
+        }
+    } else {
+        for (i, output) in psbt.outputs.iter().enumerate() {
+            rebuilt.outputs[i] = output.clone();
+        }
+    }
+    Ok(rebuilt)
+}
 
 /// Indexer protocol
 #[derive(Debug, Clone)]
@@ -387,6 +429,13 @@ impl Wallet {
 
     /// Color a PSBT using a provided set of input outpoints.
     ///
+    /// `input_outpoints` must be a non-empty subset of the PSBT inputs. Any other PSBT input that
+    /// still carries RGB allocations is rejected: spending it without adding it to the transition
+    /// would close the seal and destroy the allocation.
+    ///
+    /// The PSBT must already contain an OP_RETURN output. This entry point is meant for externally
+    /// constructed (HTLC) transactions whose output layout must not be rewritten.
+    ///
     /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
     pub fn color_psbt_for_outpoints(
         &self,
@@ -411,6 +460,32 @@ impl Wallet {
                 details: s!("input_outpoints must be a subset of PSBT inputs"),
             });
         }
+        let omitted: Vec<OutPoint> = psbt_inputs.difference(&override_set).copied().collect();
+        if !omitted.is_empty() {
+            let assigning = self.rgb_runtime()?.contracts_assigning(omitted)?;
+            if !assigning.is_empty() {
+                let contracts = assigning
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(Error::InvalidColoringInfo {
+                    details: format!(
+                        "PSBT inputs omitted from input_outpoints carry RGB allocations for {contracts}"
+                    ),
+                });
+            }
+        }
+        if !psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .any(|o| o.script_pubkey.is_op_return())
+        {
+            return Err(Error::InvalidColoringInfo {
+                details: s!("PSBT must include an OP_RETURN output"),
+            });
+        }
         self.color_psbt_with_prevouts(psbt, coloring_info, override_set)
     }
 
@@ -426,26 +501,30 @@ impl Wallet {
             Err(ExtractTxError::MissingInputValue { tx }) => tx, // required for non-standard TXs
             Err(e) => return Err(InternalError::from(e).into()),
         };
-        let mut opreturn_first = false;
-        if transaction.output.iter().any(|o| o.script_pubkey.is_p2tr()) {
-            opreturn_first = true;
-        }
+        let insert_opreturn_first = transaction.output.iter().any(|o| o.script_pubkey.is_p2tr());
+        let mut inserted_opreturn_at_front = false;
 
         if !transaction
             .output
             .iter()
             .any(|o| o.script_pubkey.is_op_return())
         {
+            if psbt_has_input_signatures(psbt) {
+                return Err(Error::InvalidColoringInfo {
+                    details: s!("cannot insert OP_RETURN into a signed PSBT"),
+                });
+            }
             let opreturn_output = TxOut {
                 value: BdkAmount::ZERO,
                 script_pubkey: ScriptBuf::new_op_return([]),
             };
-            if opreturn_first {
+            if insert_opreturn_first {
                 transaction.output.insert(0, opreturn_output);
+                inserted_opreturn_at_front = true;
             } else {
                 transaction.output.push(opreturn_output);
             }
-            *psbt = Psbt::from_unsigned_tx(transaction).unwrap();
+            *psbt = rebuild_psbt_preserving_maps(psbt, transaction, insert_opreturn_first)?;
         }
 
         let runtime = self.rgb_runtime()?;
@@ -483,7 +562,7 @@ impl Wallet {
                 if amount == 0 {
                     continue;
                 }
-                if opreturn_first {
+                if inserted_opreturn_at_front {
                     vout += 1;
                 }
                 sending_amt += amount;
@@ -577,36 +656,8 @@ impl Wallet {
         coloring_info: ColoringInfo,
     ) -> Result<Vec<RgbTransfer>, Error> {
         info!(self.logger(), "Coloring PSBT and consuming...");
-        let (fascia, asset_beneficiaries) = self.color_psbt(psbt, coloring_info.clone())?;
-
-        let witness_txid = psbt.get_txid();
-
-        let mut runtime = self.rgb_runtime()?;
-        runtime.consume_fascia(fascia, None)?;
-
-        let mut transfers = vec![];
-        for (contract_id, beneficiaries) in asset_beneficiaries {
-            let mut beneficiaries_witness = vec![];
-            let mut beneficiaries_blinded = vec![];
-            for builder_seal in beneficiaries {
-                match builder_seal {
-                    BuilderSeal::Revealed(seal) => {
-                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
-                        beneficiaries_witness.push(explicit_seal);
-                    }
-                    BuilderSeal::Concealed(secret_seal) => {
-                        beneficiaries_blinded.push(secret_seal);
-                    }
-                };
-            }
-            transfers.push(runtime.transfer(
-                contract_id,
-                beneficiaries_witness,
-                beneficiaries_blinded,
-                Some(witness_txid),
-            )?);
-        }
-
+        let (fascia, asset_beneficiaries) = self.color_psbt(psbt, coloring_info)?;
+        let transfers = self.consume_and_transfer(psbt, fascia, asset_beneficiaries)?;
         info!(self.logger(), "Color PSBT and consume completed");
         Ok(transfers)
     }
@@ -622,10 +673,19 @@ impl Wallet {
     ) -> Result<Vec<RgbTransfer>, Error> {
         info!(self.logger(), "Coloring PSBT and consuming...");
         let (fascia, asset_beneficiaries) =
-            self.color_psbt_for_outpoints(psbt, coloring_info.clone(), input_outpoints)?;
+            self.color_psbt_for_outpoints(psbt, coloring_info, input_outpoints)?;
+        let transfers = self.consume_and_transfer(psbt, fascia, asset_beneficiaries)?;
+        info!(self.logger(), "Color PSBT and consume completed");
+        Ok(transfers)
+    }
 
+    fn consume_and_transfer(
+        &self,
+        psbt: &Psbt,
+        fascia: Fascia,
+        asset_beneficiaries: AssetBeneficiariesMap,
+    ) -> Result<Vec<RgbTransfer>, Error> {
         let witness_txid = psbt.get_txid();
-
         let mut runtime = self.rgb_runtime()?;
         runtime.consume_fascia(fascia, None)?;
 
@@ -651,8 +711,6 @@ impl Wallet {
                 Some(witness_txid),
             )?);
         }
-
-        info!(self.logger(), "Color PSBT and consume completed");
         Ok(transfers)
     }
 
@@ -745,6 +803,7 @@ impl Wallet {
         vout: u32,
         blinding: u64,
     ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
+        info!(self.logger(), "Accepting transfer...");
         let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
         self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding)
     }
@@ -838,7 +897,11 @@ impl Wallet {
         let runtime = self.rgb_runtime()?;
         let state = runtime.contract_assignments_for(contract_id, btc_outpoints)?;
 
-        let mut res: HashMap<Outpoint, Vec<Assignment>> = HashMap::new();
+        let mut res: HashMap<Outpoint, Vec<Assignment>> = outpoints
+            .iter()
+            .cloned()
+            .map(|outpoint| (outpoint, Vec::new()))
+            .collect();
         for (seal, opout_state_map) in state {
             let outpoint = Outpoint {
                 txid: seal.txid.to_string(),
