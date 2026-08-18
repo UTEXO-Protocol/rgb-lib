@@ -1198,6 +1198,8 @@ fn inspect_rgb_transfer_does_not_validate_psbt_signatures() {
         .unwrap();
     assert_eq!(inspection.operations.len(), 1);
     assert_eq!(inspection.operations[0].asset_id, asset.asset_id);
+}
+
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
