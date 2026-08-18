@@ -163,6 +163,13 @@ pub enum Error {
     #[error("Inexistent data directory")]
     InexistentDataDir,
 
+    /// The wallet directory holds no manifest to load the wallet from
+    #[error("Inexistent wallet manifest: {path}")]
+    InexistentWalletManifest {
+        /// The manifest path
+        path: String,
+    },
+
     /// There are not enough available allocation slots (UTXOs with available slots)
     #[error("Insufficient allocations")]
     InsufficientAllocationSlots,
@@ -669,6 +676,13 @@ pub enum Error {
     #[error("Transport type is not supported")]
     UnsupportedTransportType,
 
+    /// The wallet manifest version is not supported
+    #[error("Wallet manifest version not supported")]
+    UnsupportedWalletManifestVersion {
+        /// Wallet manifest version
+        version: String,
+    },
+
     /// VSS authentication failed
     #[error("VSS authentication failed: {details}")]
     VssAuth {
@@ -699,6 +713,19 @@ pub enum Error {
     WalletDirAlreadyExists {
         /// The directory path
         path: String,
+    },
+
+    /// A wallet setting fixed when the wallet was created has been given a different value
+    #[error(
+        "Wallet setting '{setting}' cannot be changed: the wallet was created with '{expected}', got '{provided}'"
+    )]
+    WalletSettingMismatch {
+        /// The setting name
+        setting: String,
+        /// The value the wallet was created with
+        expected: String,
+        /// The value that has been provided
+        provided: String,
     },
 
     /// The requested operation cannot be processed by a watch-only wallet
@@ -1066,7 +1093,7 @@ mod tests {
         }
         #[cfg(all(feature = "esplora", not(feature = "electrum")))]
         {
-            let err = IndexerError::Esplora(EsploraError::Minreq(minreq::Error::AddressNotFound));
+            let err = IndexerError::Esplora(EsploraError::InvalidResponse);
             let err = Error::from(err);
             assert_matches!(err, Error::Indexer { details } if !details.is_empty());
         }

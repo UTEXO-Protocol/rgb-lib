@@ -54,6 +54,7 @@ interface RgbLibError {
   Inconsistency(string details);
   Indexer(string details);
   InexistentDataDir();
+  InexistentWalletManifest(string path);
   InsufficientAllocationSlots();
   InsufficientAssignments(string asset_id, AssignmentsCollection available);
   InsufficientBitcoins(u64 needed, u64 available);
@@ -140,11 +141,13 @@ interface RgbLibError {
   UnsupportedLayer1(string layer_1);
   UnsupportedSchema(AssetSchema asset_schema);
   UnsupportedTransportType();
+  UnsupportedWalletManifestVersion(string version);
   VssAuth(string details);
   VssBackupNotFound();
   VssError(string details);
   VssVersionConflict(string details);
   WalletDirAlreadyExists(string path);
+  WalletSettingMismatch(string setting, string expected, string provided);
   WatchOnly();
   WrongPassword();
 };
@@ -623,6 +626,7 @@ dictionary Utxo {
   u64 btc_amount;
   boolean colorable;
   boolean exists;
+  u32? derivation_index;
 };
 
 [Remote]
@@ -890,6 +894,9 @@ interface VssBackupClient {
 interface Wallet {
   [Throws=RgbLibError]
   constructor(WalletData wallet_data, SinglesigKeys keys);
+
+  [Name=load, Throws=RgbLibError]
+  constructor(string data_dir, string master_fingerprint, string? mnemonic);
 
   WalletData get_wallet_data();
 

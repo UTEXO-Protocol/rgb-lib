@@ -60,6 +60,40 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ### Load an existing RGB singlesig wallet
+//! [`wallet::Wallet::new`] records the wallet settings in the wallet directory, so an existing
+//! wallet can be re-opened with just its location, its master fingerprint and its mnemonic.
+//! Passing no mnemonic loads the wallet in watch-only mode.
+//! ```
+//! use rgb_lib::keys::{WitnessVersion, generate_keys};
+//! use rgb_lib::wallet::{DatabaseType, SinglesigKeys, Wallet, WalletData};
+//! use rgb_lib::{AssetSchema, BitcoinNetwork};
+//!
+//! fn main() -> Result<(), rgb_lib::Error> {
+//!     let data_dir = tempfile::tempdir()?;
+//!     let data_dir = data_dir.path().to_str().unwrap();
+//!     let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+//!     let wallet_data = WalletData {
+//!         data_dir: data_dir.to_string(),
+//!         bitcoin_network: BitcoinNetwork::Regtest,
+//!         database_type: DatabaseType::Sqlite,
+//!         max_allocations_per_utxo: 5,
+//!         supported_schemas: vec![AssetSchema::Nia],
+//!         reuse_addresses: false,
+//!     };
+//!     let wallet = Wallet::new(wallet_data, SinglesigKeys::from_keys(&keys, None))?;
+//!     drop(wallet);
+//!
+//!     let wallet = Wallet::load(
+//!         data_dir,
+//!         &keys.master_fingerprint,
+//!         Some(keys.mnemonic.clone()),
+//!     )?;
+//!
+//!     Ok(())
+//! }
+//! ```
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) mod api;
@@ -73,7 +107,6 @@ pub mod wallet;
 
 pub use bdk_wallet;
 pub use bdk_wallet::bitcoin;
-pub use rgbinvoice::RgbTransport;
 pub use rgbstd::{
     ChainNet, ContractId, Txid as RgbTxid,
     containers::{
@@ -187,7 +220,9 @@ use reqwest::{
 use rgb_lib_migration::{
     ArrayType, ColumnType, Migrator, MigratorTrait, Nullable, Value, ValueTypeErr,
 };
-use rgbinvoice::{AddressPayload, Beneficiary, RgbInvoice, RgbInvoiceBuilder, XChainNet};
+use rgbinvoice::{
+    AddressPayload, Beneficiary, RgbInvoice, RgbInvoiceBuilder, RgbTransport, XChainNet,
+};
 #[cfg(feature = "electrum")]
 use rgbstd::indexers::electrum_blocking::electrum_client::ConfigBuilder;
 use rgbstd::{
@@ -258,12 +293,14 @@ use crate::utils::INDEXER_BATCH_SIZE;
 use crate::utils::INDEXER_PARALLEL_REQUESTS;
 #[cfg(test)]
 use crate::wallet::test::{
-    mock_asset_terms, mock_chain_net, mock_contract_details, mock_local_version,
-    mock_send_end_crash, mock_token_data, skip_build_dag, skip_check_fee_rate,
+    mock_asset_terms, mock_chain_net, mock_contract_details, mock_token_data,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[cfg(test)]
-use crate::wallet::test::{mock_input_unspents, mock_vout};
+use crate::wallet::test::{
+    mock_input_unspents, mock_local_version, mock_send_end_crash, mock_vout, skip_build_dag,
+    skip_check_fee_rate,
+};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::{
     api::{

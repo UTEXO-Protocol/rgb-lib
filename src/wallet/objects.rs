@@ -1510,6 +1510,10 @@ pub struct Utxo {
     pub colorable: bool,
     /// Defines if the UTXO already exists (TX that creates it has been broadcasted)
     pub exists: bool,
+    /// Derivation index of the UTXO's script pubkey. `None` if the transaction creating the UTXO
+    /// is not known to the underlying BDK wallet, which is the case while the UTXO does not yet
+    /// exist on-chain and for outputs that do not belong to this wallet.
+    pub derivation_index: Option<u32>,
 }
 
 impl From<DbTxo> for Utxo {
@@ -1522,6 +1526,7 @@ impl From<DbTxo> for Utxo {
                 .expect("DB should contain a valid u64 value"),
             colorable: true,
             exists: x.exists,
+            derivation_index: None,
         }
     }
 }
@@ -1533,6 +1538,7 @@ impl From<LocalOutput> for Utxo {
             btc_amount: x.txout.value.to_sat(),
             colorable: false,
             exists: true,
+            derivation_index: Some(x.derivation_index),
         }
     }
 }
@@ -2132,11 +2138,13 @@ impl DbTransfer {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 mod tests {
     use super::*;
     use sea_orm::Iterable;
 
     #[test]
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn refresh_transfer_status_matches_waiting() {
         for status in TransferStatus::iter() {
             assert_eq!(

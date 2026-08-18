@@ -1313,7 +1313,7 @@ dependencies = [
  "bitcoin",
  "hex-conservative 0.2.2",
  "log",
- "minreq 2.14.1",
+ "minreq",
  "serde",
  "serde_json",
 ]
@@ -2364,12 +2364,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "minreq"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "659579df697b372ef9e36f02fcbb41f6d6f157dcec7db9c9618fa0f23cf0fc20"
-
-[[package]]
 name = "mio"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3354,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "rgb-lib"
-version = "0.3.0-beta.6"
+version = "0.3.0-beta.7"
 dependencies = [
  "amplify",
  "base64 0.22.1",
@@ -3371,7 +3365,6 @@ dependencies = [
  "file-format",
  "hex",
  "hkdf",
- "minreq 3.0.0",
  "mockito",
  "once_cell",
  "p256",
@@ -3408,7 +3401,7 @@ dependencies = [
 
 [[package]]
 name = "rgb-lib-migration"
-version = "0.3.0-beta.4"
+version = "0.3.0-beta.5"
 dependencies = [
  "sea-orm-migration",
  "tokio",
