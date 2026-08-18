@@ -34,6 +34,7 @@ use crate::error::Error;
 use crate::utils::LOG_FILE;
 use crate::utils::setup_logger;
 use crate::wallet::backup::stream_be32_nonce;
+use crate::wallet::core::WALLET_MANIFEST_FILE;
 
 /// Whether auto-backup uploads block the calling operation or run asynchronously.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1011,11 +1012,19 @@ fn is_bdk_db_file(path: &str) -> bool {
     filename == BDK_DB_NAME || filename == BDK_DB_WO_NAME
 }
 
+/// Check if a zip entry path is the wallet manifest (contains xpubs and the fingerprint)
+fn is_wallet_manifest_file(path: &str) -> bool {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    filename == WALLET_MANIFEST_FILE
+}
+
 /// Sanitize a wallet zip for plaintext (unencrypted) backup
 ///
 /// Removes sensitive data that should not be stored unencrypted:
 /// - Replaces the master fingerprint directory name with a generic "wallet/" name
 /// - Excludes BDK database files (bdk_db, bdk_db_watch_only) which contain xpubs
+/// - Excludes the wallet manifest, which contains the xpubs and fingerprint in plaintext;
+///   the first `Wallet::new` after restore rewrites it
 ///
 /// Returns the sanitized zip bytes and the extracted fingerprint.
 fn sanitize_zip_for_plaintext(data: &[u8]) -> Result<(Vec<u8>, String), Error> {
@@ -1038,8 +1047,8 @@ fn sanitize_zip_for_plaintext(data: &[u8]) -> Result<(Vec<u8>, String), Error> {
 
             let original_name = file.name().to_string();
 
-            // Skip BDK database files (contain xpubs in descriptors)
-            if is_bdk_db_file(&original_name) {
+            // Skip files carrying xpubs or the fingerprint in their contents
+            if is_bdk_db_file(&original_name) || is_wallet_manifest_file(&original_name) {
                 continue;
             }
 
@@ -1421,6 +1430,17 @@ mod tests {
                 .unwrap();
             zip.write_all(b"nested data").unwrap();
 
+            // Add a wallet manifest with xpubs and the fingerprint
+            zip.start_file(format!("{fingerprint}/{WALLET_MANIFEST_FILE}"), options)
+                .unwrap();
+            zip.write_all(
+                format!(
+                    r#"{{"account_xpub_vanilla":"tpubFakeVanilla","account_xpub_colored":"tpubFakeColored","master_fingerprint":"{fingerprint}"}}"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
             zip.finish().unwrap();
         }
         buffer.into_inner()
@@ -1459,6 +1479,28 @@ mod tests {
         let mut content = String::new();
         some_file.read_to_string(&mut content).unwrap();
         assert_eq!(content, "test content");
+    }
+
+    #[test]
+    fn test_sanitize_zip_excludes_wallet_manifest() {
+        let fingerprint = "a1b2c3d4";
+        let zip_data = create_test_zip(fingerprint);
+
+        let (sanitized, _) = sanitize_zip_for_plaintext(&zip_data).unwrap();
+
+        let reader = std::io::Cursor::new(&sanitized);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let filename = file.name().rsplit('/').next().unwrap().to_string();
+            assert_ne!(filename, WALLET_MANIFEST_FILE);
+            let mut content = Vec::new();
+            file.read_to_end(&mut content).unwrap();
+            let content = String::from_utf8_lossy(&content);
+            assert!(!content.contains("tpubFakeVanilla"));
+            assert!(!content.contains("tpubFakeColored"));
+            assert!(!content.contains(fingerprint));
+        }
     }
 
     #[test]

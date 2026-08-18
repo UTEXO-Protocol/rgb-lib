@@ -154,6 +154,10 @@ fn scenario_2_1_unencrypted_backup_sanitized_restore_plus_bdk_db_rehydrate() {
             .all(|n| n != "wallet/bdk_db_watch_only" && !n.ends_with("/bdk_db_watch_only")),
         "bdk_db_watch_only must be excluded from unencrypted backup zip"
     );
+    assert!(
+        names.iter().all(|n| !n.ends_with("wallet_manifest.json")),
+        "wallet manifest must be excluded from unencrypted backup zip"
+    );
 
     // Restore into a clean directory.
     let restore_tmp = tempfile::tempdir().expect("tempdir");
