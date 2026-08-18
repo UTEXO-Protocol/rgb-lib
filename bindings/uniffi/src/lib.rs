@@ -167,6 +167,11 @@ fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, 
                 details: format!("invalid asset_id '{}': {e}", asset.asset_id),
             }
         })?;
+        if asset_info_map.contains_key(&contract_id) {
+            return Err(RgbLibError::InvalidColoringInfo {
+                details: format!("duplicate asset_id '{}'", asset.asset_id),
+            });
+        }
         asset_info_map.insert(
             contract_id,
             RgbAssetColoringInfo {
@@ -1214,11 +1219,7 @@ impl Wallet {
 
         let mut consignments = Vec::with_capacity(transfers.len());
         for transfer in &transfers {
-            let mut buf = Vec::new();
-            transfer.save(&mut buf).map_err(|e| RgbLibError::Internal {
-                details: format!("serialize consignment: {e}"),
-            })?;
-            consignments.push(buf);
+            consignments.push(save_rgb_transfer(transfer)?);
         }
 
         Ok(ColorPsbtResult {
@@ -1244,11 +1245,7 @@ impl Wallet {
 
         let mut consignments = Vec::with_capacity(transfers.len());
         for transfer in &transfers {
-            let mut buf = Vec::new();
-            transfer.save(&mut buf).map_err(|e| RgbLibError::Internal {
-                details: format!("serialize consignment: {e}"),
-            })?;
-            consignments.push(buf);
+            consignments.push(save_rgb_transfer(transfer)?);
         }
 
         Ok(ColorPsbtResult {
@@ -1296,7 +1293,7 @@ impl Wallet {
         outpoints: Vec<Outpoint>,
     ) -> Result<Vec<OutpointAssignments>, RgbLibError> {
         let contract_id =
-            ContractId::from_str(&asset_id).map_err(|e| RgbLibError::InvalidColoringInfo {
+            ContractId::from_str(&asset_id).map_err(|e| RgbLibError::InvalidAssetID {
                 details: format!("invalid asset_id '{asset_id}': {e}"),
             })?;
         let map = self

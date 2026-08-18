@@ -62,6 +62,7 @@ interface RgbLibError {
   Internal(string details);
   InvalidAddress(string details);
   InvalidAmountZero();
+  InvalidAssetID(string details);
   InvalidAssignment();
   InvalidAttachments(string details);
   InvalidBitcoinKeys();
