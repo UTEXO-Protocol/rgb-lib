@@ -263,6 +263,12 @@ fn fail() {
     let result = Wallet::new(wallet_data_bad, keys.clone());
     assert!(matches!(result, Err(Error::InexistentDataDir)));
 
+    // 0 max allocations per UTXO
+    let mut wallet_data_bad = wallet_data.clone();
+    wallet_data_bad.max_allocations_per_utxo = 0;
+    let result = Wallet::new(wallet_data_bad, keys.clone());
+    assert!(matches!(result, Err(Error::NoMaxAllocationsPerUtxo)));
+
     // pubkey too short
     let mut keys_bad = keys.clone();
     keys_bad.account_xpub_colored = s!("");

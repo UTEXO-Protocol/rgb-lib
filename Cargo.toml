@@ -164,6 +164,10 @@ required-features = ["dfns", "electrum"]
 name = "bdk_peer"
 required-features = ["electrum"]
 
+[profile.release]
+# make overflow bugs fail loudly instead of producing wrong amounts
+overflow-checks = true
+
 [profile.reldebug]
 inherits = "release"
 debug = 1
