@@ -167,3 +167,131 @@ fn inconsistent_restored_backup_returns_dedicated_error() {
     rt.block_on(client.delete_backup()).expect("delete_backup");
     cleanup.disarm();
 }
+
+/// Color-consume Initiated accounting + `htlc_ops/` must round-trip through VSS backup/restore.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_consume_and_htlc_ops_survive_vss_restore() {
+    initialize();
+
+    let rt = tokio_runtime();
+    let amt_sat = 500u64;
+    let blinding = 777u64;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let recipient_script = address.assume_checked().script_pubkey();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(recipient_script, BdkAmount::from_sat(amt_sat))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    // OP_RETURN first (P2TR / OpretFirst)
+    let op_return = TxOut {
+        value: BdkAmount::from_sat(0),
+        script_pubkey: ScriptBuf::new_op_return([]),
+    };
+    psbt.unsigned_tx.output.insert(0, op_return);
+    psbt.outputs.insert(0, Default::default());
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+
+    let asset_coloring_info = AssetColoringInfo {
+        output_map: HashMap::from([(vout, AMOUNT)]),
+        static_blinding: Some(blinding),
+    };
+    let coloring_info = ColoringInfo {
+        asset_info_map: HashMap::from([(
+            ContractId::from_str(&asset.asset_id).unwrap(),
+            asset_coloring_info,
+        )]),
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+
+    let HtlcPrepareResult {
+        operation_id,
+        operation_dir,
+        ..
+    } = party_send
+        .wallet
+        .htlc_prepare(&mut psbt, coloring_info, vec![input])
+        .unwrap();
+
+    let transfers_before = party_send.list_transfers(Some(&asset.asset_id));
+    let initiated = transfers_before
+        .iter()
+        .find(|t| t.status == TransferStatus::Initiated)
+        .expect("initiated color-consume transfer");
+    assert_eq!(initiated.kind, TransferKind::Send);
+    let op_dir_before = party_send.wallet.get_wallet_dir().join(&operation_dir);
+    assert!(op_dir_before.join("meta.json").exists());
+    assert!(op_dir_before.join("fascia").exists());
+
+    let (signing_key, store_id) =
+        generate_signing_key_and_store_id("qa_htlc_color_consume_restore");
+    let config = VssBackupConfig::new(vss_server_url(), store_id, signing_key);
+    let mut cleanup = VssBackupDeleteGuard::new(config.clone());
+    let client = VssBackupClient::new(config.clone()).expect("VssBackupClient new");
+    rt.block_on(party_send.wallet.vss_backup(&client))
+        .expect("vss_backup after htlc_prepare");
+
+    let restore_tmp = tempfile::tempdir().expect("tempdir");
+    let restored_dir = rt
+        .block_on(restore_from_vss(
+            config.clone(),
+            restore_tmp.path().to_str().unwrap(),
+        ))
+        .expect("restore_from_vss");
+
+    let mut restored_data = party_send.wallet.get_wallet_data();
+    restored_data.data_dir = restore_tmp.path().to_string_lossy().to_string();
+    let mut wallet_r =
+        Wallet::new(restored_data, party_send.wallet.get_keys()).expect("Wallet::new restored");
+    let _online = wallet_r
+        .go_online(test_go_online_options(None))
+        .expect("go_online restored");
+
+    let transfers_after = wallet_r
+        .list_transfers(AssetFilter::Id(asset.asset_id.clone()), None)
+        .expect("list_transfers");
+    let restored_xfer = transfers_after
+        .iter()
+        .find(|t| t.status == TransferStatus::Initiated)
+        .expect("Initiated transfer must survive restore");
+    assert_eq!(restored_xfer.kind, TransferKind::Send);
+    assert_eq!(
+        restored_xfer.requested_assignment,
+        Some(Assignment::Fungible(AMOUNT))
+    );
+
+    let restored_op = restored_dir.join(&operation_dir);
+    assert!(
+        restored_op.join("meta.json").exists(),
+        "htlc_ops meta must be in VSS backup"
+    );
+    assert!(
+        restored_op.join("fascia").exists(),
+        "htlc_ops fascia must be in VSS backup"
+    );
+    assert_eq!(
+        wallet_r.htlc_reconcile(&operation_id).unwrap(),
+        HtlcOperationStatus::Prepared
+    );
+
+    rt.block_on(client.delete_backup()).expect("delete_backup");
+    cleanup.disarm();
+}

@@ -842,6 +842,7 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn contracts_assigning(
         &self,
         outputs: impl IntoIterator<Item = impl Into<OutPoint>>,
@@ -919,6 +920,12 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
+    /// Build a consignment from stock after the fascia has been consumed.
+    ///
+    /// Prefer [`Self::transfer_from_fascia`] when the consignment must be built before
+    /// `consume_fascia`, so a mid-loop failure cannot leave the stash advanced without a
+    /// consignment.
+    #[allow(dead_code)]
     pub(crate) fn transfer(
         &self,
         contract_id: ContractId,
