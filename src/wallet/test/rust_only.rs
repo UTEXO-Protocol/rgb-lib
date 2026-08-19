@@ -706,13 +706,19 @@ fn color_psbt_fail() {
     assert!(matches!(result, Err(Error::InvalidColoringInfo { details: m }) if m == msg));
 }
 
-fn append_op_return(psbt: &mut Psbt) {
-    psbt.unsigned_tx.output.push(TxOut {
+fn insert_op_return(psbt: &mut Psbt, at_front: bool) {
+    let txout = TxOut {
         value: BdkAmount::ZERO,
         script_pubkey: ScriptBuf::new_op_return([]),
-    });
-    psbt.outputs
-        .push(bdk_wallet::bitcoin::psbt::Output::default());
+    };
+    let map = bdk_wallet::bitcoin::psbt::Output::default();
+    if at_front {
+        psbt.unsigned_tx.output.insert(0, txout);
+        psbt.outputs.insert(0, map);
+    } else {
+        psbt.unsigned_tx.output.push(txout);
+        psbt.outputs.push(map);
+    }
 }
 
 fn coloring_info_for(asset_id: &str, output_map: HashMap<u32, u64>, blinding: u64) -> ColoringInfo {
@@ -785,13 +791,24 @@ fn color_psbt_for_outpoints_fail() {
             if m == "input_outpoints must be a subset of PSBT inputs"
     );
 
+    let result =
+        party_send
+            .wallet
+            .color_psbt_for_outpoints(&mut psbt, coloring_info.clone(), vec![input]);
+    assert_matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details: m })
+            if m == "PSBT must include an OP_RETURN output"
+    );
+
+    insert_op_return(&mut psbt, false);
     let result = party_send
         .wallet
         .color_psbt_for_outpoints(&mut psbt, coloring_info, vec![input]);
     assert_matches!(
         result,
         Err(Error::InvalidColoringInfo { details: m })
-            if m == "PSBT must include an OP_RETURN output"
+            if m == "OP_RETURN must be the first PSBT output"
     );
 }
 
@@ -830,7 +847,7 @@ fn color_psbt_for_outpoints_rejects_omitted_allocations() {
         )
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
-    append_op_return(&mut psbt);
+    insert_op_return(&mut psbt, true);
 
     let mut output_map = HashMap::new();
     let output = psbt
@@ -878,7 +895,7 @@ fn color_psbt_for_outpoints_preserves_metadata_and_consume() {
         )
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
-    append_op_return(&mut psbt);
+    insert_op_return(&mut psbt, true);
     let input = psbt.unsigned_tx.input[0].previous_output;
     let witness_utxo_before = psbt.inputs[0].witness_utxo.clone();
     let tap_internal_key_before = psbt.inputs[0].tap_internal_key;

@@ -1,15 +1,6 @@
-//! Extra wallet helpers for special flows (color PSBT, post consignment, indexer checks).
+//! Rust-only functionality.
 //!
-//! Includes submarine / HTLC helpers (`color_psbt_for_outpoints*`,
-//! `fetch_consignment_by_recipient_id`, `accept_transfer_from_consignment`) that operate on
-//! escrow outpoints without treating them as wallet UTXOs.
-//!
-//! UniFFI exports [`Wallet::color_psbt_and_consume`],
-//! [`Wallet::color_psbt_for_outpoints_and_consume`],
-//! [`Wallet::fetch_consignment_by_recipient_id`],
-//! [`Wallet::accept_transfer_from_consignment`], and
-//! [`Wallet::contract_assignments_for_outpoints`].
-//! Proxy `post_consignment` stays rust-only / HTTP in the client.
+//! This module defines additional utility methods that are not exposed via FFI.
 use super::*;
 use bdk_wallet::bitcoin::Transaction;
 use rgbstd::Operation as _;
@@ -433,7 +424,8 @@ impl Wallet {
     /// still carries RGB allocations is rejected: spending it without adding it to the transition
     /// would close the seal and destroy the allocation.
     ///
-    /// The PSBT must already contain an OP_RETURN output. This entry point is meant for externally
+    /// The PSBT must already contain an OP_RETURN output. If any output is P2TR (RGB
+    /// `OpretFirst`), that OP_RETURN must be output 0. This entry point is meant for externally
     /// constructed (HTLC) transactions whose output layout must not be rewritten.
     ///
     /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
@@ -476,15 +468,21 @@ impl Wallet {
                 });
             }
         }
-        if !psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .any(|o| o.script_pubkey.is_op_return())
-        {
-            return Err(Error::InvalidColoringInfo {
-                details: s!("PSBT must include an OP_RETURN output"),
-            });
+        let outputs = &psbt.unsigned_tx.output;
+        let has_p2tr = outputs.iter().any(|o| o.script_pubkey.is_p2tr());
+        match outputs.iter().position(|o| o.script_pubkey.is_op_return()) {
+            None => {
+                return Err(Error::InvalidColoringInfo {
+                    details: s!("PSBT must include an OP_RETURN output"),
+                });
+            }
+            Some(0) => {}
+            Some(_) if has_p2tr => {
+                return Err(Error::InvalidColoringInfo {
+                    details: s!("OP_RETURN must be the first PSBT output"),
+                });
+            }
+            Some(_) => {}
         }
         self.color_psbt_with_prevouts(psbt, coloring_info, override_set)
     }

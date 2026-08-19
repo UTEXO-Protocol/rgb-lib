@@ -1,12 +1,6 @@
 #[macro_use]
 mod utils;
 
-#[cfg(feature = "electrum")]
-mod security_gaps;
-
-#[cfg(feature = "electrum")]
-mod shared_cosigner;
-
 use super::*;
 use utils::*;
 
