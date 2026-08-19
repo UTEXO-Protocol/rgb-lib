@@ -37,5 +37,3 @@ uniffi = { version = "0.31.0", default-features = false, features = [
 aws-lc-rs = { version = "1.16.2", default-features = false, features = [
     "bindgen",
 ] }
-
-[workspace]

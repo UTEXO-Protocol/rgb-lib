@@ -112,6 +112,13 @@ pub enum Error {
     #[error("Fingerprint mismatch")]
     FingerprintMismatch,
 
+    /// HTLC operation directory / meta was not found
+    #[error("HTLC operation not found: {operation_id}")]
+    HtlcOperationNotFound {
+        /// Opaque operation ID
+        operation_id: String,
+    },
+
     /// An I/O error has been encountered
     #[error("I/O error: {details}")]
     IO {
@@ -170,6 +177,15 @@ pub enum Error {
         needed: u64,
         /// Sats available for spending
         available: u64,
+    },
+
+    /// Witness TX does not yet meet the required confirmation count (retryable for HTLC wait paths)
+    #[error("Insufficient confirmations: needed '{needed}', got '{got}'")]
+    InsufficientConfirmations {
+        /// Required confirmations (`min_confirmations`)
+        needed: u8,
+        /// Observed confirmations (`0` if unconfirmed / Tentative or confirmation data missing)
+        got: u64,
     },
 
     /// An internal error has been encountered
@@ -271,6 +287,13 @@ pub enum Error {
         details: String,
     },
 
+    /// HTLC operation is not in the expected status for this call
+    #[error("Invalid HTLC operation status: {details}")]
+    InvalidHtlcOperationStatus {
+        /// Error details
+        details: String,
+    },
+
     /// The provided file path is invalid
     #[error("Invalid file path: {file_path}")]
     InvalidFilePath {
@@ -354,7 +377,8 @@ pub enum Error {
         details: String,
     },
 
-    /// The provided recipient ID is neither a blinded UTXO or a script
+    /// The provided recipient ID is neither a blinded UTXO or a script.
+    /// Also used when a blinded ID is supplied where a witness script is required.
     #[error("The provided recipient ID is neither a blinded UTXO or a script")]
     InvalidRecipientID,
 
@@ -598,6 +622,13 @@ pub enum Error {
     #[error("PSBT has too many signatures")]
     TooManySignaturesInPsbt,
 
+    /// Accepted transfer does not match the caller-provided expectation
+    #[error("Unexpected transfer: {details}")]
+    UnexpectedTransfer {
+        /// Error details
+        details: String,
+    },
+
     /// The detected RGB schema is unknown
     #[error("Unknown RGB schema: {schema_id}")]
     UnknownRgbSchema {
@@ -686,6 +717,13 @@ pub enum Error {
     /// The requested operation cannot be processed by a watch-only wallet
     #[error("Operation not allowed on watch only wallet")]
     WatchOnly,
+
+    /// Witness output cannot be pinned to the given recipient (mismatch, bad vout, or non-spendable ord)
+    #[error("Witness output mismatch: {details}")]
+    WitnessOutputMismatch {
+        /// Error details
+        details: String,
+    },
 
     /// The provided password is incorrect
     #[error("The provided password is incorrect")]
@@ -778,6 +816,9 @@ pub(crate) enum InternalError {
     #[error("Unexpected error")]
     Unexpected,
 
+    #[error("Unknown contract: {0}")]
+    UnknownContract(ContractId),
+
     #[error("Zip error: {0}")]
     ZipError(#[from] zip::result::ZipError),
 }
@@ -855,7 +896,12 @@ impl From<psrgbt::MpcPsbtError> for InternalError {
 
 impl From<rgbstd::persistence::StashProviderError<std::convert::Infallible>> for InternalError {
     fn from(e: rgbstd::persistence::StashProviderError<std::convert::Infallible>) -> Self {
-        InternalError::StashError(e.to_string())
+        match e {
+            rgbstd::persistence::StashProviderError::Inconsistency(
+                rgbstd::persistence::StashInconsistency::ContractAbsent(contract_id),
+            ) => InternalError::UnknownContract(contract_id),
+            other => InternalError::StashError(other.to_string()),
+        }
     }
 }
 
@@ -964,8 +1010,13 @@ impl From<std::io::Error> for Error {
 
 impl From<InternalError> for Error {
     fn from(e: InternalError) -> Self {
-        Error::Internal {
-            details: e.to_string(),
+        match e {
+            InternalError::UnknownContract(contract_id) => Error::AssetNotFound {
+                asset_id: contract_id.to_string(),
+            },
+            other => Error::Internal {
+                details: other.to_string(),
+            },
         }
     }
 }
@@ -1141,5 +1192,20 @@ mod tests {
         > = rgbstd::persistence::StockError::Resolver(s!("test"));
         let err = InternalError::from(err);
         assert_matches!(err, InternalError::StockError(ref e) if !e.is_empty());
+
+        // StashProviderError::ContractAbsent maps to UnknownContract → AssetNotFound
+        use amplify::ByteArray;
+        let contract_id = ContractId::from_byte_array([0x42; 32]);
+        let stash_err: rgbstd::persistence::StashProviderError<std::convert::Infallible> =
+            rgbstd::persistence::StashProviderError::Inconsistency(
+                rgbstd::persistence::StashInconsistency::ContractAbsent(contract_id),
+            );
+        let internal = InternalError::from(stash_err);
+        assert_matches!(internal, InternalError::UnknownContract(id) if id == contract_id);
+        let err = Error::from(internal);
+        assert_matches!(
+            err,
+            Error::AssetNotFound { asset_id } if asset_id == contract_id.to_string()
+        );
     }
 }

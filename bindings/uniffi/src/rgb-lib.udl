@@ -6,7 +6,6 @@ namespace rgb_lib {
 
   // Decode a witness recipient_id (`bc:wvout:...`) to a scriptPubKey hex.
   // Blinded recipient IDs are valid but have no script; those return null.
-  // Use with fetch_consignment_by_recipient_id: verify output[vout] matches before accept.
   [Throws=RgbLibError]
   string? script_hex_from_recipient_id(string recipient_id);
 
@@ -54,6 +53,7 @@ interface RgbLibError {
   FailedIssuance(string details);
   FileAlreadyExists(string path);
   FingerprintMismatch();
+  HtlcOperationNotFound(string operation_id);
   IO(string details);
   Inconsistency(string details);
   Indexer(string details);
@@ -61,6 +61,7 @@ interface RgbLibError {
   InsufficientAllocationSlots();
   InsufficientAssignments(string asset_id, AssignmentsCollection available);
   InsufficientBitcoins(u64 needed, u64 available);
+  InsufficientConfirmations(u8 needed, u64 got);
   Internal(string details);
   InvalidAddress(string details);
   InvalidAmountZero();
@@ -79,6 +80,7 @@ interface RgbLibError {
   InvalidFeeRate(string details);
   InvalidFilePath(string file_path);
   InvalidFingerprint();
+  InvalidHtlcOperationStatus(string details);
   InvalidIndexer(string details);
   InvalidInvoice(string details);
   InvalidMnemonic(string details);
@@ -137,6 +139,7 @@ interface RgbLibError {
   TooManySignaturesInPsbt();
   UnknownRgbSchema(string schema_id);
   UnknownTransfer(string txid);
+  UnexpectedTransfer(string details);
   UnsupportedBackupVersion(string version);
   UnsupportedBurn(AssetSchema asset_schema);
   UnsupportedInflation(AssetSchema asset_schema);
@@ -149,6 +152,7 @@ interface RgbLibError {
   VssVersionConflict(string details);
   WalletDirAlreadyExists(string path);
   WatchOnly();
+  WitnessOutputMismatch(string details);
   WrongPassword();
 };
 
@@ -279,27 +283,26 @@ dictionary ReceiveData {
   i32 batch_transfer_idx;
 };
 
-// FFI-friendly coloring inputs (HTLC claim / refund / special PSBT flows).
-// Maps to rgb_lib::wallet::rust_only::{AssetColoringInfo, ColoringInfo}.
-// output_map keys are vout indices; base depends on the coloring method:
-// - color_psbt_and_consume: pre-insertion indices when P2TR is present and OP_RETURN is auto-
-//   inserted at vout 0; otherwise final PSBT vout indices.
-// - color_psbt_for_outpoints_and_consume: always final PSBT vout indices (never shifted).
 dictionary AcceptTransferResult {
   sequence<u8> consignment;
   sequence<Assignment> assignments;
 };
 
+// Caller intent for fetch_and_accept: reject unintended but structurally valid consignments.
+dictionary ExpectedTransfer {
+  string asset_id;
+  AssetSchema asset_schema;
+  Assignment assignment;
+};
+
+// FFI-friendly coloring inputs for HTLC prepare (final PSBT vout indices only).
+// Maps to rgb_lib::wallet::rust_only::{AssetColoringInfo, ColoringInfo}.
+// Coloring must happen before any input is signed; signed PSBTs are rejected.
+// OP_RETURN must already be present; with P2TR it must be vout 0.
 dictionary AssetColoringInfo {
   string asset_id;
   record<u32, u64> output_map;
   u64? static_blinding;
-};
-
-dictionary AssetConsignment {
-  string asset_id;
-  // Raw `.rgbc` file bytes (RGB magic + strict encoding).
-  sequence<u8> consignment;
 };
 
 dictionary ColoringInfo {
@@ -308,15 +311,19 @@ dictionary ColoringInfo {
   u64? nonce;
 };
 
-dictionary ColorPsbtResult {
-  string psbt;
-  sequence<AssetConsignment> consignments;
+[Enum]
+interface HtlcOperationStatus {
+  Prepared();
+  Applied();
+  Failed();
+  Settled();
 };
 
-dictionary FetchConsignmentResult {
-  sequence<u8> consignment;
-  string txid;
-  u32 vout;
+dictionary HtlcPrepareResult {
+  string operation_id;
+  string colored_psbt;
+  // Wallet-relative directory with fascia.json, consignments/, escrow.json, meta.json
+  string operation_dir;
 };
 
 dictionary OutpointAssignments {
@@ -969,33 +976,38 @@ interface Wallet {
     string? asset_id, Assignment assignment, u64? expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
-  // witness txid/vout must be caller-verified (see fetch comment); not checked here.
+  // High-level HTLC color lifecycle (final vout output_map only).
+  // prepare → sign/broadcast → apply. abort if never broadcast. reconcile for status.
+  // Payloads are file-backed under operation_dir (not raw consignment bytes).
   [Throws=RgbLibError]
-  AcceptTransferResult accept_transfer_from_consignment(
-    sequence<u8> consignment, string txid, u32 vout, u64 blinding);
-
-  // Color PSBT and consume fascia; returns colored PSBT + consignment bytes per asset.
-  // Posting to the RGB proxy is the caller's responsibility (HTTP multipart).
-  // Partial failure: fascia is consumed before consignments are built; if a later contract
-  // fails, the RGB stash may already be updated and there is no rollback.
-  [Throws=RgbLibError]
-  ColorPsbtResult color_psbt_and_consume(string psbt, ColoringInfo coloring_info);
-
-  // Same as color_psbt_and_consume, but color only the explicitly provided input outpoints.
-  // Same partial-failure semantics as color_psbt_and_consume.
-  [Throws=RgbLibError]
-  ColorPsbtResult color_psbt_for_outpoints_and_consume(
+  HtlcPrepareResult htlc_prepare(
     string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints);
+
+  [Throws=RgbLibError]
+  void htlc_apply(string operation_id);
+
+  [Throws=RgbLibError]
+  void htlc_abort(Online online, string operation_id);
+
+  [Throws=RgbLibError]
+  HtlcOperationStatus htlc_reconcile(string operation_id);
 
   [Throws=RgbLibError]
   sequence<OutpointAssignments> contract_assignments_for_outpoints(
     string asset_id, sequence<Outpoint> outpoints);
 
-  // Proxy lookup by recipient_id. txid/vout in the result are unvalidated — for witness
-  // recipients, compare output[vout] to script_hex_from_recipient_id before accept.
+  // Fetches by proxy key, pins output[vout] to witness_recipient_id, then accepts.
+  // expected binds contract id, schema, assignment type and amount (empty/mismatch rejected).
+  // min_confirmations: 0 allows mempool/Tentative (reorg-exposed HTLC race); >=1 requires mined.
+  // Raw fetch/accept halves are Rust-only (`*_unchecked`) — do not re-export them here.
   [Throws=RgbLibError]
-  FetchConsignmentResult fetch_consignment_by_recipient_id(
-    string recipient_id, string consignment_endpoint);
+  AcceptTransferResult fetch_and_accept_transfer_by_recipient_id(
+    string proxy_recipient_id,
+    string witness_recipient_id,
+    string consignment_endpoint,
+    u64 blinding,
+    u8 min_confirmations,
+    ExpectedTransfer expected);
 
   [Throws=RgbLibError]
   string finalize_psbt(string signed_psbt);

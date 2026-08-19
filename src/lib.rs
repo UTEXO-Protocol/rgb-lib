@@ -106,6 +106,8 @@ pub use mpc::dfns::{DfnsConfig, DfnsProvider};
 pub use rgbstd::validation::{ValidationConfig, ValidationError};
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
+use std::collections::BTreeSet;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
     cmp::{Ordering, max, min},
     collections::hash_map::DefaultHasher,
@@ -113,7 +115,7 @@ use std::{
     num::NonZeroU32,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},
@@ -152,7 +154,7 @@ use bdk_wallet::{
         OutPoint, OutPoint as BdkOutPoint, ScriptBuf, TxOut,
         bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv, Xpub},
         hashes::{Hash as Sha256Hash, sha256},
-        psbt::{ExtractTxError, Psbt},
+        psbt::Psbt,
         secp256k1::Secp256k1,
     },
     chain::{CanonicalizationParams, ChainPosition},
