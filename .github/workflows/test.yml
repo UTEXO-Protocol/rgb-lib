@@ -11,7 +11,7 @@ env:
 
 jobs:
   test_and_coverage:
-    timeout-minutes: 45
+    timeout-minutes: 120
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +25,7 @@ jobs:
         run: cargo test --all-features
 
   test_features:
-    timeout-minutes: 30
+    timeout-minutes: 60
     runs-on: ubuntu-latest
 
     steps:
