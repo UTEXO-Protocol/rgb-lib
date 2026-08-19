@@ -4,6 +4,12 @@ namespace rgb_lib {
   [Throws=RgbLibError]
   Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic, WitnessVersion witness_version);
 
+  // Decode a witness recipient_id (`bc:wvout:...`) to a scriptPubKey hex.
+  // Blinded recipient IDs are valid but have no script; those return null.
+  // Use with fetch_consignment_by_recipient_id: verify output[vout] matches before accept.
+  [Throws=RgbLibError]
+  string? script_hex_from_recipient_id(string recipient_id);
+
   [Throws=RgbLibError]
   ValidateConsignmentResult validate_consignment(
     string file_path,
@@ -24,11 +30,6 @@ namespace rgb_lib {
 
   [Throws=RgbLibError]
   string restore_from_vss(VssBackupConfig config, string target_dir);
-
-  // Decode a witness recipient_id (`bc:wvout:...`) to a scriptPubKey hex.
-  // Blinded recipient IDs are valid but have no script; those return null.
-  [Throws=RgbLibError]
-  string? script_hex_from_recipient_id(string recipient_id);
 };
 
 [Error, Remote]
@@ -63,7 +64,6 @@ interface RgbLibError {
   Internal(string details);
   InvalidAddress(string details);
   InvalidAmountZero();
-  InvalidAssetID(string details);
   InvalidAssignment();
   InvalidAttachments(string details);
   InvalidBitcoinKeys();
@@ -281,10 +281,25 @@ dictionary ReceiveData {
 
 // FFI-friendly coloring inputs (HTLC claim / refund / special PSBT flows).
 // Maps to rgb_lib::wallet::rust_only::{AssetColoringInfo, ColoringInfo}.
+// output_map keys are vout indices; base depends on the coloring method:
+// - color_psbt_and_consume: pre-insertion indices when P2TR is present and OP_RETURN is auto-
+//   inserted at vout 0; otherwise final PSBT vout indices.
+// - color_psbt_for_outpoints_and_consume: always final PSBT vout indices (never shifted).
+dictionary AcceptTransferResult {
+  sequence<u8> consignment;
+  sequence<Assignment> assignments;
+};
+
 dictionary AssetColoringInfo {
   string asset_id;
   record<u32, u64> output_map;
   u64? static_blinding;
+};
+
+dictionary AssetConsignment {
+  string asset_id;
+  // Raw `.rgbc` file bytes (RGB magic + strict encoding).
+  sequence<u8> consignment;
 };
 
 dictionary ColoringInfo {
@@ -295,19 +310,13 @@ dictionary ColoringInfo {
 
 dictionary ColorPsbtResult {
   string psbt;
-  // Raw `.rgbc` file bytes (RGB magic + strict encoding). Caller posts to proxy.
-  sequence<sequence<u8>> consignments;
+  sequence<AssetConsignment> consignments;
 };
 
 dictionary FetchConsignmentResult {
   sequence<u8> consignment;
   string txid;
   u32 vout;
-};
-
-dictionary AcceptTransferResult {
-  sequence<u8> consignment;
-  sequence<Assignment> assignments;
 };
 
 dictionary OutpointAssignments {
@@ -960,27 +969,33 @@ interface Wallet {
     string? asset_id, Assignment assignment, u64? expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
-  // Color PSBT and consume fascia; returns colored PSBT + consignment bytes.
+  // witness txid/vout must be caller-verified (see fetch comment); not checked here.
+  [Throws=RgbLibError]
+  AcceptTransferResult accept_transfer_from_consignment(
+    sequence<u8> consignment, string txid, u32 vout, u64 blinding);
+
+  // Color PSBT and consume fascia; returns colored PSBT + consignment bytes per asset.
   // Posting to the RGB proxy is the caller's responsibility (HTTP multipart).
+  // Partial failure: fascia is consumed before consignments are built; if a later contract
+  // fails, the RGB stash may already be updated and there is no rollback.
   [Throws=RgbLibError]
   ColorPsbtResult color_psbt_and_consume(string psbt, ColoringInfo coloring_info);
 
   // Same as color_psbt_and_consume, but color only the explicitly provided input outpoints.
+  // Same partial-failure semantics as color_psbt_and_consume.
   [Throws=RgbLibError]
   ColorPsbtResult color_psbt_for_outpoints_and_consume(
     string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints);
 
   [Throws=RgbLibError]
-  FetchConsignmentResult fetch_consignment_by_recipient_id(
-    string recipient_id, string consignment_endpoint);
-
-  [Throws=RgbLibError]
-  AcceptTransferResult accept_transfer_from_consignment(
-    sequence<u8> consignment, string txid, u32 vout, u64 blinding);
-
-  [Throws=RgbLibError]
   sequence<OutpointAssignments> contract_assignments_for_outpoints(
     string asset_id, sequence<Outpoint> outpoints);
+
+  // Proxy lookup by recipient_id. txid/vout in the result are unvalidated — for witness
+  // recipients, compare output[vout] to script_hex_from_recipient_id before accept.
+  [Throws=RgbLibError]
+  FetchConsignmentResult fetch_consignment_by_recipient_id(
+    string recipient_id, string consignment_endpoint);
 
   [Throws=RgbLibError]
   string finalize_psbt(string signed_psbt);
