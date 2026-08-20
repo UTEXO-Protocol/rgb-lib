@@ -5,6 +5,8 @@
 use super::*;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use rgbstd::contract::LinkableIssuerWrapper;
+#[cfg(feature = "electrum")]
+use rgbstd::indexers::electrum_blocking::resolve_witnesses as resolve_electrum_witnesses;
 
 const TIMESTAMP_FORMAT: &[time::format_description::BorrowedFormatItem] = time::macros::format_description!(
     "[year]-[month]-[day]T[hour repr:24]:[minute]:[second].[subsecond digits:3]+00"
@@ -568,7 +570,7 @@ pub(crate) fn get_indexer_and_resolver(
         Indexer::Electrum(_) => {
             let electrum_config = ConfigBuilder::new()
                 .retry(INDEXER_RETRIES)
-                .timeout(Some(INDEXER_TIMEOUT))
+                .timeout(Some(Duration::from_secs(INDEXER_TIMEOUT.into())))
                 .build();
             AnyResolver::electrum_blocking(indexer_url, Some(electrum_config)).expect(
                 "electrum_blocking uses the same config as build_indexer which already succeeded",
@@ -600,7 +602,7 @@ pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let opts = ConfigBuilder::new()
             .retry(INDEXER_RETRIES)
-            .timeout(Some(INDEXER_TIMEOUT))
+            .timeout(Some(Duration::from_secs(INDEXER_TIMEOUT.into())))
             .build();
         if let Ok(client) = ElectrumClient::from_config(indexer_url, opts) {
             let client = BdkElectrumClient::new(client);
@@ -746,6 +748,80 @@ impl ResolveWitness for DumbResolver {
 
     fn check_chain_net(&self, _: ChainNet) -> Result<(), WitnessResolverError> {
         Ok(())
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+/// Resolver view over one transient batch response.
+///
+/// Results are immutable and live only for the enclosing wallet operation.
+/// Missing witnesses delegate directly to the original resolver and are not
+/// memoized.
+pub(crate) struct WitnessBatchResolver<'a> {
+    fallback: &'a dyn ResolveWitness,
+    resolved: HashMap<RgbTxid, WitnessStatus>,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl<'a> WitnessBatchResolver<'a> {
+    pub(crate) fn new(
+        fallback: &'a dyn ResolveWitness,
+        resolved: HashMap<RgbTxid, WitnessStatus>,
+    ) -> Self {
+        Self { fallback, resolved }
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl ResolveWitness for WitnessBatchResolver<'_> {
+    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+        self.resolved
+            .get(&witness_id)
+            .cloned()
+            .map_or_else(|| self.fallback.resolve_witness(witness_id), Ok)
+    }
+
+    fn check_chain_net(&self, chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+        self.fallback.check_chain_net(chain_net)
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+/// Resolve the historical witnesses in a consignment as one transient batch.
+///
+/// Electrum supports native request batching. Esplora intentionally keeps its
+/// existing resolver behavior.
+pub(crate) fn resolve_consignment_witness_batch<const TRANSFER: bool>(
+    indexer: &Indexer,
+    consignment: &Consignment<TRANSFER>,
+    offchain_witness_id: RgbTxid,
+) -> Result<HashMap<RgbTxid, WitnessStatus>, Error> {
+    match indexer {
+        #[cfg(feature = "electrum")]
+        Indexer::Electrum(client) => {
+            let mut witness_ids = consignment
+                .bundled_witnesses()
+                .map(|bundle| bundle.witness_id())
+                .filter(|witness_id| *witness_id != offchain_witness_id)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            witness_ids.sort_unstable();
+            if witness_ids.is_empty() {
+                return Ok(HashMap::new());
+            }
+
+            resolve_electrum_witnesses(&client.inner, &witness_ids).map_err(|error| {
+                Error::Network {
+                    details: format!("failed to resolve Electrum witness batch: {error}"),
+                }
+            })
+        }
+        #[cfg(feature = "esplora")]
+        Indexer::Esplora(_) => {
+            let _ = (consignment, offchain_witness_id);
+            Ok(HashMap::new())
+        }
     }
 }
 
@@ -1109,7 +1185,30 @@ impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER>
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    struct CountingResolver {
+        calls: AtomicUsize,
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    impl ResolveWitness for CountingResolver {
+        fn resolve_witness(
+            &self,
+            _witness_id: RgbTxid,
+        ) -> Result<WitnessStatus, WitnessResolverError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(WitnessStatus::Unresolved)
+        }
+
+        fn check_chain_net(&self, _chain_net: ChainNet) -> Result<(), WitnessResolverError> {
+            Ok(())
+        }
+    }
 
     #[derive(Debug, Deserialize)]
     struct MandatoryField {
@@ -1130,6 +1229,43 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async { block_on(async { 42u32 }) });
         assert_eq!(result, 42);
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn witness_batch_resolver_uses_batch_result() {
+        let witness_id =
+            RgbTxid::from_str("0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap();
+        let fallback = CountingResolver {
+            calls: AtomicUsize::new(0),
+        };
+        let resolver = WitnessBatchResolver::new(
+            &fallback,
+            HashMap::from([(witness_id, WitnessStatus::Unresolved)]),
+        );
+
+        assert_eq!(
+            resolver.resolve_witness(witness_id).unwrap(),
+            WitnessStatus::Unresolved
+        );
+        assert_eq!(fallback.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn witness_batch_resolver_does_not_memoize_fallback() {
+        let witness_id =
+            RgbTxid::from_str("0000000000000000000000000000000000000000000000000000000000000002")
+                .unwrap();
+        let fallback = CountingResolver {
+            calls: AtomicUsize::new(0),
+        };
+        let resolver = WitnessBatchResolver::new(&fallback, HashMap::new());
+
+        resolver.resolve_witness(witness_id).unwrap();
+        resolver.resolve_witness(witness_id).unwrap();
+        assert_eq!(fallback.calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
