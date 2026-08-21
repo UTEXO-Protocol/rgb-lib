@@ -2536,6 +2536,47 @@ mod test {
         assert_eq!(metadata.expiration_timestamp, 123);
     }
 
+    // the parse error detail must survive import_receive_data, not be replaced by a generic one
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn import_receive_data_null_expiration_names_version_mismatch() {
+        let data_dir = PathBuf::from("tests").join("tmp");
+        fs::create_dir_all(&data_dir).unwrap();
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+        let mut wallet = MultisigWallet::new(
+            WalletData {
+                data_dir: data_dir.to_string_lossy().to_string(),
+                bitcoin_network: BitcoinNetwork::Regtest,
+                database_type: DatabaseType::Sqlite,
+                max_allocations_per_utxo: 5,
+                supported_schemas: AssetSchema::VALUES.to_vec(),
+                reuse_addresses: false,
+            },
+            MultisigKeys::new(vec![Cosigner::from_keys(&keys, None)], 1, 1),
+        )
+        .unwrap();
+
+        let filepath = wallet.wallet_dir().join("receive_metadata.json");
+        fs::write(
+            &filepath,
+            r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":null,"secret_seal":null}"#,
+        )
+        .unwrap();
+        let files = [FileResponse {
+            r#type: FileType::OperationData,
+            filepath,
+        }];
+
+        let txn = wallet.database().begin_transaction().unwrap();
+        let err = wallet
+            .import_receive_data(&txn, &files, &OperationType::BlindReceive)
+            .unwrap_err();
+        let Error::MultisigUnexpectedData { details } = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(details.contains("older rgb-lib version"), "{details}");
+    }
+
     #[test]
     fn cosigner_display_and_parse() {
         let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
