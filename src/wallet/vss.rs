@@ -1007,9 +1007,14 @@ fn get_fingerprint_from_zip_bytes(data: &[u8]) -> Result<String, Error> {
 }
 
 /// Check if a zip entry path is a BDK database file (contains xpubs in descriptors)
+///
+/// Matches the `bdk_db`/`bdk_db_watch_only` stems and any recovery sidecar the store
+/// leaves behind (`bdk_db.corrupt[.N]`, `bdk_db.recovering`, …): those copies hold full
+/// descriptors and must never ride into a plaintext backup.
 fn is_bdk_db_file(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or(path);
-    filename == BDK_DB_NAME || filename == BDK_DB_WO_NAME
+    let stem = filename.split('.').next().unwrap_or(filename);
+    stem == BDK_DB_NAME || stem == BDK_DB_WO_NAME
 }
 
 /// Check if a zip entry path is the wallet manifest, or a temp copy orphaned by a crash
@@ -1390,6 +1395,12 @@ mod tests {
         assert!(is_bdk_db_file("abc123/bdk_db"));
         assert!(is_bdk_db_file("abc123/bdk_db_watch_only"));
         assert!(is_bdk_db_file("some/deep/path/bdk_db"));
+
+        // recovery sidecars carry full descriptors and must be excluded (HIGH-3)
+        assert!(is_bdk_db_file("abc123/bdk_db.corrupt"));
+        assert!(is_bdk_db_file("abc123/bdk_db.corrupt.1"));
+        assert!(is_bdk_db_file("abc123/bdk_db.recovering"));
+        assert!(is_bdk_db_file("abc123/bdk_db_watch_only.corrupt"));
 
         assert!(!is_bdk_db_file("bdk_db_other"));
         assert!(!is_bdk_db_file("not_bdk_db"));
