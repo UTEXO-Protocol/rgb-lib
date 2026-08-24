@@ -1606,10 +1606,9 @@ pub trait WalletOnline: WalletOffline {
             {
                 continue;
             }
-            // skip transfers that are not set up for out-of-band exchange
-            if !transfer.uses_out_of_band_exchange() {
-                continue;
-            }
+            // transport is intentionally NOT filtered here: proxy invoices on a reused script must
+            // stay visible to the ambiguity guard below (they settle via refresh, not here), so the
+            // two guards agree on the candidate set
 
             // check if the provided consignment matches the transfer
             let matched = match transfer.receive_matcher()? {
@@ -1656,8 +1655,10 @@ pub trait WalletOnline: WalletOffline {
             });
         }
 
-        // under address reuse multiple pending witness invoices can share the same script-derived
-        // recipient ID: error out, as the paid invoice cannot be identified
+        // under address reuse multiple pending invoices (any transport) can share the same
+        // script-derived recipient ID: error out, as the paid invoice cannot be identified. The
+        // consignment carries no per-invoice recipient nonce, so it cannot be bound to a specific
+        // reused invoice here.
         let mut seen_recipient_ids = HashSet::new();
         for (_, _, transfer, _, _) in &matches {
             let recipient_id = transfer
@@ -1674,10 +1675,48 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
+        // replay guard: an on-chain assignment output that already credited another incoming
+        // transfer of this asset must not be credited again. Under sequential address reuse a
+        // settled consignment can otherwise be re-submitted to a later invoice on the same script
+        // (new nonce) and double-credit it.
+        for (batch_transfer, _, _, txid, vout) in &matches {
+            let Some(vout) = vout else { continue };
+            let already_settled = db_data.batch_transfers.iter().any(|bt| {
+                if !bt.incoming
+                    || bt.idx == batch_transfer.idx
+                    || bt.txid.as_deref() != Some(txid.as_str())
+                {
+                    return false;
+                }
+                let Ok((at, t)) =
+                    bt.get_incoming_transfer(&db_data.asset_transfers, &db_data.transfers)
+                else {
+                    return false;
+                };
+                at.asset_id.as_deref() == Some(asset_id.as_str())
+                    && matches!(
+                        &t.recipient_type,
+                        Some(RecipientTypeFull::Witness { vout: Some(v), .. }) if *v == *vout
+                    )
+            });
+            if already_settled {
+                return Err(Error::CannotProvideOutOfBandConsignment {
+                    details: format!(
+                        "consignment output {txid}:{vout} already settled a previous transfer: \
+                         refusing replay"
+                    ),
+                });
+            }
+        }
+
         // a single consignment (for one asset) can pay more than one of this wallet's pending
-        // invoices (e.g. a sender batched a send to two of them), so process every matched receive
+        // invoices (e.g. a sender batched a send to two of them), so process every matched receive.
+        // Only out-of-band invoices settle here; proxy ones are settled by refresh.
         let mut results: RefreshResult = HashMap::new();
         for (batch_transfer, asset_transfer, transfer, txid, vout) in matches {
+            if !transfer.uses_out_of_band_exchange() {
+                continue;
+            }
             let recipient_id = transfer
                 .recipient_id
                 .clone()
@@ -1719,6 +1758,14 @@ pub trait WalletOnline: WalletOffline {
                     failure: None,
                 },
             );
+        }
+
+        // matches may hold only proxy invoices (settled via refresh, not here); surface the same
+        // error as no match at all
+        if results.is_empty() {
+            return Err(Error::CannotProvideOutOfBandConsignment {
+                details: s!("no pending receive transfer matches the provided consignment"),
+            });
         }
 
         Ok(results)

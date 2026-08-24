@@ -10176,6 +10176,131 @@ fn out_of_band_reuse_ambiguous() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn out_of_band_reuse_sequential_replay() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_nia(None);
+
+    // receiver with address reuse: witness invoices share the pinned script
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut rcv_wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
+    fund_wallet(rcv_wallet.get_address().unwrap());
+    rcv_wallet
+        .create_utxos(rcv_online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+    let mut rcv_party = party!(rcv_wallet, rcv_online);
+
+    // invoice 1
+    let receive_1 = rcv_party
+        .wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            default_rcv_expiration(),
+            vec![],
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_1.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: vec![],
+        }],
+    )]);
+    let txid = party.send(recipient_map, FEE_RATE, None).txid;
+    assert!(!txid.is_empty());
+
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid)
+        .to_string_lossy()
+        .to_string();
+
+    // settle invoice 1 out-of-band, then broadcast and confirm it
+    let refreshed = rcv_party
+        .wallet
+        .provide_out_of_band_consignment(rcv_party.online, consignment_path.clone(), vec![])
+        .unwrap();
+    assert_eq!(refreshed.len(), 1);
+    party
+        .wallet
+        .provide_out_of_band_ack(party.online, receive_1.recipient_id.clone())
+        .unwrap()
+        .expect("recording the only recipient's ACK should broadcast the batch");
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset.asset_id));
+    let transfers = rcv_party.list_transfers(Some(&asset.asset_id));
+    let t1 = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_1.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t1.status, TransferStatus::Settled);
+    assert_eq!(rcv_party.get_asset_balance(&asset.asset_id).settled, amount);
+
+    // invoice 2 on the same reused script (new nonce)
+    let receive_2 = rcv_party
+        .wallet
+        .witness_receive(
+            None,
+            Assignment::Any,
+            default_rcv_expiration(),
+            vec![],
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    assert_eq!(receive_2.recipient_id, receive_1.recipient_id);
+    assert_ne!(receive_2.batch_transfer_idx, receive_1.batch_transfer_idx);
+
+    // replay invoice 1's already-settled consignment against invoice 2: must be refused, as its
+    // on-chain assignment output was already credited
+    let result = rcv_party.wallet.provide_out_of_band_consignment(
+        rcv_party.online,
+        consignment_path,
+        vec![],
+    );
+    assert!(matches!(
+        result,
+        Err(Error::CannotProvideOutOfBandConsignment { details }) if details.contains("replay")
+    ));
+
+    // invoice 2 untouched and the balance was not double-credited
+    let transfers = rcv_party.list_transfers(None);
+    let t2 = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_2.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t2.status, TransferStatus::WaitingCounterparty);
+    assert_eq!(rcv_party.get_asset_balance(&asset.asset_id).settled, amount);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn invalid_proxy_consignment_bytes() {
     initialize();
 
