@@ -1051,7 +1051,10 @@ fn sanitize_zip_for_plaintext(data: &[u8]) -> Result<(Vec<u8>, String), Error> {
                 details: format!("Failed to read zip entry: {e}"),
             })?;
 
-            let original_name = file.name().to_string();
+            // ZIP APPNOTE mandates '/' separators; a Windows-produced archive may carry
+            // backslashes ("fp\bdk_db"), which the separator-naive predicates below would miss
+            // and leak unredacted. Normalize once so every predicate sees canonical names.
+            let original_name = file.name().replace('\\', "/");
 
             // Skip files carrying xpubs or the fingerprint in their contents
             if is_bdk_db_file(&original_name) || is_wallet_manifest_file(&original_name) {
@@ -1529,5 +1532,60 @@ mod tests {
 
         let extracted = get_fingerprint_from_zip_bytes(&zip_data).unwrap();
         assert_eq!(extracted, fingerprint);
+    }
+
+    /// Zip carrying a Windows backslash-separated bdk_db plus BDK recovery sidecars, all with
+    /// full descriptors. Guards HIGH-4 (separator leak) end-to-end.
+    fn create_test_zip_with_leaky_sidecars(fingerprint: &str) -> Vec<u8> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+            zip.add_directory(format!("{fingerprint}/"), options)
+                .unwrap();
+            zip.start_file(format!("{fingerprint}/some_file.txt"), options)
+                .unwrap();
+            zip.write_all(b"harmless").unwrap();
+
+            // Windows-style backslash separator on the primary bdk_db
+            zip.start_file(format!("{fingerprint}\\bdk_db"), options)
+                .unwrap();
+            zip.write_all(b"tpubLeakBackslash").unwrap();
+
+            // recovery sidecars reached through a backslash-separated directory
+            zip.start_file(format!("{fingerprint}\\bdk_db.corrupt"), options)
+                .unwrap();
+            zip.write_all(format!("tr([{fingerprint}/86'/1'/0']tpubLeakCorrupt/0/*)").as_bytes())
+                .unwrap();
+            zip.start_file(format!("{fingerprint}\\bdk_db.recovering"), options)
+                .unwrap();
+            zip.write_all(b"tpubLeakRecovering").unwrap();
+
+            zip.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn test_sanitize_zip_excludes_bdk_db_recovery_sidecars() {
+        let fingerprint = "a1b2c3d4";
+        let zip_data = create_test_zip_with_leaky_sidecars(fingerprint);
+
+        let (sanitized, _) = sanitize_zip_for_plaintext(&zip_data).unwrap();
+
+        let reader = std::io::Cursor::new(&sanitized);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let mut content = Vec::new();
+            file.read_to_end(&mut content).unwrap();
+            let content = String::from_utf8_lossy(&content);
+            assert!(!content.contains("tpubLeakBackslash"));
+            assert!(!content.contains("tpubLeakCorrupt"));
+            assert!(!content.contains("tpubLeakRecovering"));
+            assert!(!content.contains(fingerprint));
+        }
     }
 }
