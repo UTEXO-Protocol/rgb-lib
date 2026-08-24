@@ -247,7 +247,7 @@ fn success() {
     // rate that requires additional inputs be added to cover fee costs
     let transport_endpoints = vec![
         format!("rpc://{PROXY_HOST_MOD_PROTO}"),
-        format!("rpc://127.6.6.6:7777/json-rpc"),
+        s!("rpc://127.6.6.6:7777/json-rpc"),
         format!("rpc://{PROXY_HOST}"),
     ];
     let receive_data_invalid_unreachable = rcv_party.blind_receive_with_endpoints(
@@ -2719,7 +2719,7 @@ fn fail() {
 
     // transport endpoints: no valid endpoints (down, modified)
     let transport_endpoints = vec![
-        format!("rpc://127.6.6.6:7777/json-rpc"),
+        s!("rpc://127.6.6.6:7777/json-rpc"),
         format!("rpc://{PROXY_HOST_MOD_PROTO}"),
     ];
     let recipient_map = HashMap::from([(
@@ -2740,10 +2740,10 @@ fn fail() {
 
     // transport endpoints: too many endpoints
     let transport_endpoints = vec![
-        format!("rgbhttpjsonrpc:127.0.0.1:3000/json-rpc"),
-        format!("rgbhttpjsonrpc:127.0.0.1:3001/json-rpc"),
-        format!("rgbhttpjsonrpc:127.0.0.1:3002/json-rpc"),
-        format!("rgbhttpjsonrpc:127.0.0.1:3003/json-rpc"),
+        s!("rgbhttpjsonrpc:127.0.0.1:3000/json-rpc"),
+        s!("rgbhttpjsonrpc:127.0.0.1:3001/json-rpc"),
+        s!("rgbhttpjsonrpc:127.0.0.1:3002/json-rpc"),
+        s!("rgbhttpjsonrpc:127.0.0.1:3003/json-rpc"),
     ];
     let recipient_map = HashMap::from([(
         asset.asset_id.clone(),

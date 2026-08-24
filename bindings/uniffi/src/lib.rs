@@ -1,4 +1,6 @@
 #![allow(clippy::too_many_arguments)]
+// uniffi-generated scaffolding declares a large metadata array as const; not editable here
+#![allow(clippy::large_const_arrays)]
 
 use std::{
     collections::HashMap,

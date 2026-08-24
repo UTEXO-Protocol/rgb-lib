@@ -510,10 +510,10 @@ fn fail() {
 
     // transport endpoints: too many endpoints
     let transport_endpoints = vec![
-        format!("rpc://127.0.0.1:3000/json-rpc"),
-        format!("rpc://127.0.0.1:3001/json-rpc"),
-        format!("rpc://127.0.0.1:3002/json-rpc"),
-        format!("rpc://127.0.0.1:3003/json-rpc"),
+        s!("rpc://127.0.0.1:3000/json-rpc"),
+        s!("rpc://127.0.0.1:3001/json-rpc"),
+        s!("rpc://127.0.0.1:3002/json-rpc"),
+        s!("rpc://127.0.0.1:3003/json-rpc"),
     ];
     let result = blind_receive_withte(&mut party.wallet, transport_endpoints);
     let msg = format!("library supports at max {MAX_TRANSPORT_ENDPOINTS} transport endpoints");
