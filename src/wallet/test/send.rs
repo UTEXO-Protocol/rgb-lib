@@ -10301,6 +10301,124 @@ fn out_of_band_reuse_sequential_replay() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn proxy_reuse_sequential_replay() {
+    initialize();
+
+    let amount: u64 = 66;
+
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_nia(None);
+
+    // receiver with address reuse: witness invoices share the pinned script
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let mut rcv_wallet = Wallet::new(
+        WalletData {
+            data_dir: get_test_data_dir_string(),
+            bitcoin_network,
+            database_type: DatabaseType::Sqlite,
+            max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
+            supported_schemas: AssetSchema::VALUES.to_vec(),
+            reuse_addresses: true,
+        },
+        SinglesigKeys::from_keys(&keys, None),
+    )
+    .unwrap();
+    let rcv_online = rcv_wallet.go_online(test_go_online_options(None)).unwrap();
+    fund_wallet(rcv_wallet.get_address().unwrap());
+    rcv_wallet
+        .create_utxos(rcv_online, false, None, None, FEE_RATE, false)
+        .unwrap();
+    mine(false);
+    let mut rcv_party = party!(rcv_wallet, rcv_online);
+
+    // invoice 1 (proxy transport). Use the invoice's own transport endpoints, which carry the
+    // per-invoice rid_nonce, so the sender posts under the nonce-derived proxy_recipient_id the
+    // receiver expects (address reuse makes the bare recipient_id ambiguous).
+    let receive_1 = rcv_party.witness_receive();
+    let transport_endpoints_1 = Invoice::new(receive_1.invoice.clone())
+        .unwrap()
+        .invoice_data()
+        .transport_endpoints;
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::Fungible(amount),
+            recipient_id: receive_1.recipient_id.clone(),
+            witness_data: Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+            transport_endpoints: transport_endpoints_1,
+        }],
+    )]);
+    let txid = party.send(recipient_map, FEE_RATE, None).txid;
+    assert!(!txid.is_empty());
+
+    // settle invoice 1 over the proxy
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset.asset_id));
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(Some(&asset.asset_id));
+    let transfers = rcv_party.list_transfers(Some(&asset.asset_id));
+    let t1 = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_1.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t1.status, TransferStatus::Settled);
+    assert_eq!(rcv_party.get_asset_balance(&asset.asset_id).settled, amount);
+    let vout_1 = t1.receive_utxo.as_ref().unwrap().vout;
+
+    // invoice 2 on the same reused script (new nonce, proxy transport)
+    let receive_2 = rcv_party.witness_receive();
+    assert_eq!(receive_2.recipient_id, receive_1.recipient_id);
+    assert_ne!(receive_2.batch_transfer_idx, receive_1.batch_transfer_idx);
+
+    // attacker replay: upload invoice 1's already-settled consignment to the proxy under invoice 2's
+    // proxy_recipient_id (fresh nonce, so the proxy accepts the post) with its on-chain output
+    let proxy_recipient_id_2 = Invoice::new(receive_2.invoice.clone())
+        .unwrap()
+        .invoice_data()
+        .proxy_recipient_id;
+    let consignment_path = party
+        .wallet
+        .get_send_consignment_path(&asset.asset_id, &txid);
+    let proxy_client = get_proxy_client(None);
+    proxy_client
+        .post_consignment(
+            &proxy_recipient_id_2,
+            &consignment_path,
+            &txid,
+            Some(vout_1),
+        )
+        .unwrap();
+
+    // refreshing invoice 2 pulls the replayed consignment: the shared settlement chokepoint must
+    // reject it with a hard error (no NACK), as its on-chain output already credited invoice 1
+    let refreshed = rcv_party.refresh_result(None, &[]).unwrap();
+    let failure = refreshed
+        .get(&receive_2.batch_transfer_idx)
+        .and_then(|rt| rt.failure.as_ref())
+        .expect("replayed proxy consignment should surface a refresh failure");
+    assert!(matches!(
+        failure,
+        Error::CannotProvideOutOfBandConsignment { details } if details.contains("replay")
+    ));
+
+    // invoice 2 untouched (not NACKed to Failed) and the balance was not double-credited
+    let transfers = rcv_party.list_transfers(None);
+    let t2 = transfers
+        .iter()
+        .find(|t| t.batch_transfer_idx == receive_2.batch_transfer_idx)
+        .unwrap();
+    assert_eq!(t2.status, TransferStatus::WaitingCounterparty);
+    assert_eq!(rcv_party.get_asset_balance(&asset.asset_id).settled, amount);
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn invalid_proxy_consignment_bytes() {
     initialize();
 

@@ -1416,6 +1416,41 @@ pub trait WalletOnline: WalletOffline {
             return self.refuse_consignment(txn, &mode, recipient_id, updated_batch_transfer);
         };
 
+        // replay guard (both transports funnel here): an on-chain assignment output that already
+        // credited another incoming transfer of this asset must not be credited again. Under
+        // sequential address reuse a settled consignment can otherwise be re-submitted to a later
+        // invoice on the same script (new nonce) and double-credit it. Reject with a hard error and
+        // do not NACK, so a replayed consignment cannot fail a legitimate proxy transfer.
+        if let Some(vout) = vout {
+            let db_data = txn.get_db_data(false)?;
+            let already_settled = db_data.batch_transfers.iter().any(|bt| {
+                if !bt.incoming
+                    || bt.idx == batch_transfer.idx
+                    || bt.txid.as_deref() != Some(txid.as_str())
+                {
+                    return false;
+                }
+                let Ok((at, t)) =
+                    bt.get_incoming_transfer(&db_data.asset_transfers, &db_data.transfers)
+                else {
+                    return false;
+                };
+                at.asset_id.as_deref() == Some(asset_id.as_str())
+                    && matches!(
+                        &t.recipient_type,
+                        Some(RecipientTypeFull::Witness { vout: Some(v), .. }) if *v == vout
+                    )
+            });
+            if already_settled {
+                return Err(Error::CannotProvideOutOfBandConsignment {
+                    details: format!(
+                        "consignment output {txid}:{vout} already settled a previous transfer: \
+                         refusing replay"
+                    ),
+                });
+            }
+        }
+
         if asset_schema == AssetSchema::Ifa {
             let url = if let Ok(ass) = txn.check_asset_exists(asset_id.clone()) {
                 ass.reject_list_url
@@ -1675,39 +1710,8 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
-        // replay guard: an on-chain assignment output that already credited another incoming
-        // transfer of this asset must not be credited again. Under sequential address reuse a
-        // settled consignment can otherwise be re-submitted to a later invoice on the same script
-        // (new nonce) and double-credit it.
-        for (batch_transfer, _, _, txid, vout) in &matches {
-            let Some(vout) = vout else { continue };
-            let already_settled = db_data.batch_transfers.iter().any(|bt| {
-                if !bt.incoming
-                    || bt.idx == batch_transfer.idx
-                    || bt.txid.as_deref() != Some(txid.as_str())
-                {
-                    return false;
-                }
-                let Ok((at, t)) =
-                    bt.get_incoming_transfer(&db_data.asset_transfers, &db_data.transfers)
-                else {
-                    return false;
-                };
-                at.asset_id.as_deref() == Some(asset_id.as_str())
-                    && matches!(
-                        &t.recipient_type,
-                        Some(RecipientTypeFull::Witness { vout: Some(v), .. }) if *v == *vout
-                    )
-            });
-            if already_settled {
-                return Err(Error::CannotProvideOutOfBandConsignment {
-                    details: format!(
-                        "consignment output {txid}:{vout} already settled a previous transfer: \
-                         refusing replay"
-                    ),
-                });
-            }
-        }
+        // the replayed-output guard lives in validate_received_consignment (the shared settlement
+        // chokepoint), so it covers this OOB path and the proxy path alike.
 
         // a single consignment (for one asset) can pay more than one of this wallet's pending
         // invoices (e.g. a sender batched a send to two of them), so process every matched receive.
