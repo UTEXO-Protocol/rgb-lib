@@ -38,7 +38,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -62,7 +62,7 @@ fn scenario_1_chunked_encrypted_backup_upload_and_restore() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");

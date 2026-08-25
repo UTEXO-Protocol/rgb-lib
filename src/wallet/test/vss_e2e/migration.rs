@@ -33,7 +33,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount1),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -57,7 +57,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");
@@ -134,7 +134,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount2),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -158,7 +158,7 @@ fn scenario_5_1_other_machine_restore_is_operational() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send asset2");

@@ -6,6 +6,7 @@ pub(crate) struct OfflineSinglesigParty {
 }
 
 // singlesig party (allows uniform access to some functionality via SigParty trait)
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) struct SinglesigParty {
     pub(crate) wallet: Wallet,
     pub(crate) online: Online,
@@ -19,6 +20,7 @@ macro_rules! offline_party {
 }
 
 // convenience macro to instantiate SinglesigParty
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 macro_rules! party {
     ($wallet:expr, $online:expr) => {
         SinglesigParty {
@@ -36,7 +38,7 @@ pub(crate) trait OfflineSigParty {
 
     fn wlt_mut(&mut self) -> &mut Self::W;
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn check_test_transfer_status_recipient(
         &self,
         recipient_id: &str,
@@ -68,6 +70,7 @@ pub(crate) trait OfflineSigParty {
         transfer_data.status == expected_status
     }
 
+    #[cfg(feature = "electrum")]
     fn check_test_transfer_status_sender(
         &self,
         txid: &str,
@@ -87,7 +90,7 @@ pub(crate) trait OfflineSigParty {
         batch_transfer.status == expected_status
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn check_test_wallet_data(
         &mut self,
         asset: &AssetNIA,
@@ -136,10 +139,34 @@ pub(crate) trait OfflineSigParty {
         assert_eq!(unspents.len(), 6);
     }
 
+    // check the UDA carries both its contract terms media and its token media, with the related
+    // files available locally
+    #[cfg(feature = "electrum")]
+    fn check_uda_medias(&self, terms_media_bytes: &[u8]) {
+        let uda_assets = self.list_assets(&[AssetSchema::Uda]).uda.unwrap();
+        let asset = uda_assets.first().unwrap();
+
+        let terms_media = asset.media.as_ref().unwrap();
+        assert_eq!(terms_media.mime, "image/png");
+        assert_eq!(
+            std::fs::read(PathBuf::from(&terms_media.file_path)).unwrap(),
+            terms_media_bytes
+        );
+
+        let token_media = asset.token.as_ref().unwrap().media.as_ref().unwrap();
+        assert_eq!(token_media.mime, "text/plain");
+        assert_eq!(
+            std::fs::read(PathBuf::from(&token_media.file_path)).unwrap(),
+            std::fs::read(PathBuf::from(FILE_STR)).unwrap()
+        );
+    }
+
+    #[cfg(feature = "electrum")]
     fn data_dir(&self) -> String {
         self.wlt().get_wallet_data().data_dir
     }
 
+    #[cfg(feature = "electrum")]
     fn db_asset(&self, asset_id: &str) -> DbAsset {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let asset = txn.get_asset(asset_id.to_string()).unwrap().unwrap();
@@ -147,6 +174,7 @@ pub(crate) trait OfflineSigParty {
         asset
     }
 
+    #[cfg(feature = "electrum")]
     fn db_asset_transfers(&self) -> Vec<DbAssetTransfer> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let asset_transfers = txn.iter_asset_transfers().unwrap();
@@ -154,6 +182,7 @@ pub(crate) trait OfflineSigParty {
         asset_transfers
     }
 
+    #[cfg(feature = "electrum")]
     fn db_asset_transfers_filtered(&self, batch_transfer_idx: i32) -> Vec<DbAssetTransfer> {
         self.db_asset_transfers()
             .into_iter()
@@ -175,6 +204,7 @@ pub(crate) trait OfflineSigParty {
         bak_info
     }
 
+    #[cfg(feature = "electrum")]
     fn db_batch_transfers(&self) -> Vec<DbBatchTransfer> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let batch_transfers = txn.iter_batch_transfers().unwrap();
@@ -182,6 +212,7 @@ pub(crate) trait OfflineSigParty {
         batch_transfers
     }
 
+    #[cfg(feature = "electrum")]
     fn db_batch_transfers_filtered(&self, txid: &str) -> Vec<DbBatchTransfer> {
         self.db_batch_transfers()
             .into_iter()
@@ -189,6 +220,7 @@ pub(crate) trait OfflineSigParty {
             .collect()
     }
 
+    #[cfg(feature = "electrum")]
     fn db_check_asset_exists(&self, asset_id: &str) -> Result<DbAsset, Error> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let res = txn.check_asset_exists(asset_id.to_string());
@@ -196,6 +228,7 @@ pub(crate) trait OfflineSigParty {
         res
     }
 
+    #[cfg(feature = "electrum")]
     fn db_colorings(&self) -> Vec<DbColoring> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let colorings = txn.iter_colorings().unwrap();
@@ -203,6 +236,7 @@ pub(crate) trait OfflineSigParty {
         colorings
     }
 
+    #[cfg(feature = "electrum")]
     fn db_colorings_filtered(&self, asset_transfer_idx: i32) -> Vec<DbColoring> {
         self.db_colorings()
             .into_iter()
@@ -210,7 +244,7 @@ pub(crate) trait OfflineSigParty {
             .collect()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn db_data(&self, empty_transfers: bool) -> DbData {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let db_data = txn.get_db_data(empty_transfers).unwrap();
@@ -218,12 +252,7 @@ pub(crate) trait OfflineSigParty {
         db_data
     }
 
-    fn db_del_transfer_transport_endpoint(&self, idx: i32) {
-        let txn = self.wlt().database().begin_transaction().unwrap();
-        txn.del_transfer_transport_endpoint(idx).unwrap();
-        txn.commit().unwrap();
-    }
-
+    #[cfg(feature = "electrum")]
     fn db_get_or_insert_media(&self, digest: &str, mime: &str) -> i32 {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let media_idx = txn
@@ -233,7 +262,7 @@ pub(crate) trait OfflineSigParty {
         media_idx
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn db_media(&self, media_idx: i32) -> DbMedia {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let media = txn.get_media(media_idx).unwrap().unwrap();
@@ -241,6 +270,7 @@ pub(crate) trait OfflineSigParty {
         media
     }
 
+    #[cfg(feature = "electrum")]
     fn db_medias(&self) -> Vec<DbMedia> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let medias = txn.iter_media().unwrap();
@@ -248,7 +278,7 @@ pub(crate) trait OfflineSigParty {
         medias
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn db_pending_witness_scripts(&self) -> Vec<DbPendingWitnessScript> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let pending_witness_scripts = txn.iter_pending_witness_scripts().unwrap();
@@ -256,6 +286,7 @@ pub(crate) trait OfflineSigParty {
         pending_witness_scripts
     }
 
+    #[cfg(feature = "electrum")]
     fn db_reserved_txos(&self) -> Vec<DbReservedTxo> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let reserved_txos = txn.iter_reserved_txos().unwrap();
@@ -263,6 +294,7 @@ pub(crate) trait OfflineSigParty {
         reserved_txos
     }
 
+    #[cfg(feature = "electrum")]
     fn db_rgb_allocations(
         &self,
         utxos: Vec<DbTxo>,
@@ -285,6 +317,7 @@ pub(crate) trait OfflineSigParty {
         rgb_allocations
     }
 
+    #[cfg(feature = "electrum")]
     fn db_token_medias(&self) -> Vec<DbTokenMedia> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let token_medias = txn.iter_token_medias().unwrap();
@@ -292,6 +325,7 @@ pub(crate) trait OfflineSigParty {
         token_medias
     }
 
+    #[cfg(feature = "electrum")]
     fn db_tokens(&self) -> Vec<DbToken> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let tokens = txn.iter_tokens().unwrap();
@@ -299,6 +333,7 @@ pub(crate) trait OfflineSigParty {
         tokens
     }
 
+    #[cfg(feature = "electrum")]
     fn db_transfer_transport_endpoints_data(
         &self,
         idx: i32,
@@ -309,6 +344,7 @@ pub(crate) trait OfflineSigParty {
         tte_data
     }
 
+    #[cfg(feature = "electrum")]
     fn db_transfers(&self) -> Vec<DbTransfer> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let transfers = txn.iter_transfers().unwrap();
@@ -316,6 +352,7 @@ pub(crate) trait OfflineSigParty {
         transfers
     }
 
+    #[cfg(feature = "electrum")]
     fn db_transfers_filtered(&self, asset_transfer_idx: i32) -> Vec<DbTransfer> {
         self.db_transfers()
             .into_iter()
@@ -323,6 +360,7 @@ pub(crate) trait OfflineSigParty {
             .collect()
     }
 
+    #[cfg(feature = "electrum")]
     fn db_txo(&self, outpoint: &Outpoint) -> Option<DbTxo> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let txo = txn.get_txo(outpoint).unwrap();
@@ -330,6 +368,7 @@ pub(crate) trait OfflineSigParty {
         txo
     }
 
+    #[cfg(feature = "electrum")]
     fn db_txos(&self) -> Vec<DbTxo> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let txos = txn.iter_txos().unwrap();
@@ -337,6 +376,7 @@ pub(crate) trait OfflineSigParty {
         txos
     }
 
+    #[cfg(feature = "electrum")]
     fn db_unspent_txos(&self, txos: Vec<DbTxo>) -> Vec<DbTxo> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let unspent_txos = txn.get_unspent_txos(txos).unwrap();
@@ -344,7 +384,7 @@ pub(crate) trait OfflineSigParty {
         unspent_txos
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn db_update_asset(&self, asset: &mut DbAssetActMod) -> DbAsset {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let asset = txn.update_asset(asset).unwrap();
@@ -352,6 +392,7 @@ pub(crate) trait OfflineSigParty {
         asset
     }
 
+    #[cfg(feature = "electrum")]
     fn db_wallet_transaction_with_reserved_txos_by_txid(
         &self,
         txid: &str,
@@ -364,6 +405,7 @@ pub(crate) trait OfflineSigParty {
         res
     }
 
+    #[cfg(feature = "electrum")]
     fn db_wallet_transactions(&self) -> Vec<DbWalletTransaction> {
         let txn = self.wlt().database().begin_transaction().unwrap();
         let transactions = txn.iter_wallet_transactions().unwrap();
@@ -371,11 +413,13 @@ pub(crate) trait OfflineSigParty {
         transactions
     }
 
+    #[cfg(feature = "electrum")]
     fn delete_transfers(&mut self, batch_transfer_idx: Option<i32>, no_asset_only: bool) -> bool {
         self.delete_transfers_result(batch_transfer_idx, no_asset_only)
             .unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn delete_transfers_result(
         &self,
         batch_transfer_idx: Option<i32>,
@@ -385,7 +429,7 @@ pub(crate) trait OfflineSigParty {
             .delete_transfers(batch_transfer_idx, no_asset_only)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn extract_opouts_from_transfer(&self, asset_id: &str, txid: &str) -> Vec<Opout> {
         let batch_transfers = self.db_batch_transfers_filtered(txid);
         assert_eq!(batch_transfers.len(), 1);
@@ -431,6 +475,7 @@ pub(crate) trait OfflineSigParty {
         opouts
     }
 
+    #[cfg(feature = "electrum")]
     fn get_asset_balance(&self, asset_id: &str) -> Balance {
         self.get_asset_balance_result(asset_id).unwrap()
     }
@@ -439,27 +484,32 @@ pub(crate) trait OfflineSigParty {
         self.wlt().get_asset_balance(asset_id.to_string())
     }
 
+    #[cfg(feature = "electrum")]
     fn get_asset_metadata(&self, asset_id: &str) -> Metadata {
         self.get_asset_metadata_result(asset_id).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn get_asset_metadata_result(&self, asset_id: &str) -> Result<Metadata, Error> {
         self.wlt().get_asset_metadata(asset_id.to_string())
     }
 
+    #[cfg(feature = "electrum")]
     fn get_btc_balance(&mut self) -> BtcBalance {
         self.wlt_mut().get_btc_balance(None, true).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn get_pending_blind_transfers(&self) -> Vec<Transfer> {
         self.wlt()
-            .list_transfers(AssetFilter::None, None)
+            .list_transfers(AssetFilter::AnyOrNone, None)
             .unwrap()
             .into_iter()
             .filter(|t| t.status.pending() && t.kind == TransferKind::ReceiveBlind)
             .collect()
     }
 
+    #[cfg(feature = "electrum")]
     fn get_test_asset_transfer(&self, batch_transfer_idx: i32) -> DbAssetTransfer {
         let asset_transfers = self.db_asset_transfers_filtered(batch_transfer_idx);
         let mut user_driven_transfers = asset_transfers.into_iter().filter(|t| t.user_driven);
@@ -470,7 +520,9 @@ pub(crate) trait OfflineSigParty {
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_test_transfer_data(&self, transfer: &DbTransfer) -> (TransferData, DbAssetTransfer) {
-        let db_data = self.db_data(false);
+        let txn = self.wlt().database().begin_transaction().unwrap();
+        let db_data = txn.get_db_data(false).unwrap();
+        txn.commit().unwrap();
         let (asset_transfer, batch_transfer) =
             transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
         let transfer_data = self
@@ -486,11 +538,19 @@ pub(crate) trait OfflineSigParty {
         (transfer_data, asset_transfer)
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_test_transfer_recipient(&self, recipient_id: &str) -> DbTransfer {
-        let mut transfers = self
-            .db_transfers()
-            .into_iter()
-            .filter(|t| t.recipient_id == Some(recipient_id.to_string()) && t.incoming);
+        let txn = self.wlt().database().begin_transaction().unwrap();
+        let asset_transfers = txn.iter_asset_transfers().unwrap();
+        let batch_transfers = txn.iter_batch_transfers().unwrap();
+        let transfers = txn.iter_transfers().unwrap();
+        txn.commit().unwrap();
+        let mut transfers = transfers.into_iter().filter(|t| {
+            t.recipient_id == Some(recipient_id.to_string())
+                && t.related_transfers(&asset_transfers, &batch_transfers)
+                    .1
+                    .incoming
+        });
         let transfer = transfers.next().unwrap();
         assert!(transfers.next().is_none());
         transfer
@@ -501,24 +561,50 @@ pub(crate) trait OfflineSigParty {
         &self,
         transfer: &DbTransfer,
     ) -> (DbAssetTransfer, DbBatchTransfer) {
-        let db_data = self.db_data(false);
+        let txn = self.wlt().database().begin_transaction().unwrap();
+        let db_data = txn.get_db_data(false).unwrap();
+        txn.commit().unwrap();
         transfer.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers)
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn get_test_transfer_sender(
         &self,
         txid: &str,
     ) -> (DbTransfer, DbAssetTransfer, DbBatchTransfer) {
-        let batch_transfers = self.db_batch_transfers_filtered(txid);
+        let txn = self.wlt().database().begin_transaction().unwrap();
+        let batch_transfers: Vec<_> = txn
+            .iter_batch_transfers()
+            .unwrap()
+            .into_iter()
+            .filter(|b| b.txid == Some(txid.to_string()))
+            .collect();
         assert_eq!(batch_transfers.len(), 1);
         let batch_transfer = batch_transfers.into_iter().next().unwrap();
-        let asset_transfer = self.get_test_asset_transfer(batch_transfer.idx);
-        let mut transfers = self.db_transfers_filtered(asset_transfer.idx).into_iter();
+        let asset_transfers: Vec<_> = txn
+            .iter_asset_transfers()
+            .unwrap()
+            .into_iter()
+            .filter(|at| at.batch_transfer_idx == batch_transfer.idx)
+            .filter(|t| t.user_driven)
+            .collect();
+        let mut user_driven_transfers = asset_transfers.into_iter();
+        let asset_transfer = user_driven_transfers.next().unwrap();
+        assert!(user_driven_transfers.next().is_none());
+        let transfers: Vec<_> = txn
+            .iter_transfers()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.asset_transfer_idx == asset_transfer.idx)
+            .collect();
+        txn.commit().unwrap();
+        let mut transfers = transfers.into_iter();
         let transfer = transfers.next().unwrap();
         assert!(transfers.next().is_none());
         (transfer, asset_transfer, batch_transfer)
     }
 
+    #[cfg(feature = "electrum")]
     fn get_test_transfers_sender(
         &self,
         txid: &str,
@@ -543,41 +629,51 @@ pub(crate) trait OfflineSigParty {
         self.wlt().get_wallet_data()
     }
 
+    #[cfg(feature = "electrum")]
     fn list_assets(&self, filter_asset_schemas: &[AssetSchema]) -> Assets {
         self.wlt()
             .list_assets(filter_asset_schemas.to_vec())
             .unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn list_transactions(&mut self) -> Vec<Transaction> {
         self.wlt_mut().list_transactions(None, true).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn list_transfers(&self, asset_id: Option<&str>) -> Vec<Transfer> {
         self.list_transfers_result(asset_id).unwrap()
     }
 
     fn list_transfers_result(&self, asset_id: Option<&str>) -> Result<Vec<Transfer>, Error> {
-        let filter = match asset_id {
+        let asset_filter = match asset_id {
             Some(a) => AssetFilter::Id(a.to_string()),
             None => AssetFilter::None,
         };
-        self.wlt().list_transfers(filter, None)
+        self.wlt().list_transfers(asset_filter, None)
     }
 
-    fn list_transfers_filtered(&self, filter: AssetFilter, txid: Option<&str>) -> Vec<Transfer> {
-        self.list_transfers_filtered_result(filter, txid).unwrap()
+    #[cfg(feature = "electrum")]
+    fn list_transfers_filtered(
+        &self,
+        asset_filter: AssetFilter,
+        txid: Option<&str>,
+    ) -> Vec<Transfer> {
+        self.list_transfers_filtered_result(asset_filter, txid)
+            .unwrap()
     }
 
     fn list_transfers_filtered_result(
         &self,
-        filter: AssetFilter,
+        asset_filter: AssetFilter,
         txid: Option<&str>,
     ) -> Result<Vec<Transfer>, Error> {
         self.wlt()
-            .list_transfers(filter, txid.map(|t| t.to_string()))
+            .list_transfers(asset_filter, txid.map(|t| t.to_string()))
     }
 
+    #[cfg(feature = "electrum")]
     fn list_unspents(&mut self, settled_only: bool) -> Vec<Unspent> {
         self.wlt_mut()
             .list_unspents(None, settled_only, true)
@@ -586,7 +682,7 @@ pub(crate) trait OfflineSigParty {
 
     /// print the provided message, then get colorings for each wallet unspent and print their
     /// status, type, amount and asset
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn show_unspent_colorings(&mut self, msg: &str) {
         println!(
             "\nwallet {} unspent colorings ({msg})",
@@ -651,7 +747,7 @@ pub(crate) trait OfflineSigParty {
         }
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn wait_for_asset_balance(&self, asset_id: &str, expected_balance: &Balance) {
         println!("waiting for asset balance");
         let mut current_balance = Balance::default();
@@ -675,6 +771,7 @@ pub(crate) trait OfflineSigParty {
 pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
     fn party_online(&self) -> Online;
 
+    #[cfg(feature = "electrum")]
     fn fail_transfers(
         &mut self,
         batch_transfer_idx: Option<i32>,
@@ -686,6 +783,7 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
             .fail_transfers(online, batch_transfer_idx, no_asset_only, skip_sync)
     }
 
+    #[cfg(feature = "electrum")]
     fn fail_transfers_all(&mut self) -> bool {
         let online = self.party_online();
         self.wlt_mut()
@@ -693,6 +791,7 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
             .unwrap()
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn fail_transfers_single(&mut self, batch_transfer_idx: i32) -> bool {
         let online = self.party_online();
         self.wlt_mut()
@@ -700,11 +799,13 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
             .unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn get_btc_balance_with_sync(&mut self) -> BtcBalance {
         let online = self.party_online();
         self.wlt_mut().get_btc_balance(Some(online), false).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn get_colorable_unspents_with_sync(&mut self, settled_only: bool) -> Vec<Unspent> {
         self.list_unspents_with_sync(settled_only)
             .into_iter()
@@ -712,6 +813,7 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
             .collect()
     }
 
+    #[cfg(feature = "electrum")]
     fn list_transactions_with_sync(&mut self) -> Vec<Transaction> {
         let online = self.party_online();
         self.wlt_mut()
@@ -744,15 +846,18 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
         )
     }
 
+    #[cfg(feature = "electrum")]
     fn sync(&mut self, options: SyncOptions) {
         self.sync_result(options).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn sync_result(&mut self, options: SyncOptions) -> Result<(), Error> {
         let online = self.party_online();
         self.wlt_mut().sync(online, options)
     }
 
+    #[cfg(feature = "electrum")]
     fn wait_for_btc_balance(&mut self, expected_balance: &BtcBalance) {
         println!("waiting for BTC balance");
         let mut current_balance = BtcBalance::default();
@@ -789,10 +894,6 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
                     if let Some(ref e) = rt.failure {
                         eprintln!("refresh of {i} failure: {e} ({e:?})");
                         match e {
-                            Error::Internal { details } => {
-                                println!("refresh of {i} internal error: {e}, details: {details}");
-                                non_fatal_error = true;
-                            }
                             Error::InvalidTxid => {
                                 println!("refresh of {i} invalid TXID: {e}");
                                 non_fatal_error = true;
@@ -831,6 +932,7 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
         }
     }
 
+    #[cfg(feature = "electrum")]
     fn wait_for_unspents(&mut self, settled_only: bool, expected_len: u8) {
         println!("waiting for unspents");
         let mut unspents = vec![];
@@ -849,23 +951,28 @@ pub(crate) trait SigParty: OfflineSigParty<W: RgbWalletOpsOnline> {
 
 // shared singlesig-party test helpers that call inherent Wallet methods
 // (which OfflineSigParty's RgbWalletOpsOffline bound can't reach)
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) trait SinglesigWalletParty {
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn abort_pending_vanilla_tx(&self, txid: &str);
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn abort_pending_vanilla_tx_result(&self, txid: &str) -> Result<(), Error>;
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn blind_receive(&mut self) -> ReceiveData;
 
+    #[cfg(feature = "electrum")]
     fn blind_receive_asset_expiry(
         &mut self,
         asset_id: Option<String>,
         expiration: Option<u64>,
     ) -> ReceiveData;
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn blind_receive_result(&mut self) -> Result<ReceiveData, Error>;
 
+    #[cfg(feature = "electrum")]
     fn blind_receive_with_endpoints(
         &mut self,
         expiration: Option<u64>,
@@ -874,24 +981,25 @@ pub(crate) trait SinglesigWalletParty {
 
     fn get_address(&mut self) -> String;
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn go_online(&mut self, skip_consistency_check: bool, indexer_url: Option<&str>) -> Online;
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn go_online_result(
         &mut self,
         skip_consistency_check: bool,
         indexer_url: Option<&str>,
     ) -> Result<Online, Error>;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_cfa(&mut self, amounts: Option<&[u64]>, file_path: Option<String>) -> AssetCFA;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_cfa_result(
         &mut self,
         amounts: Option<&[u64]>,
         file_path: Option<String>,
     ) -> Result<AssetCFA, Error>;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_ifa(
         &mut self,
         amounts: Option<&[u64]>,
@@ -899,6 +1007,7 @@ pub(crate) trait SinglesigWalletParty {
         reject_list_url: Option<String>,
     ) -> AssetIFA;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_ifa_result(
         &mut self,
         amounts: Option<&[u64]>,
@@ -910,6 +1019,7 @@ pub(crate) trait SinglesigWalletParty {
 
     fn issue_asset_nia_result(&mut self, amounts: Option<&[u64]>) -> Result<AssetNIA, Error>;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_uda(
         &mut self,
         details: Option<&str>,
@@ -917,6 +1027,7 @@ pub(crate) trait SinglesigWalletParty {
         attachments_file_paths: Vec<&str>,
     ) -> AssetUDA;
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_uda_result(
         &mut self,
         details: Option<&str>,
@@ -939,6 +1050,7 @@ impl OfflineSigParty for OfflineSinglesigParty {
     }
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 impl OfflineSigParty for SinglesigParty {
     type W = Wallet;
 
@@ -958,21 +1070,24 @@ impl SigParty for SinglesigParty {
     }
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn abort_pending_vanilla_tx(&self, txid: &str) {
         self.abort_pending_vanilla_tx_result(txid).unwrap();
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     fn abort_pending_vanilla_tx_result(&self, txid: &str) -> Result<(), Error> {
         self.wlt().abort_pending_vanilla_tx(txid.to_string())
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn blind_receive(&mut self) -> ReceiveData {
         self.blind_receive_result().unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn blind_receive_asset_expiry(
         &mut self,
         asset_id: Option<String>,
@@ -982,23 +1097,25 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .blind_receive(
                 asset_id,
                 Assignment::Any,
-                expiration,
+                expiration.unwrap_or_else(default_rcv_expiration),
                 TRANSPORT_ENDPOINTS.clone(),
                 MIN_CONFIRMATIONS,
             )
             .unwrap()
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn blind_receive_result(&mut self) -> Result<ReceiveData, Error> {
         self.wlt_mut().blind_receive(
             None,
             Assignment::Any,
-            Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
     }
 
+    #[cfg(feature = "electrum")]
     fn blind_receive_with_endpoints(
         &mut self,
         expiration: Option<u64>,
@@ -1008,7 +1125,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .blind_receive(
                 None,
                 Assignment::Any,
-                expiration,
+                expiration.unwrap_or_else(default_rcv_expiration),
                 transport_endpoints,
                 MIN_CONFIRMATIONS,
             )
@@ -1019,13 +1136,11 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         self.wlt_mut().get_address().unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn go_online(&mut self, skip_consistency_check: bool, indexer_url: Option<&str>) -> Online {
         self.go_online_result(skip_consistency_check, indexer_url)
             .unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn go_online_result(
         &mut self,
         skip_consistency_check: bool,
@@ -1036,10 +1151,12 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         self.wlt_mut().go_online(online_options)
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_cfa(&mut self, amounts: Option<&[u64]>, file_path: Option<String>) -> AssetCFA {
         self.issue_asset_cfa_result(amounts, file_path).unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_cfa_result(
         &mut self,
         amounts: Option<&[u64]>,
@@ -1059,6 +1176,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         )
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_ifa(
         &mut self,
         amounts: Option<&[u64]>,
@@ -1069,6 +1187,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_ifa_result(
         &mut self,
         amounts: Option<&[u64]>,
@@ -1110,6 +1229,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .issue_asset_nia(TICKER.to_string(), NAME.to_string(), PRECISION, amounts)
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_uda(
         &mut self,
         details: Option<&str>,
@@ -1120,6 +1240,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .unwrap()
     }
 
+    #[cfg(feature = "electrum")]
     fn issue_asset_uda_result(
         &mut self,
         details: Option<&str>,
@@ -1144,7 +1265,7 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
             .witness_receive(
                 None,
                 Assignment::Any,
-                Some((now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64),
+                default_rcv_expiration(),
                 TRANSPORT_ENDPOINTS.clone(),
                 MIN_CONFIRMATIONS,
             )
@@ -1152,22 +1273,24 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
     }
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 impl SinglesigParty {
+    #[cfg(feature = "electrum")]
     pub(crate) fn get_keys(&self) -> SinglesigKeys {
         self.wallet.get_keys()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn burn(&mut self, asset_id: &str, amount: u64) -> OperationResult {
         self.burn_result(asset_id, amount).unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn burn_begin(&mut self, asset_id: &str, amount: u64) -> String {
         self.burn_begin_result(asset_id, amount).unwrap().psbt
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn burn_begin_result(
         &mut self,
         asset_id: &str,
@@ -1183,7 +1306,7 @@ impl SinglesigParty {
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn burn_result(
         &mut self,
         asset_id: &str,
@@ -1230,7 +1353,7 @@ impl SinglesigParty {
         }
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn create_utxos_begin_result(
         &mut self,
         up_to: bool,
@@ -1247,21 +1370,21 @@ impl SinglesigParty {
         self.create_utxos(false, None, None, FEE_RATE, None);
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn drain_to(&mut self, address: &str) -> String {
         self.wallet
             .drain_to(self.online, address.to_string(), FEE_RATE)
             .unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn inflate_begin(&mut self, asset_id: &str, inflation_amounts: &[u64]) -> String {
         self.inflate_begin_result(asset_id, inflation_amounts)
             .unwrap()
             .psbt
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn inflate_begin_result(
         &mut self,
         asset_id: &str,
@@ -1277,12 +1400,12 @@ impl SinglesigParty {
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn inflate(&mut self, asset_id: &str, inflation_amounts: &[u64]) -> OperationResult {
         self.inflate_result(asset_id, inflation_amounts).unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn inflate_result(
         &mut self,
         asset_id: &str,
@@ -1297,7 +1420,7 @@ impl SinglesigParty {
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn list_unspents_vanilla(
         &mut self,
         min_confirmations: Option<u8>,
@@ -1320,7 +1443,7 @@ impl SinglesigParty {
         self.refresh_result(None, &[]).unwrap().transfers_changed()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn check_save_new_asset(
         &mut self,
         rcv_party: &mut SinglesigParty,
@@ -1363,7 +1486,10 @@ impl SinglesigParty {
             .unwrap();
         drop(runtime);
 
-        rcv_party.wallet.save_new_asset(consignment, txid).unwrap();
+        rcv_party
+            .wallet
+            .save_new_asset(rcv_party.online, consignment, txid)
+            .unwrap();
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1404,12 +1530,12 @@ impl SinglesigParty {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            Some((now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64),
+            default_send_expiration(),
             None,
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn send_begin_result(
         &mut self,
         recipient_map: &HashMap<String, Vec<Recipient>>,
@@ -1420,18 +1546,18 @@ impl SinglesigParty {
             false,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             false,
             None,
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn send_btc(&mut self, address: &str, amount: u64) -> String {
         self.send_btc_result(address, amount).unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn send_btc_result(&mut self, address: &str, amount: u64) -> Result<String, Error> {
         self.wallet.send_btc(
             self.online,
@@ -1443,7 +1569,7 @@ impl SinglesigParty {
         )
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn inflate_end_result(
         &mut self,
         signed_psbt: &str,
@@ -1452,19 +1578,19 @@ impl SinglesigParty {
             .inflate_end(self.online, signed_psbt.to_string())
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn drain_wallet(&mut self) {
         let mut rcv_wallet = get_test_wallet(false, None);
         self.drain_to(&rcv_wallet.get_address().unwrap());
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn drain_to_result(&mut self, address: &str) -> Result<String, Error> {
         self.wallet
             .drain_to(self.online, address.to_string(), FEE_RATE)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn send(
         &mut self,
         recipient_map: HashMap<String, Vec<Recipient>>,
@@ -1478,18 +1604,18 @@ impl SinglesigParty {
                 false,
                 fee_rate,
                 MIN_CONFIRMATIONS,
-                expiration_timestamp,
+                expiration_timestamp.unwrap_or_else(default_send_expiration),
                 None,
             )
             .unwrap()
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn burn_end_result(&mut self, signed_psbt: &str) -> Result<OperationResult, Error> {
         self.wallet.burn_end(self.online, signed_psbt.to_string())
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[cfg(feature = "electrum")]
     pub(crate) fn drain_to_begin_result(
         &mut self,
         address: &str,

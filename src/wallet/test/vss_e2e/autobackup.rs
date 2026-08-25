@@ -94,7 +94,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
         .witness_receive(
             Some(asset_id.clone()),
             Assignment::Fungible(1),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -115,7 +115,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
         .witness_receive(
             None,
             Assignment::Fungible(10),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -139,7 +139,7 @@ fn scenario_3_1_enable_auto_backup_bumps_version_after_each_operation() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");
@@ -220,7 +220,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
         .witness_receive(
             Some(asset_id.clone()),
             Assignment::Fungible(1),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -238,7 +238,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
         .witness_receive(
             None,
             Assignment::Fungible(10),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -262,7 +262,7 @@ fn scenario_3_2_disable_auto_backup_prevents_version_bumps() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");

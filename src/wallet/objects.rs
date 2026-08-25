@@ -189,6 +189,17 @@ pub struct BlockTime {
 // Assets, tokens & media
 // ────────────────────────────────────────────────────────────
 
+/// An asset filter.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AssetFilter {
+    /// Match any or no asset
+    AnyOrNone,
+    /// Match no asset
+    None,
+    /// Match the asset with the given ID
+    Id(String),
+}
+
 /// An asset media file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
@@ -901,7 +912,10 @@ pub struct AssignmentsCollection {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl AssignmentsCollection {
     fn add_fungible(&mut self, amt: u64) {
-        self.fungible += amt;
+        self.fungible = self
+            .fungible
+            .checked_add(amt)
+            .expect("total fungible amount cannot exceed u64::MAX");
     }
 
     fn add_non_fungible(&mut self) {
@@ -909,7 +923,10 @@ impl AssignmentsCollection {
     }
 
     fn add_inflation(&mut self, amt: u64) {
-        self.inflation += amt;
+        self.inflation = self
+            .inflation
+            .checked_add(amt)
+            .expect("total inflation amount cannot exceed u64::MAX");
     }
 
     pub(crate) fn add_opout_state(&mut self, opout: &Opout, state: &AllocatedState) {
@@ -1214,6 +1231,7 @@ impl Invoice {
                 expiration_timestamp: decoded.expiry.map(|t| t as u64),
                 transport_endpoints,
                 network,
+                unknown_query_params: decoded.unknown_query.into_iter().collect(),
             },
         })
     }
@@ -1230,7 +1248,7 @@ impl Invoice {
 }
 
 /// The data of an RGB invoice.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct InvoiceData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
@@ -1253,6 +1271,8 @@ pub struct InvoiceData {
     pub expiration_timestamp: Option<u64>,
     /// Transport endpoints
     pub transport_endpoints: Vec<String>,
+    /// Unknown query parameters carried by the invoice
+    pub unknown_query_params: HashMap<String, String>,
 }
 
 /// An RGB transport endpoint.
@@ -1330,18 +1350,6 @@ pub struct TransferData {
     pub(crate) expiration_timestamp: Option<i64>,
     pub(crate) consignment_path: Option<String>,
     pub(crate) psbt_path: Option<String>,
-}
-
-/// An asset filter.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
-pub enum AssetFilter {
-    /// Match any or no asset
-    AnyOrNone,
-    /// Match no asset
-    None,
-    /// Match the asset with the given ID
-    Id(String),
 }
 
 /// An RGB transfer.
@@ -1466,7 +1474,7 @@ pub struct ReceiveData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
     pub recipient_id: String,
     /// Expiration of the receive operation
-    pub expiration_timestamp: Option<u64>,
+    pub expiration_timestamp: u64,
     /// Batch transfer idx
     pub batch_transfer_idx: i32,
 }
@@ -1479,7 +1487,7 @@ pub struct ReceiveDataInternal {
     pub(crate) recipient_id: String,
     pub(crate) endpoints: Vec<String>,
     pub(crate) created_at: i64,
-    pub(crate) expiration_timestamp: Option<i64>,
+    pub(crate) expiration_timestamp: i64,
     pub(crate) recipient_type_full: RecipientTypeFull,
     pub(crate) blind_seal: Option<GraphSeal>,
     pub(crate) script_pubkey: Option<ScriptBuf>,
@@ -1501,6 +1509,10 @@ pub struct Utxo {
     pub colorable: bool,
     /// Defines if the UTXO already exists (TX that creates it has been broadcasted)
     pub exists: bool,
+    /// Derivation index of the UTXO's script pubkey. `None` if the transaction creating the UTXO
+    /// is not known to the underlying BDK wallet, which is the case while the UTXO does not yet
+    /// exist on-chain and for outputs that do not belong to this wallet.
+    pub derivation_index: Option<u32>,
 }
 
 impl From<DbTxo> for Utxo {
@@ -1513,6 +1525,7 @@ impl From<DbTxo> for Utxo {
                 .expect("DB should contain a valid u64 value"),
             colorable: true,
             exists: x.exists,
+            derivation_index: None,
         }
     }
 }
@@ -1524,6 +1537,7 @@ impl From<LocalOutput> for Utxo {
             btc_amount: x.txout.value.to_sat(),
             colorable: false,
             exists: true,
+            derivation_index: Some(x.derivation_index),
         }
     }
 }
@@ -1854,6 +1868,8 @@ pub enum RefreshTransferStatus {
     WaitingCounterparty,
     /// Waiting for the safe height to be reached
     WaitingSafeHeight,
+    /// Waiting for the transfer transaction to be broadcasted
+    WaitingBroadcast,
     /// Waiting for the transfer transaction to reach the minimum number of confirmations
     WaitingConfirmations,
 }
@@ -1866,8 +1882,9 @@ impl TryFrom<TransferStatus> for RefreshTransferStatus {
         match x {
             TransferStatus::WaitingCounterparty => Ok(RefreshTransferStatus::WaitingCounterparty),
             TransferStatus::WaitingSafeHeight => Ok(RefreshTransferStatus::WaitingSafeHeight),
+            TransferStatus::WaitingBroadcast => Ok(RefreshTransferStatus::WaitingBroadcast),
             TransferStatus::WaitingConfirmations => Ok(RefreshTransferStatus::WaitingConfirmations),
-            _ => Err("RefreshTransferStatus only accepts pending statuses"),
+            _ => Err("RefreshTransferStatus only accepts waiting statuses"),
         }
     }
 }
@@ -2076,4 +2093,63 @@ pub enum TryFailBatchTransferOutcome {
 pub struct FailTransfersOutcome {
     pub transfers_changed: bool,
     pub cannot_fail: bool,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub enum ReceiveMode {
+    Proxy { proxy_url: String },
+    OutOfBand { media_file_paths: Vec<String> },
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) enum ReceiveMatcher {
+    Blind(SecretSeal),
+    Witness(ScriptBuf),
+}
+
+impl DbTransfer {
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn receive_matcher(&self) -> Result<ReceiveMatcher, Error> {
+        let recipient_id = self
+            .recipient_id
+            .clone()
+            .expect("transfer should have a recipient ID");
+        match self
+            .recipient_type
+            .as_ref()
+            .expect("transfer should have a recipient type")
+        {
+            RecipientTypeFull::Blind { .. } => {
+                let beneficiary = XChainNet::<Beneficiary>::from_str(&recipient_id)
+                    .expect("saved recipient ID is invalid");
+                match beneficiary.into_inner() {
+                    Beneficiary::BlindedSeal(secret_seal) => Ok(ReceiveMatcher::Blind(secret_seal)),
+                    _ => unreachable!("beneficiary is blinded"),
+                }
+            }
+            RecipientTypeFull::Witness { .. } => {
+                let script_pubkey = script_buf_from_recipient_id(recipient_id)?
+                    .expect("witness recipient ID should yield a script");
+                Ok(ReceiveMatcher::Witness(script_pubkey))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+mod tests {
+    use super::*;
+    use sea_orm::Iterable;
+
+    #[test]
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn refresh_transfer_status_matches_waiting() {
+        for status in TransferStatus::iter() {
+            assert_eq!(
+                status.waiting(),
+                RefreshTransferStatus::try_from(status).is_ok(),
+            );
+        }
+    }
 }

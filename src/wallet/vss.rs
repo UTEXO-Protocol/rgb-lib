@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bdk_wallet::bitcoin::secp256k1::SecretKey;
-// Note: this is the RustCrypto crate (streaming AEAD + XChaCha20). The similarly
-// named `chacha20-poly1305` (rust-bitcoin, stateless-only) is a transitive dep
+// Note: this is the RustCrypto crate (XChaCha20). The similarly named
+// `chacha20-poly1305` (rust-bitcoin, stateless-only) is a transitive dep
 // of vss-client-ng via bitreq — they are not interchangeable.
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, aead::stream};
+use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, aead::Aead};
 use hkdf::Hkdf;
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ use zip::write::SimpleFileOptions;
 use crate::error::Error;
 use crate::utils::LOG_FILE;
 use crate::utils::setup_logger;
+use crate::wallet::backup::stream_be32_nonce;
+use crate::wallet::core::WALLET_MANIFEST_FILE;
 
 /// Whether auto-backup uploads block the calling operation or run asynchronously.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -780,7 +782,7 @@ pub fn derive_encryption_key(
             details: format!("HKDF expansion failed: {e}"),
         })?;
 
-    Ok(Key::clone_from_slice(&key_bytes))
+    Ok(Key::from(key_bytes))
 }
 
 /// Encrypt data using XChaCha20-Poly1305 with a key derived from `signing_key`
@@ -796,10 +798,8 @@ pub fn encrypt_data(
 ) -> Result<Vec<u8>, Error> {
     let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = metadata.nonce_bytes()?;
-    let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
-
-    let mut stream_encryptor = stream::EncryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = metadata.nonce_bytes()?;
+    let mut position: u32 = 0;
     let mut encrypted = Vec::new();
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_ENCRYPT];
     let mut reader = std::io::Cursor::new(data);
@@ -808,23 +808,25 @@ pub fn encrypt_data(
         let read_count = reader.read(&mut buffer).map_err(|e| Error::Internal {
             details: format!("Failed to read data: {e}"),
         })?;
+        let is_last = read_count != BACKUP_BUFFER_LEN_ENCRYPT;
+        if !is_last && position == u32::MAX {
+            return Err(Error::Internal {
+                details: "data too large".to_string(),
+            });
+        }
 
-        if read_count == BACKUP_BUFFER_LEN_ENCRYPT {
-            let ciphertext = stream_encryptor
-                .encrypt_next(buffer.as_slice())
+        let nonce = stream_be32_nonce(&nonce_prefix, position, is_last);
+        let ciphertext =
+            aead.encrypt(&nonce, &buffer[..read_count])
                 .map_err(|e| Error::Internal {
                     details: format!("Encryption error: {e}"),
                 })?;
-            encrypted.extend(ciphertext);
-        } else {
-            let ciphertext = stream_encryptor
-                .encrypt_last(&buffer[..read_count])
-                .map_err(|e| Error::Internal {
-                    details: format!("Encryption error: {e}"),
-                })?;
-            encrypted.extend(ciphertext);
+        encrypted.extend(ciphertext);
+
+        if is_last {
             break;
         }
+        position += 1;
     }
 
     Ok(encrypted)
@@ -844,10 +846,8 @@ pub fn decrypt_data(
 ) -> Result<Vec<u8>, Error> {
     let key = derive_encryption_key(signing_key, metadata, info)?;
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = metadata.nonce_bytes()?;
-    let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce);
-
-    let mut stream_decryptor = stream::DecryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = metadata.nonce_bytes()?;
+    let mut position: u32 = 0;
     let mut decrypted = Vec::new();
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_DECRYPT];
     let mut reader = std::io::Cursor::new(encrypted);
@@ -858,23 +858,33 @@ pub fn decrypt_data(
         })?;
 
         if read_count == BACKUP_BUFFER_LEN_DECRYPT {
-            let cleartext = stream_decryptor
-                .decrypt_next(buffer.as_slice())
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            if position == u32::MAX {
+                return Err(Error::Internal {
+                    details: "data too large".to_string(),
+                });
+            }
+            let nonce = stream_be32_nonce(&nonce_prefix, position, false);
+            let cleartext =
+                aead.decrypt(&nonce, buffer.as_slice())
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
         } else if read_count == 0 {
             break;
         } else {
-            let cleartext = stream_decryptor
-                .decrypt_last(&buffer[..read_count])
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            let nonce = stream_be32_nonce(&nonce_prefix, position, true);
+            let cleartext =
+                aead.decrypt(&nonce, &buffer[..read_count])
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
             break;
         }
+        position += 1;
     }
 
     Ok(decrypted)
@@ -997,9 +1007,21 @@ fn get_fingerprint_from_zip_bytes(data: &[u8]) -> Result<String, Error> {
 }
 
 /// Check if a zip entry path is a BDK database file (contains xpubs in descriptors)
+///
+/// Matches the `bdk_db`/`bdk_db_watch_only` stems and any recovery sidecar the store
+/// leaves behind (`bdk_db.corrupt[.N]`, `bdk_db.recovering`, …): those copies hold full
+/// descriptors and must never ride into a plaintext backup.
 fn is_bdk_db_file(path: &str) -> bool {
     let filename = path.rsplit('/').next().unwrap_or(path);
-    filename == BDK_DB_NAME || filename == BDK_DB_WO_NAME
+    let stem = filename.split('.').next().unwrap_or(filename);
+    stem == BDK_DB_NAME || stem == BDK_DB_WO_NAME
+}
+
+/// Check if a zip entry path is the wallet manifest, or a temp copy orphaned by a crash
+/// mid-write (contains xpubs and the fingerprint)
+fn is_wallet_manifest_file(path: &str) -> bool {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    filename == WALLET_MANIFEST_FILE || filename == format!("{WALLET_MANIFEST_FILE}.tmp")
 }
 
 /// Sanitize a wallet zip for plaintext (unencrypted) backup
@@ -1007,6 +1029,8 @@ fn is_bdk_db_file(path: &str) -> bool {
 /// Removes sensitive data that should not be stored unencrypted:
 /// - Replaces the master fingerprint directory name with a generic "wallet/" name
 /// - Excludes BDK database files (bdk_db, bdk_db_watch_only) which contain xpubs
+/// - Excludes the wallet manifest, which contains the xpubs and fingerprint in plaintext;
+///   the first `Wallet::new` after restore rewrites it
 ///
 /// Returns the sanitized zip bytes and the extracted fingerprint.
 fn sanitize_zip_for_plaintext(data: &[u8]) -> Result<(Vec<u8>, String), Error> {
@@ -1027,10 +1051,13 @@ fn sanitize_zip_for_plaintext(data: &[u8]) -> Result<(Vec<u8>, String), Error> {
                 details: format!("Failed to read zip entry: {e}"),
             })?;
 
-            let original_name = file.name().to_string();
+            // ZIP APPNOTE mandates '/' separators; a Windows-produced archive may carry
+            // backslashes ("fp\bdk_db"), which the separator-naive predicates below would miss
+            // and leak unredacted. Normalize once so every predicate sees canonical names.
+            let original_name = file.name().replace('\\', "/");
 
-            // Skip BDK database files (contain xpubs in descriptors)
-            if is_bdk_db_file(&original_name) {
+            // Skip files carrying xpubs or the fingerprint in their contents
+            if is_bdk_db_file(&original_name) || is_wallet_manifest_file(&original_name) {
                 continue;
             }
 
@@ -1372,6 +1399,12 @@ mod tests {
         assert!(is_bdk_db_file("abc123/bdk_db_watch_only"));
         assert!(is_bdk_db_file("some/deep/path/bdk_db"));
 
+        // recovery sidecars carry full descriptors and must be excluded (HIGH-3)
+        assert!(is_bdk_db_file("abc123/bdk_db.corrupt"));
+        assert!(is_bdk_db_file("abc123/bdk_db.corrupt.1"));
+        assert!(is_bdk_db_file("abc123/bdk_db.recovering"));
+        assert!(is_bdk_db_file("abc123/bdk_db_watch_only.corrupt"));
+
         assert!(!is_bdk_db_file("bdk_db_other"));
         assert!(!is_bdk_db_file("not_bdk_db"));
         assert!(!is_bdk_db_file("abc123/some_file.txt"));
@@ -1411,6 +1444,23 @@ mod tests {
             zip.start_file(format!("{fingerprint}/subdir/nested.dat"), options)
                 .unwrap();
             zip.write_all(b"nested data").unwrap();
+
+            // Add a wallet manifest with xpubs and the fingerprint
+            zip.start_file(format!("{fingerprint}/{WALLET_MANIFEST_FILE}"), options)
+                .unwrap();
+            zip.write_all(
+                format!(
+                    r#"{{"account_xpub_vanilla":"tpubFakeVanilla","account_xpub_colored":"tpubFakeColored","master_fingerprint":"{fingerprint}"}}"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+
+            // Add an orphaned manifest temp file left by a crash mid-write
+            zip.start_file(format!("{fingerprint}/{WALLET_MANIFEST_FILE}.tmp"), options)
+                .unwrap();
+            zip.write_all(br#"{"account_xpub_vanilla":"tpubFakeVanilla"}"#)
+                .unwrap();
 
             zip.finish().unwrap();
         }
@@ -1453,11 +1503,89 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_zip_excludes_wallet_manifest() {
+        let fingerprint = "a1b2c3d4";
+        let zip_data = create_test_zip(fingerprint);
+
+        let (sanitized, _) = sanitize_zip_for_plaintext(&zip_data).unwrap();
+
+        let reader = std::io::Cursor::new(&sanitized);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let filename = file.name().rsplit('/').next().unwrap().to_string();
+            assert_ne!(filename, WALLET_MANIFEST_FILE);
+            assert_ne!(filename, format!("{WALLET_MANIFEST_FILE}.tmp"));
+            let mut content = Vec::new();
+            file.read_to_end(&mut content).unwrap();
+            let content = String::from_utf8_lossy(&content);
+            assert!(!content.contains("tpubFakeVanilla"));
+            assert!(!content.contains("tpubFakeColored"));
+            assert!(!content.contains(fingerprint));
+        }
+    }
+
+    #[test]
     fn test_get_fingerprint_from_zip_bytes() {
         let fingerprint = "deadbeef";
         let zip_data = create_test_zip(fingerprint);
 
         let extracted = get_fingerprint_from_zip_bytes(&zip_data).unwrap();
         assert_eq!(extracted, fingerprint);
+    }
+
+    /// Zip carrying a Windows backslash-separated bdk_db plus BDK recovery sidecars, all with
+    /// full descriptors. Guards HIGH-4 (separator leak) end-to-end.
+    fn create_test_zip_with_leaky_sidecars(fingerprint: &str) -> Vec<u8> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buffer);
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+            zip.add_directory(format!("{fingerprint}/"), options)
+                .unwrap();
+            zip.start_file(format!("{fingerprint}/some_file.txt"), options)
+                .unwrap();
+            zip.write_all(b"harmless").unwrap();
+
+            // Windows-style backslash separator on the primary bdk_db
+            zip.start_file(format!("{fingerprint}\\bdk_db"), options)
+                .unwrap();
+            zip.write_all(b"tpubLeakBackslash").unwrap();
+
+            // recovery sidecars reached through a backslash-separated directory
+            zip.start_file(format!("{fingerprint}\\bdk_db.corrupt"), options)
+                .unwrap();
+            zip.write_all(format!("tr([{fingerprint}/86'/1'/0']tpubLeakCorrupt/0/*)").as_bytes())
+                .unwrap();
+            zip.start_file(format!("{fingerprint}\\bdk_db.recovering"), options)
+                .unwrap();
+            zip.write_all(b"tpubLeakRecovering").unwrap();
+
+            zip.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn test_sanitize_zip_excludes_bdk_db_recovery_sidecars() {
+        let fingerprint = "a1b2c3d4";
+        let zip_data = create_test_zip_with_leaky_sidecars(fingerprint);
+
+        let (sanitized, _) = sanitize_zip_for_plaintext(&zip_data).unwrap();
+
+        let reader = std::io::Cursor::new(&sanitized);
+        let mut archive = zip::ZipArchive::new(reader).unwrap();
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let mut content = Vec::new();
+            file.read_to_end(&mut content).unwrap();
+            let content = String::from_utf8_lossy(&content);
+            assert!(!content.contains("tpubLeakBackslash"));
+            assert!(!content.contains("tpubLeakCorrupt"));
+            assert!(!content.contains("tpubLeakRecovering"));
+            assert!(!content.contains(fingerprint));
+        }
     }
 }

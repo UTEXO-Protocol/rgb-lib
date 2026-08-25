@@ -1,8 +1,27 @@
 #include "rgblib.h"
 #include <json-c/json.h>
 #include <stdio.h>
+#include <string.h>
+#include <time.h>
 
-int main() {
+/* Run this method and monitor memory usage to check there are no memory leaks
+ */
+void checkMemoryLeak() {
+    for (int i = 0; i < 50; i++) {
+        CResultString keys_res = rgblib_generate_keys("Regtest", "Taproot");
+        if (keys_res.result == Err) {
+            printf("ERR: %s\n", keys_res.inner);
+            return;
+        }
+        free_string(keys_res.inner);
+    }
+}
+
+int main(int argc, char *argv[]) {
+    if (argc > 1 && strcmp(argv[1], "checkMemoryLeak") == 0) {
+        checkMemoryLeak();
+        return EXIT_SUCCESS;
+    }
     const char *bitcoin_network = "Regtest";
     const char *witness_version = "Taproot";
     CResultString keys_res =
@@ -78,8 +97,10 @@ int main() {
     printf("BTC balance: %s\n", btc_balance_1);
 
     printf("Wallet is going online...\n");
-    CResultString online_res =
-        rgblib_go_online(wlt, false, "tcp://localhost:50001");
+    const char *online_options =
+        "{ \"indexer_url\": \"tcp://localhost:50001\", "
+        "\"skip_consistency_check\": false, \"vanilla_sync_lookback\": 20 }";
+    CResultString online_res = rgblib_go_online(wlt, online_options);
     if (online_res.result == Err) {
         printf("ERR: %s\n", online_res.inner);
         return EXIT_FAILURE;
@@ -154,8 +175,10 @@ int main() {
 
     const char *assignment = "{\"Fungible\":77}";
     const char *transport_endpoints = "[\"rpc://127.0.0.1:3000/json-rpc\"]";
+    char expiration_timestamp[32];
+    sprintf(expiration_timestamp, "%lld", (long long)time(NULL) + 86400);
     CResultString receive_data_res = rgblib_blind_receive(
-        wlt, NULL, assignment, NULL, transport_endpoints, "1");
+        wlt, NULL, assignment, expiration_timestamp, transport_endpoints, "1");
     if (receive_data_res.result == Ok) {
         printf("Receive data: %s\n", receive_data_res.inner);
     } else {
@@ -175,7 +198,8 @@ int main() {
     CResultString fee_res = rgblib_get_fee_estimation(wlt, online, "7");
     printf("Fee estimation: %s\n", fee_res.inner);
 
-    CResultString transfers_res = rgblib_list_transfers(wlt, NULL);
+    CResultString transfers_res =
+        rgblib_list_transfers(wlt, "\"AnyOrNone\"", NULL);
     if (transfers_res.result == Err) {
         printf("ERR: %s\n", transfers_res.inner);
         return EXIT_FAILURE;
