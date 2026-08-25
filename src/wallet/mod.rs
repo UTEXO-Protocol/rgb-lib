@@ -55,8 +55,8 @@ pub use singlesig::{SinglesigKeys, Wallet};
 
 pub(crate) use backup::WalletBackup;
 pub(crate) use core::{
-    ASSETS_DIR, MEDIA_DIR, NUM_KNOWN_SCHEMAS, WalletCore, WalletInternals, setup_bdk, setup_db,
-    setup_new_wallet, setup_rgb,
+    ASSETS_DIR, MEDIA_DIR, NUM_KNOWN_SCHEMAS, WalletCore, WalletInternals, WalletManifest,
+    setup_bdk, setup_db, setup_new_wallet, setup_rgb,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use core::{SyncKeychain, SyncOptions, SyncStrategy};
@@ -66,8 +66,8 @@ pub(crate) use indexer::Indexer;
 pub(crate) use objects::{
     AssetInfo, AssetSpend, BeginOperationData, BtcChange, FailTransfersOutcome, LocalRecipient,
     LocalRecipientData, LocalWitnessData, OnlineData, PrepareRgbPsbtResult,
-    PrepareTransferPsbtResult, ReceivedConsignmentMeta, RefreshResultTrait,
-    TryFailBatchTransferOutcome,
+    PrepareTransferPsbtResult, ReceiveMatcher, ReceiveMode, ReceivedConsignmentMeta,
+    RefreshResultTrait, TryFailBatchTransferOutcome,
 };
 pub(crate) use objects::{
     InfoAssetTransfer, InfoBatchTransfer, IssueData, IssuedAssetDetails, LocalAssetData,

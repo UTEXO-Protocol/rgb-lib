@@ -138,13 +138,10 @@ fn success() {
         transfer_recv_witness.assignments,
         vec![Assignment::Fungible(amount * 2)]
     );
-    assert_eq!(
-        transfer_recv_blind.status,
-        TransferStatus::WaitingConfirmations
-    );
+    assert_eq!(transfer_recv_blind.status, TransferStatus::WaitingBroadcast);
     assert_eq!(
         transfer_recv_witness.status,
-        TransferStatus::WaitingConfirmations
+        TransferStatus::WaitingBroadcast
     );
     assert_eq!(transfer_recv_blind.txid, Some(txid.clone()));
     assert_eq!(transfer_recv_witness.txid, Some(txid.clone()));
@@ -209,7 +206,7 @@ fn filters() {
     let txid = party.send_retry(&recipient_map);
     assert!(!txid.is_empty());
 
-    // Any + txid: the tx's transfers across all assets
+    // AnyOrNone + txid: the tx's transfers across all assets
     let by_txid = party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
     assert_eq!(by_txid.len(), 2);
     assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
@@ -226,7 +223,7 @@ fn filters() {
         .collect();
     assert_eq!(vec![nia_by_txid[0].idx], expected);
 
-    // Any + no txid: the whole history (2 issuances + 2 sends)
+    // AnyOrNone + no txid: the whole history (2 issuances + 2 sends)
     let all = party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
     assert_eq!(all.len(), 4);
 
@@ -234,8 +231,20 @@ fn filters() {
     let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
     assert_eq!(pending.len(), 2);
 
+    // extra receive that nothing is sent to, stays asset-less
+    let receive_extra = rcv_party.blind_receive();
+
     // settle the batch so the change is spendable again
     rcv_party.wait_for_refresh(None);
+    // the refresh tied the 2 receives to their assets, only the extra one stays asset-less
+    let all_rcv = rcv_party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
+    assert_eq!(all_rcv.len(), 3);
+    let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].recipient_id, Some(receive_extra.recipient_id));
+    // receiver side: the tx's transfers span 2 batch transfers sharing the same txid
+    let rcv_by_txid = rcv_party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
+    assert_eq!(rcv_by_txid.len(), 2);
     party.wait_for_refresh(None);
     mine(false);
     rcv_party.wait_for_refresh(None);
@@ -260,10 +269,9 @@ fn filters() {
     );
 
     // unknown txid: empty
-    let unknown = "0000000000000000000000000000000000000000000000000000000000000000";
     assert!(
         party
-            .list_transfers_filtered(AssetFilter::AnyOrNone, Some(unknown))
+            .list_transfers_filtered(AssetFilter::AnyOrNone, Some(FAKE_TXID))
             .is_empty()
     );
 }
@@ -278,9 +286,7 @@ fn fail() {
     assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
 
     // asset not found also when a txid is given
-    let result = party.list_transfers_filtered_result(
-        AssetFilter::Id(s!("rgb1inexistent")),
-        Some("0000000000000000000000000000000000000000000000000000000000000000"),
-    );
+    let result = party
+        .list_transfers_filtered_result(AssetFilter::Id(s!("rgb1inexistent")), Some(FAKE_TXID));
     assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
 }

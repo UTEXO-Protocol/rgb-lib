@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rgb_lib::wallet::{
     DatabaseType, MpcWallet, Online, OnlineOptions, Recipient, SyncKeychain, SyncOptions,
@@ -124,6 +125,14 @@ fn electrum_url() -> String {
 fn proxy_url() -> String {
     env::var("RGB_PROXY_URL")
         .unwrap_or_else(|_| "rpc://proxy.iriswallet.com/0.2/json-rpc".to_string())
+}
+
+fn default_expiration() -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    now + 86400
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +409,7 @@ fn cmd_receive(state: &mut E2eState) {
         .blind_receive(
             asset_id,
             Assignment::Fungible(amount),
-            None,
+            default_expiration(),
             vec![proxy_url()],
             0,
         )
@@ -412,9 +421,7 @@ fn cmd_receive(state: &mut E2eState) {
     println!("[OK] Blind receive created!");
     println!("     Recipient ID: {}", receive_data.recipient_id);
     println!("     Invoice:      {}", receive_data.invoice);
-    if let Some(exp) = receive_data.expiration_timestamp {
-        println!("     Expires:      {exp}");
-    }
+    println!("     Expires:      {}", receive_data.expiration_timestamp);
 
     state.last_step = "receive".to_string();
     save_state(state);
@@ -463,7 +470,7 @@ fn cmd_send(state: &mut E2eState) {
     );
 
     println!("[..] Sending {amount} tokens to {recipient_id}...");
-    match wallet.send(online, recipient_map, true, 1, 0, None) {
+    match wallet.send(online, recipient_map, true, 1, 0, default_expiration()) {
         Ok(result) => {
             println!("[OK] Send succeeded!");
             println!("     Txid:  {}", result.txid);

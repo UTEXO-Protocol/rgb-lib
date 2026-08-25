@@ -32,6 +32,9 @@ fn success() {
     assert_eq!(wallet_1_data.max_allocations_per_utxo, 1);
 
     // test default values
+    // the wallet directory is named after the master fingerprint, which doesn't depend on the
+    // network, so reusing the keys above would land this wallet in wallet_1's directory
+    let keys_2 = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
     let wallet_2 = Wallet::new(
         WalletData {
             data_dir: test_data_dir_str.clone(),
@@ -41,7 +44,7 @@ fn success() {
             supported_schemas: AssetSchema::VALUES.to_vec(),
             reuse_addresses: false,
         },
-        SinglesigKeys::from_keys_no_mnemonic(&keys, None),
+        SinglesigKeys::from_keys_no_mnemonic(&keys_2, None),
     )
     .unwrap();
     let wallet_2_data = wallet_2.get_wallet_data();

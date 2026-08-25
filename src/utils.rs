@@ -25,7 +25,7 @@ pub(crate) const KEYCHAIN_BTC: u8 = 0;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const INDEXER_STOP_GAP: usize = 20;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-pub(crate) const INDEXER_TIMEOUT: u8 = 10;
+pub(crate) const INDEXER_TIMEOUT: u64 = 10;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const INDEXER_RETRIES: u8 = 3;
 #[cfg(feature = "electrum")]
@@ -568,7 +568,7 @@ pub(crate) fn get_indexer_and_resolver(
         Indexer::Electrum(_) => {
             let electrum_config = ConfigBuilder::new()
                 .retry(INDEXER_RETRIES)
-                .timeout(Some(INDEXER_TIMEOUT))
+                .timeout(Some(Duration::from_secs(INDEXER_TIMEOUT)))
                 .build();
             AnyResolver::electrum_blocking(indexer_url, Some(electrum_config)).expect(
                 "electrum_blocking uses the same config as build_indexer which already succeeded",
@@ -578,7 +578,7 @@ pub(crate) fn get_indexer_and_resolver(
         Indexer::Esplora(_) => {
             let esplora_config = EsploraBuilder::new(indexer_url)
                 .max_retries(INDEXER_RETRIES.into())
-                .timeout(INDEXER_TIMEOUT.into());
+                .timeout(INDEXER_TIMEOUT);
             AnyResolver::esplora_blocking(esplora_config)
                 .expect("esplora_blocking wraps an infallible builder and always returns Ok")
         }
@@ -600,7 +600,7 @@ pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let opts = ConfigBuilder::new()
             .retry(INDEXER_RETRIES)
-            .timeout(Some(INDEXER_TIMEOUT))
+            .timeout(Some(Duration::from_secs(INDEXER_TIMEOUT)))
             .build();
         if let Ok(client) = ElectrumClient::from_config(indexer_url, opts) {
             let client = BdkElectrumClient::new(client);
@@ -613,7 +613,7 @@ pub(crate) fn build_indexer(indexer_url: &str) -> Option<Indexer> {
         {
             let opts = EsploraBuilder::new(indexer_url)
                 .max_retries(INDEXER_RETRIES.into())
-                .timeout(INDEXER_TIMEOUT.into());
+                .timeout(INDEXER_TIMEOUT);
             let client = EsploraClient::from_builder(opts);
             let indexer = Indexer::Esplora(Box::new(client));
             return Some(indexer);
@@ -996,7 +996,6 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn upsert_witness(
         &mut self,
         witness_id: RgbTxid,

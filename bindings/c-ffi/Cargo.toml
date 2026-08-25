@@ -6,7 +6,7 @@ authors = [
     "Nicola Busanello <nicola.busanello@gmail.com>",
 ]
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.94.0"
 build = "build.rs"
 
 [lib]
@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib"]
 name = "rgblibcffi"
 
 [dependencies]
-rgb-lib = { version = "0.3.0-beta.6", path = "../../", features = [
+rgb-lib = { version = "0.3.0-beta.7", path = "../../", features = [
     "electrum",
     "esplora",
 ] }
@@ -26,7 +26,7 @@ thiserror = { version = "2.0", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 [build-dependencies]
-cbindgen = "0.29.0"
+cbindgen = "0.29"
 
 [workspace]
 
