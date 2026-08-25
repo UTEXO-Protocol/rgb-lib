@@ -1,5 +1,5 @@
 #![allow(clippy::too_many_arguments)]
-// Generated UniFFI scaffolding defines a large metadata const; not under our control.
+// uniffi-generated scaffolding declares a large metadata array as const; not editable here
 #![allow(clippy::large_const_arrays)]
 
 use std::{
@@ -22,7 +22,7 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 
 use rgb_lib::{
     AssetSchema, Assignment as RgbLibAssignment, CloseMethod, ContractId, Error as RgbLibError,
-    FileContent, RgbTransfer, RgbTransport, TransferStatus, TransportType, WalletTransactionType,
+    FileContent, RgbTransfer, TransferStatus, TransportType, WalletTransactionType,
     bdk_wallet::bitcoin::{OutPoint as BitcoinOutPoint, Psbt, Txid, secp256k1::SecretKey},
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
@@ -138,7 +138,6 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::Any => RgbLibAssignment::Any,
         }
     }
-}
 }
 
 /// Result of accepting a transfer from consignment bytes.
@@ -267,26 +266,6 @@ fn save_rgb_transfer(transfer: &RgbTransfer) -> Result<Vec<u8>, RgbLibError> {
     Ok(buf)
 }
 
-fn parse_rgb_transport(endpoint: &str) -> Result<RgbTransport, RgbLibError> {
-    RgbTransport::from_str(endpoint).map_err(|e| RgbLibError::InvalidTransportEndpoint {
-        details: e.to_string(),
-    })
-}
-
-pub enum AssetFilter {
-    AnyOrNone,
-    None,
-    Id { asset_id: String },
-}
-impl From<AssetFilter> for RgbLibAssetFilter {
-    fn from(orig: AssetFilter) -> Self {
-        match orig {
-            AssetFilter::AnyOrNone => RgbLibAssetFilter::AnyOrNone,
-            AssetFilter::None => RgbLibAssetFilter::None,
-            AssetFilter::Id { asset_id } => RgbLibAssetFilter::Id(asset_id),
-        }
-    }
-}
 pub struct InvoiceData {
     pub recipient_id: String,
     pub proxy_recipient_id: String,
@@ -1279,13 +1258,19 @@ impl Wallet {
         psbt: String,
         coloring_info: ColoringInfo,
         input_outpoints: Vec<Outpoint>,
+        min_confirmations: u8,
+        expiration_timestamp: Option<u64>,
     ) -> Result<HtlcPrepareResult, RgbLibError> {
         let mut psbt = Psbt::from_str(&psbt)?;
         let coloring = to_rgb_coloring_info(coloring_info)?;
         let input_outpoints = to_bitcoin_outpoints(input_outpoints)?;
-        let result = self
-            ._get_wallet()
-            .htlc_prepare(&mut psbt, coloring, input_outpoints)?;
+        let result = self._get_wallet().htlc_prepare(
+            &mut psbt,
+            coloring,
+            input_outpoints,
+            min_confirmations,
+            expiration_timestamp,
+        )?;
         Ok(HtlcPrepareResult {
             operation_id: result.operation_id,
             colored_psbt: result.colored_psbt,
@@ -1293,8 +1278,8 @@ impl Wallet {
         })
     }
 
-    fn htlc_apply(&self, operation_id: String) -> Result<(), RgbLibError> {
-        self._get_wallet().htlc_apply(&operation_id)
+    fn htlc_apply(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().htlc_apply(online, &operation_id)
     }
 
     fn htlc_abort(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
@@ -1325,6 +1310,7 @@ impl Wallet {
 
     fn fetch_and_accept_transfer_by_recipient_id(
         &self,
+        online: Online,
         proxy_recipient_id: String,
         witness_recipient_id: String,
         consignment_endpoint: String,
@@ -1332,13 +1318,13 @@ impl Wallet {
         min_confirmations: u8,
         expected: ExpectedTransfer,
     ) -> Result<AcceptTransferResult, RgbLibError> {
-        let endpoint = parse_rgb_transport(&consignment_endpoint)?;
         let (transfer, assignments) = self
             ._get_wallet()
             .fetch_and_accept_transfer_by_recipient_id(
+                online,
                 proxy_recipient_id,
                 witness_recipient_id,
-                endpoint,
+                &consignment_endpoint,
                 blinding,
                 min_confirmations,
                 expected.into(),
@@ -2378,7 +2364,8 @@ mod tests {
         let script = wallet
             .peek_address(KeychainKind::External, 0)
             .script_pubkey();
-        let recipient_id = recipient_id_from_script_buf(script.clone(), BitcoinNetwork::Regtest);
+        let recipient_id =
+            recipient_id_from_script_buf(script.clone(), BitcoinNetwork::Regtest).unwrap();
         let script_hex = script_hex_from_recipient_id(recipient_id).unwrap().unwrap();
         assert_eq!(script_hex, script.to_hex_string());
     }

@@ -228,7 +228,13 @@ fn color_consume_and_htlc_ops_survive_vss_restore() {
         ..
     } = party_send
         .wallet
-        .htlc_prepare(&mut psbt, coloring_info, vec![input])
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
         .unwrap();
 
     let transfers_before = party_send.list_transfers(Some(&asset.asset_id));

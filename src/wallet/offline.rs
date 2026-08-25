@@ -1000,7 +1000,7 @@ pub trait WalletOffline: WalletBackup {
             }
             RecipientType::Witness => {
                 let script_pubkey = self.get_new_address()?.script_pubkey();
-                let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
+                let beneficiary = beneficiary_from_script_buf(script_pubkey.clone())?;
                 // Per-invoice nonce is only needed when address reuse is on:
                 // without reuse, each witness_receive draws a fresh script, so
                 // the script-derived recipient_id is already unique per call.

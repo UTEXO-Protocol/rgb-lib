@@ -36,6 +36,7 @@ interface RgbLibError {
   AddressReuseDisabled();
   AllocationsAlreadyAvailable();
   AssetNotFound(string asset_id);
+  BatchTransferAlreadyExists(string txid, i32 idx);
   BatchTransferNotFound(i32 idx);
   BitcoinNetworkMismatch();
   CannotAbortPendingVanillaTx();
@@ -144,6 +145,7 @@ interface RgbLibError {
   UnknownRgbSchema(string schema_id);
   UnknownTransfer(string txid);
   UnexpectedTransfer(string details);
+  UnsafeTransferHistory(string details);
   UnsupportedBackupVersion(string version);
   UnsupportedBurn(AssetSchema asset_schema);
   UnsupportedInflation(AssetSchema asset_schema);
@@ -994,10 +996,11 @@ interface Wallet {
   // Payloads are file-backed under operation_dir (not raw consignment bytes).
   [Throws=RgbLibError]
   HtlcPrepareResult htlc_prepare(
-    string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints);
+    string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints,
+    u8 min_confirmations, u64? expiration_timestamp);
 
   [Throws=RgbLibError]
-  void htlc_apply(string operation_id);
+  void htlc_apply(Online online, string operation_id);
 
   [Throws=RgbLibError]
   void htlc_abort(Online online, string operation_id);
@@ -1015,6 +1018,7 @@ interface Wallet {
   // Raw fetch/accept halves are Rust-only (`*_unchecked`) — do not re-export them here.
   [Throws=RgbLibError]
   AcceptTransferResult fetch_and_accept_transfer_by_recipient_id(
+    Online online,
     string proxy_recipient_id,
     string witness_recipient_id,
     string consignment_endpoint,

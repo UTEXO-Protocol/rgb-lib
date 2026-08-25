@@ -23,6 +23,16 @@ pub enum Error {
         asset_id: String,
     },
 
+    /// An outgoing batch transfer for the same TXID is already registered (fail or abort it
+    /// before preparing the same transaction again)
+    #[error("Outgoing batch transfer with idx {idx} already exists for TXID {txid}")]
+    BatchTransferAlreadyExists {
+        /// TXID shared by the conflicting batch transfer
+        txid: String,
+        /// Idx of the conflicting batch transfer
+        idx: i32,
+    },
+
     /// The requested batch transfer was not found
     #[error("Batch transfer with idx {idx} not found")]
     BatchTransferNotFound {
@@ -398,8 +408,7 @@ pub enum Error {
         details: String,
     },
 
-    /// The provided recipient ID is neither a blinded UTXO or a script.
-    /// Also used when a blinded ID is supplied where a witness script is required.
+    /// The provided recipient ID is neither a blinded UTXO or a script
     #[error("The provided recipient ID is neither a blinded UTXO or a script")]
     InvalidRecipientID,
 
@@ -666,6 +675,14 @@ pub enum Error {
     UnknownTransfer {
         /// Transfer TXID
         txid: String,
+    },
+
+    /// Consignment history includes transactions that are not yet safe from reorgs (retryable
+    /// once the listed transactions have matured)
+    #[error("Unsafe consignment history: {details}")]
+    UnsafeTransferHistory {
+        /// Error details, including the offending TXIDs
+        details: String,
     },
 
     /// The backup version is not supported

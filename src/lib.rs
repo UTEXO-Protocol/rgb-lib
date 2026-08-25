@@ -139,11 +139,9 @@ pub use mpc::dfns::{DfnsConfig, DfnsProvider};
 pub use rgbstd::validation::{ValidationConfig, ValidationError};
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use std::collections::BTreeSet;
-#[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
     cmp::{Ordering, max, min},
-    collections::hash_map::DefaultHasher,
+    collections::{BTreeSet, hash_map::DefaultHasher},
     hash::Hasher,
     num::NonZeroU32,
 };
