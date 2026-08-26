@@ -852,6 +852,13 @@ dictionary InitOperationResult {
 };
 
 [Remote]
+dictionary BridgeInitResult {
+  string psbt;
+  i32 operation_idx;
+  string opid;
+};
+
+[Remote]
 enum UserRole {
   "Cosigner",
   "WatchOnly",
@@ -1214,7 +1221,7 @@ interface MultisigWallet {
     u64 fee_rate, u8 min_confirmations);
 
   [Throws=RgbLibError]
-  InitOperationResult bridge_init(
+  BridgeInitResult bridge_init(
     Online online, string asset_id, Recipient recipient, u64 fee_rate,
     u8 min_confirmations);
 

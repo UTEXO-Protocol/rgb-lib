@@ -61,6 +61,27 @@ fn abi_word(data: &str, index: usize) -> Result<[u8; 32], Error> {
     Ok(buf)
 }
 
+/// Decode a 32-byte indexed topic from its hex string.
+fn topic_word(topic: &str) -> Result<[u8; 32], Error> {
+    let hex = topic.strip_prefix("0x").unwrap_or(topic);
+    let mut buf = [0u8; 32];
+    hex::decode_to_slice(hex, &mut buf).map_err(|e| Error::Network {
+        details: format!("topic hex decode error: {e}"),
+    })?;
+    Ok(buf)
+}
+
+/// Read an ABI uint256 as u64, refusing values that don't fit.
+/// Truncating would silently disagree with the amount the mint commits to.
+fn word_as_u64(word: [u8; 32]) -> Result<u64, Error> {
+    if word[..24].iter().any(|&b| b != 0) {
+        return Err(Error::Network {
+            details: s!("FundsIn amount exceeds u64 range"),
+        });
+    }
+    Ok(u64::from_be_bytes(word[24..32].try_into().unwrap()))
+}
+
 impl EthLog {
     /// Try to parse this log as a FundsIn event.
     /// Returns `None` if the log topic doesn't match.
@@ -73,6 +94,16 @@ impl EthLog {
             return Ok(None);
         }
 
+        // Deployed UTEXO format, operation id still indexed:
+        // event FundsIn(address indexed sender, uint256 indexed operationId, uint256 amount)
+        // topics = [sig, sender, operationId], data = abi.encode(amount)
+        if self.topics.len() >= 3 {
+            return Ok(Some(FundsInEvent {
+                amount: word_as_u64(abi_word(&self.data, 0)?)?,
+                operation_id: topic_word(&self.topics[2])?,
+            }));
+        }
+
         let data_hex = self.data.strip_prefix("0x").unwrap_or(&self.data);
         let words = data_hex.len() / 64;
 
@@ -80,8 +111,7 @@ impl EthLog {
         // event FundsIn(address token, uint256 amount, uint256 operationId)
         // data = abi.encode(token, amount, operationId)
         if words >= 3 {
-            let amount_word = abi_word(&self.data, 1)?;
-            let amount = u64::from_be_bytes(amount_word[24..32].try_into().unwrap());
+            let amount = word_as_u64(abi_word(&self.data, 1)?)?;
             let operation_id = abi_word(&self.data, 2)?;
             return Ok(Some(FundsInEvent {
                 amount,
@@ -94,8 +124,7 @@ impl EthLog {
         // data = abi.encode(operationId, amount)
         if words >= 2 {
             let operation_id = abi_word(&self.data, 0)?;
-            let amount_word = abi_word(&self.data, 1)?;
-            let amount = u64::from_be_bytes(amount_word[24..32].try_into().unwrap());
+            let amount = word_as_u64(abi_word(&self.data, 1)?)?;
             return Ok(Some(FundsInEvent {
                 amount,
                 operation_id,
@@ -237,5 +266,78 @@ impl EthClient {
         resp.result.ok_or_else(|| Error::Network {
             details: s!("web3_clientVersion returned null result"),
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn word(hex_tail: &str) -> String {
+        format!("{:0>64}", hex_tail)
+    }
+
+    fn log(topics: &[&str], data_words: &[&str]) -> EthLog {
+        EthLog {
+            address: s!("0x0000000000000000000000000000000000000001"),
+            topics: topics.iter().map(|t| t.to_string()).collect(),
+            data: format!(
+                "0x{}",
+                data_words.iter().map(|w| word(w)).collect::<String>()
+            ),
+            block_number: None,
+            transaction_hash: None,
+            log_index: None,
+        }
+    }
+
+    const OPID: &str = "00000000000000000000000000000000000000000000000000000000000000ab";
+
+    #[test]
+    fn decodes_indexed_operation_id() {
+        // what the currently deployed bridge emits: rgbOpId is indexed
+        let log = log(
+            &[FUNDS_IN_TOPIC, &word("dead"), &format!("0x{OPID}")],
+            &["64"],
+        );
+        let event = log.as_funds_in().unwrap().unwrap();
+        assert_eq!(event.amount, 100);
+        assert_eq!(hex::encode(event.operation_id), OPID);
+    }
+
+    #[test]
+    fn decodes_non_indexed_operation_id() {
+        // what BFA expects once `indexed` is dropped from the event
+        let log = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", "64"]);
+        let event = log.as_funds_in().unwrap().unwrap();
+        assert_eq!(event.amount, 100);
+        assert_eq!(hex::encode(event.operation_id), OPID);
+    }
+
+    #[test]
+    fn decodes_legacy_layout() {
+        let log = log(&[FUNDS_IN_TOPIC], &["beef", "64", "ab"]);
+        let event = log.as_funds_in().unwrap().unwrap();
+        assert_eq!(event.amount, 100);
+        assert_eq!(hex::encode(event.operation_id), OPID);
+    }
+
+    #[test]
+    fn ignores_other_events() {
+        let log = log(&[&word("1234")], &["64"]);
+        assert!(log.as_funds_in().unwrap().is_none());
+    }
+
+    #[test]
+    fn rejects_amount_above_u64() {
+        let amount = "01".to_string() + &"00".repeat(8);
+        let log = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", &amount]);
+        assert!(log.as_funds_in().is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_payload_size() {
+        let log = log(&[FUNDS_IN_TOPIC], &["64"]);
+        assert!(log.as_funds_in().is_err());
     }
 }

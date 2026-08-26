@@ -26,10 +26,11 @@ use rgb_lib::{
     utils::BitcoinNetwork,
     wallet::{
         Address as RgbLibAddress, AssetBFA, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
-        AssignmentsCollection, Balance, BlockTime, BridgeBeginResult, BridgeDetails, BtcBalance,
-        BurnBeginResult, BurnDetails, Cosigner as CosignerData, DatabaseType, EmbeddedMedia,
-        HubInfo, InflateBeginResult, InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
-        InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
+        AssignmentsCollection, Balance, BlockTime, BridgeBeginResult, BridgeDetails,
+        BridgeInitResult, BtcBalance, BurnBeginResult, BurnDetails, Cosigner as CosignerData,
+        DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult, InflateDetails,
+        InitOperationResult, Invoice as RgbLibInvoice, InvoiceData as RgbLibInvoiceData, Media,
+        Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
         OperationResult, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo,
@@ -1909,7 +1910,7 @@ impl MultisigWallet {
         recipient: Recipient,
         fee_rate: u64,
         min_confirmations: u8,
-    ) -> Result<InitOperationResult, RgbLibError> {
+    ) -> Result<BridgeInitResult, RgbLibError> {
         self._get_wallet().bridge_init(
             online,
             asset_id,

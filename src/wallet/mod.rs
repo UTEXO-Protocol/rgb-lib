@@ -26,12 +26,12 @@ pub(crate) mod test;
 pub use backup::restore_backup;
 #[cfg(feature = "mpc")]
 pub use mpc::MpcWallet;
-pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use multisig::{
-    HubInfo, InitOperationResult, MultisigOnlineOptions, MultisigVotingStatus, Operation,
-    OperationInfo, RespondToOperation, UserRole,
+    BridgeInitResult, HubInfo, InitOperationResult, MultisigOnlineOptions, MultisigVotingStatus,
+    Operation, OperationInfo, RespondToOperation, UserRole,
 };
+pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 pub use objects::{
     Address, AssetBFA, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection,
     Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia, Invoice, InvoiceData, Media,

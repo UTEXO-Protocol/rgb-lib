@@ -140,3 +140,34 @@ fn wrong_schema_fails() {
         })
     ));
 }
+
+/// The multisig path reads the OpId back out of the fascia file, the singlesig path gets it
+/// from the transition it just built. The Go bridge trusts them to be the same value.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn fascia_opid_matches_begin_result() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_bfa(1, bridge_contract.address.clone(), None);
+
+    party.create_utxos_default();
+    let receive_data = party.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+
+    let begin = party.bridge_begin(&asset.asset_id, recipient);
+    let from_fascia = crate::wallet::multisig::bridge_opid_from_fascia_path(Path::new(
+        &begin.details.fascia_path,
+    ))
+    .unwrap();
+    assert_eq!(from_fascia, begin.details.opid);
+}

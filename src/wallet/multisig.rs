@@ -665,6 +665,25 @@ fn extract_fascia_from_files(files: &[FileResponse]) -> Result<Fascia, Error> {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 fn extract_bridge_opid_from_fascia(files: &[FileResponse]) -> Result<String, Error> {
     let fascia = extract_fascia_from_files(files)?;
+    bridge_opid_from_fascia(&fascia)
+}
+
+/// Read the OpId of the bridge transition from a fascia file at a bare path.
+///
+/// Only the tests have a bare path: the hub path locates the fascia in a `FileResponse` list.
+#[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
+pub(crate) fn bridge_opid_from_fascia_path(path: &Path) -> Result<String, Error> {
+    let file = fs::File::open(path)?;
+    let fascia = serde_json::from_reader(io::BufReader::new(file)).map_err(|_| {
+        Error::MultisigUnexpectedData {
+            details: s!("invalid fascia"),
+        }
+    })?;
+    bridge_opid_from_fascia(&fascia)
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn bridge_opid_from_fascia(fascia: &Fascia) -> Result<String, Error> {
     for (_, bundle) in fascia.bundles() {
         for KnownTransition { transition, opid } in &bundle.known_transitions {
             if transition.transition_type == TS_BRIDGE {
@@ -1079,6 +1098,19 @@ pub struct InitOperationResult {
     pub psbt: String,
     /// Index of the operation on the hub
     pub operation_idx: i32,
+}
+
+/// Result of initiating a bridge (BFA mint) on the hub.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeInitResult {
+    /// PSBT of the operation
+    pub psbt: String,
+    /// Index of the operation on the hub
+    pub operation_idx: i32,
+    /// OpId the EVM lock must commit to
+    pub opid: String,
 }
 
 /// The role of the user on the hub.
@@ -2367,9 +2399,14 @@ impl MultisigWallet {
             PostData::BeginOperationData(begin_operation_data) => {
                 let fascia_path = begin_operation_data.transfer_dir.join(FASCIA_FILE);
                 files.push((FileType::Fascia, FileSource::Path(fascia_path)));
-                // the send consignment is fully determined by begin-time data, so
-                // attach it already now to let cosigners access it from the hub
-                if matches!(operation_type, OperationType::SendRgb) {
+                // the consignment is fully determined by begin-time data, so attach it
+                // already now to let cosigners access it from the hub. A bridge mint
+                // needs it for the same reason a send does: the cosigner validates the
+                // transition it is about to sign.
+                if matches!(
+                    operation_type,
+                    OperationType::SendRgb | OperationType::Bridge
+                ) {
                     let (_, transfer_dir, info_contents, fascia) =
                         self.get_transfer_end_data(&begin_operation_data.psbt)?;
                     self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
@@ -2567,11 +2604,11 @@ impl MultisigWallet {
     /// Prepare a bridge (BFA mint) transition toward `recipient` and post the operation to the
     /// hub.
     ///
-    /// The returned [`InitOperationResult`] carries the OpId that must be committed to the
+    /// The returned [`BridgeInitResult`] carries the OpId that must be committed to the
     /// matching EVM lock: RGB consensus validates the mint against the bridge contract's
     /// `FundsIn` log for that id. The PSBT is broadcast only after the lock is confirmed.
     ///
-    /// Returns a PSBT ready to be signed and the operation index on the hub.
+    /// Returns a PSBT ready to be signed, the operation index on the hub and the OpId.
     pub fn bridge_init(
         &mut self,
         online: Online,
@@ -2579,13 +2616,19 @@ impl MultisigWallet {
         recipient: Recipient,
         fee_rate: u64,
         min_confirmations: u8,
-    ) -> Result<InitOperationResult, Error> {
+    ) -> Result<BridgeInitResult, Error> {
         info!(self.logger(), "Initiate bridging...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
         let data =
             self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        // Captured before `data` moves into the post: a second begin would pick a
+        // different bridge right and produce a different OpId.
+        let opid = data
+            .opid
+            .clone()
+            .expect("a bridge transition always yields an opid");
         let res = self.post_operation(
             OperationType::Bridge,
             PostData::BeginOperationData(Box::new(data)),
@@ -2593,7 +2636,11 @@ impl MultisigWallet {
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Initiate bridging completed");
-        Ok(res)
+        Ok(BridgeInitResult {
+            psbt: res.psbt,
+            operation_idx: res.operation_idx,
+            opid,
+        })
     }
 
     /// Prepare the PSBT to burn the specified `amount` of RGB assets, with the provided `fee_rate`

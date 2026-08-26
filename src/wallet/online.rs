@@ -1244,11 +1244,18 @@ pub trait WalletOnline: WalletOffline {
                     };
                     let eth_client = EthClient::new(&eth_rpc_url)?;
                     for log in &eth_client.get_logs(&address, "0x0", "latest")? {
-                        if let Some(funds_in) = log.as_funds_in()? {
-                            events.push(Event::new(
+                        // A log we cannot decode cannot authorise a mint, but it must not
+                        // poison the whole set: one amount above u64 would otherwise break
+                        // every mint of this asset, forever.
+                        match log.as_funds_in() {
+                            Ok(Some(funds_in)) => events.push(Event::new(
                                 OpId::from(funds_in.operation_id),
                                 RevealedValue::from(funds_in.amount),
-                            ));
+                            )),
+                            Ok(None) => {}
+                            Err(e) => {
+                                debug!(self.logger(), "skipping undecodable FundsIn log: {}", e)
+                            }
                         }
                     }
                 }
