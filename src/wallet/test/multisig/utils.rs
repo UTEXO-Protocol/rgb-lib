@@ -839,6 +839,9 @@ pub(super) fn issue_asset(
                 .sum::<u64>();
             (IssuedAsset::Ifa(asset), supply, Some(inflation_supply))
         }
+        AssetSchema::Bfa => unimplemented!(
+            "BFA issuance needs bridge rights and a contract address; this helper does not carry them"
+        ),
     };
 
     check_issuance(initiator, others, asset.asset_id(), schema);
@@ -1035,6 +1038,7 @@ fn check_asset_metadata<P: OfflineSigParty<W = MultisigWallet>>(
             AssetSchema::Nia | AssetSchema::Ifa => {
                 assert_eq!(meta.token, None);
             }
+            AssetSchema::Bfa => {}
         }
     }
 }
@@ -1128,6 +1132,13 @@ fn check_issuance(
                 .collect(),
             AssetSchema::Ifa => assets
                 .ifa
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|a| a.asset_id.as_str())
+                .collect(),
+            AssetSchema::Bfa => assets
+                .bfa
                 .as_deref()
                 .unwrap_or_default()
                 .iter()

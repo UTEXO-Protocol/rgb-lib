@@ -337,13 +337,14 @@ pub fn mock_vout(vout: Option<u32>) -> Option<u32> {
 mod utils;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) use utils::chain::*;
-pub(crate) use utils::{api::*, helpers::*};
+pub(crate) use utils::{anvil::*, api::*, helpers::*};
 
 // API tests
 mod abort_pending_vanilla_tx;
 mod address_reuse;
 mod backup;
 mod blind_receive;
+mod bridge;
 mod burn;
 mod create_utxos;
 mod delete_transfers;
@@ -359,6 +360,7 @@ mod get_wallet_data;
 mod get_wallet_dir;
 mod go_online;
 mod inflate;
+mod issue_asset_bfa;
 mod issue_asset_cfa;
 mod issue_asset_ifa;
 mod issue_asset_nia;

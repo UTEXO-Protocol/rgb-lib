@@ -208,6 +208,7 @@ use rgbstd::{
     validation::{
         ResolveWitness, Scripts, Status, WitnessOrdProvider, WitnessResolverError, WitnessStatus,
     },
+    vm::ether_extension::BridgeLocation,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use rgbstd::{
@@ -220,10 +221,11 @@ use rgbstd::{
     validation::{OpoutsDagData, Validity, Warning},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
+use schemata::{BfaWrapper, CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
-    CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
-    OS_INFLATION, TS_BURN, TS_INFLATION, TS_TRANSFER, UniqueDigitalAsset,
+    BridgedFungibleAsset, CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset,
+    NonInflatableAsset, OS_ASSET, OS_BRIDGE, OS_INFLATION, TS_BRIDGE, TS_BURN, TS_INFLATION,
+    TS_TRANSFER, UniqueDigitalAsset,
 };
 use scrypt::{
     Params, Scrypt,
@@ -324,7 +326,7 @@ use crate::{
         parse_address_str, setup_logger, str_to_xpub,
     },
     wallet::{
-        Balance, LocalRgbAllocation, LocalUnspent, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_CFA,
-        SCHEMA_ID_IFA, SCHEMA_ID_NIA, SCHEMA_ID_UDA, WalletDescriptors,
+        Balance, LocalRgbAllocation, LocalUnspent, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_BFA,
+        SCHEMA_ID_CFA, SCHEMA_ID_IFA, SCHEMA_ID_NIA, SCHEMA_ID_UDA, WalletDescriptors,
     },
 };

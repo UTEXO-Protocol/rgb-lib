@@ -321,5 +321,6 @@ pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions
         indexer_url: indexer_url.unwrap_or(ELECTRUM_URL).to_string(),
         skip_consistency_check: true,
         vanilla_sync_lookback: INDEXER_SYNC_LOOKBACK as u32,
+        eth_rpc_url: None,
     }
 }

@@ -18,6 +18,9 @@ pub enum AssetSchema {
     /// IFA schema
     #[sea_orm(num_value = 4)]
     Ifa = 4,
+    /// BFA schema
+    #[sea_orm(num_value = 5)]
+    Bfa = 5,
 }
 
 impl fmt::Display for AssetSchema {
@@ -35,6 +38,7 @@ impl TryFrom<String> for AssetSchema {
             SCHEMA_ID_UDA => AssetSchema::Uda,
             SCHEMA_ID_CFA => AssetSchema::Cfa,
             SCHEMA_ID_IFA => AssetSchema::Ifa,
+            SCHEMA_ID_BFA => AssetSchema::Bfa,
             _ => return Err(Error::UnknownRgbSchema { schema_id }),
         })
     }
@@ -50,7 +54,7 @@ impl TryFrom<SchemaId> for AssetSchema {
 
 impl AssetSchema {
     pub(crate) const VALUES: [Self; NUM_KNOWN_SCHEMAS] =
-        [Self::Nia, Self::Uda, Self::Cfa, Self::Ifa];
+        [Self::Nia, Self::Uda, Self::Cfa, Self::Ifa, Self::Bfa];
 
     fn from_schema_id_str(schema_id: String) -> Result<Self, Error> {
         Ok(match &schema_id[..] {
@@ -58,6 +62,7 @@ impl AssetSchema {
             SCHEMA_ID_UDA => AssetSchema::Uda,
             SCHEMA_ID_CFA => AssetSchema::Cfa,
             SCHEMA_ID_IFA => AssetSchema::Ifa,
+            SCHEMA_ID_BFA => AssetSchema::Bfa,
             _ => return Err(Error::UnknownRgbSchema { schema_id }),
         })
     }
@@ -81,6 +86,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::schema(),
             Self::Cfa => CollectibleFungibleAsset::schema(),
             Self::Ifa => InflatableFungibleAsset::schema(),
+            Self::Bfa => BridgedFungibleAsset::schema(),
         }
     }
 
@@ -90,6 +96,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::scripts(),
             Self::Cfa => CollectibleFungibleAsset::scripts(),
             Self::Ifa => InflatableFungibleAsset::scripts(),
+            Self::Bfa => BridgedFungibleAsset::scripts(),
         }
     }
 
@@ -100,6 +107,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::types(),
             Self::Cfa => CollectibleFungibleAsset::types(),
             Self::Ifa => InflatableFungibleAsset::types(),
+            Self::Bfa => BridgedFungibleAsset::types(),
         }
     }
 
@@ -122,6 +130,7 @@ impl From<AssetSchema> for SchemaId {
         match asset_schema {
             AssetSchema::Cfa => SchemaId::from_str(SCHEMA_ID_CFA).unwrap(),
             AssetSchema::Ifa => SchemaId::from_str(SCHEMA_ID_IFA).unwrap(),
+            AssetSchema::Bfa => SchemaId::from_str(SCHEMA_ID_BFA).unwrap(),
             AssetSchema::Nia => SchemaId::from_str(SCHEMA_ID_NIA).unwrap(),
             AssetSchema::Uda => SchemaId::from_str(SCHEMA_ID_UDA).unwrap(),
         }
@@ -342,6 +351,8 @@ pub enum Assignment {
     NonFungible,
     /// Inflation right
     InflationRight(u64),
+    /// Bridge right
+    BridgeRight,
     /// Any assignment
     Any,
 }
@@ -354,6 +365,7 @@ impl Assignment {
                 Self::InflationRight(amt.as_u64())
             }
             AllocatedState::Data(_) => Self::NonFungible,
+            AllocatedState::Void if opout.ty == OS_BRIDGE => Self::BridgeRight,
             _ => unreachable!(),
         }
     }
@@ -364,6 +376,7 @@ impl Assignment {
             Self::Fungible(amt) => assignments.fungible += amt,
             Self::NonFungible => assignments.non_fungible = true,
             Self::InflationRight(amt) => assignments.inflation += amt,
+            Self::BridgeRight => assignments.bridge += 1,
             _ => unreachable!("when using this method we should know the assignment type"),
         }
     }

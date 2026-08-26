@@ -39,3 +39,11 @@ aws-lc-rs = { version = "1.16.2", default-features = false, features = [
 ] }
 
 [workspace]
+
+# Mirrors the root Cargo.toml patch - this crate is its own workspace, so it
+# does not inherit it. Keep the two in step.
+[patch.crates-io]
+rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "add63b0a64ee34663fa116f56649885d49c41420" }
+rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
+rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
+rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "09d5d494706e75593f71c3f5f06cd89a8dcb807e" }

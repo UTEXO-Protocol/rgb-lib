@@ -242,6 +242,13 @@ pub enum Error {
     #[error("Trying to request fee estimation for an invalid block number")]
     InvalidEstimationBlocks,
 
+    /// The provided Ethereum RPC URL is invalid
+    #[error("Invalid Ethereum RPC URL: {details}")]
+    InvalidEthRpcUrl {
+        /// Error details
+        details: String,
+    },
+
     /// The provided expiration is invalid
     #[error("Invalid expiration")]
     InvalidExpiration,
@@ -592,6 +599,17 @@ pub enum Error {
     UnsupportedBackupVersion {
         /// Backup version
         version: String,
+    },
+
+    /// No bridge rights were requested for the BFA issuance
+    #[error("No bridge rights")]
+    NoBridgeRights,
+
+    /// The schema doesn't support bridge transitions
+    #[error("Bridge not supported")]
+    UnsupportedBridge {
+        /// Asset schema
+        asset_schema: AssetSchema,
     },
 
     /// The schema doesn't support burn transitions

@@ -6,7 +6,7 @@ use super::*;
 
 const BDK_DB_NAME: &str = "bdk_db";
 
-pub(crate) const NUM_KNOWN_SCHEMAS: usize = 4;
+pub(crate) const NUM_KNOWN_SCHEMAS: usize = 5;
 
 pub(crate) const RGB_LIB_DB_NAME: &str = "rgb_lib_db";
 
@@ -333,6 +333,11 @@ pub trait WalletCore {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn vanilla_sync_lookback(&self) -> u32 {
         self.online_data().as_ref().unwrap().vanilla_sync_lookback
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn eth_rpc_url(&self) -> &Option<String> {
+        &self.online_data().as_ref().unwrap().eth_rpc_url
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]

@@ -894,6 +894,20 @@ pub(crate) trait SinglesigWalletParty {
         reject_list_url: Option<String>,
     ) -> Result<AssetIFA, Error>;
 
+    fn issue_asset_bfa(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> AssetBFA;
+
+    fn issue_asset_bfa_result(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error>;
+
     fn issue_asset_nia(&mut self, amounts: Option<&[u64]>) -> AssetNIA;
 
     fn issue_asset_nia_result(&mut self, amounts: Option<&[u64]>) -> Result<AssetNIA, Error>;
@@ -1083,6 +1097,32 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         )
     }
 
+    fn issue_asset_bfa(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> AssetBFA {
+        self.issue_asset_bfa_result(bridge_rights, contract_address, reject_list_url)
+            .unwrap()
+    }
+
+    fn issue_asset_bfa_result(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error> {
+        self.wlt_mut().issue_asset_bfa(
+            TICKER.to_string(),
+            NAME.to_string(),
+            PRECISION,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
+        )
+    }
+
     fn issue_asset_nia(&mut self, amounts: Option<&[u64]>) -> AssetNIA {
         self.issue_asset_nia_result(amounts).unwrap()
     }
@@ -1239,6 +1279,35 @@ impl SinglesigParty {
         self.wallet
             .drain_to(self.online, address.to_string(), FEE_RATE)
             .unwrap()
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_begin(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+    ) -> BridgeBeginResult {
+        self.bridge_begin_result(asset_id, recipient).unwrap()
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_begin_result(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+    ) -> Result<BridgeBeginResult, Error> {
+        self.wallet.bridge_begin(
+            self.online,
+            asset_id.to_string(),
+            recipient,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+        )
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_end(&mut self, signed_psbt: String) -> OperationResult {
+        self.wallet.bridge_end(self.online, signed_psbt).unwrap()
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]

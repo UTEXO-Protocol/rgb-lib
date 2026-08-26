@@ -25,10 +25,10 @@ use rgb_lib::{
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
-        Address as RgbLibAddress, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
-        AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult, BurnDetails,
-        Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
-        InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
+        Address as RgbLibAddress, AssetBFA, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets,
+        AssignmentsCollection, Balance, BlockTime, BridgeBeginResult, BridgeDetails, BtcBalance,
+        BurnBeginResult, BurnDetails, Cosigner as CosignerData, DatabaseType, EmbeddedMedia,
+        HubInfo, InflateBeginResult, InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
@@ -93,6 +93,7 @@ pub enum Assignment {
     Fungible { amount: u64 },
     NonFungible,
     InflationRight { amount: u64 },
+    BridgeRight,
     Any,
 }
 impl From<RgbLibAssignment> for Assignment {
@@ -101,6 +102,7 @@ impl From<RgbLibAssignment> for Assignment {
             RgbLibAssignment::Fungible(amount) => Assignment::Fungible { amount },
             RgbLibAssignment::NonFungible => Assignment::NonFungible,
             RgbLibAssignment::InflationRight(amount) => Assignment::InflationRight { amount },
+            RgbLibAssignment::BridgeRight => Assignment::BridgeRight,
             RgbLibAssignment::Any => Assignment::Any,
         }
     }
@@ -111,6 +113,7 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::Fungible { amount } => RgbLibAssignment::Fungible(amount),
             Assignment::NonFungible => RgbLibAssignment::NonFungible,
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
+            Assignment::BridgeRight => RgbLibAssignment::BridgeRight,
             Assignment::Any => RgbLibAssignment::Any,
         }
     }
@@ -475,6 +478,24 @@ pub enum Operation {
         details: InflateDetails,
         status: MultisigVotingStatus,
     },
+    BridgeToReview {
+        psbt: String,
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgePending {
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgeCompleted {
+        txid: String,
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgeDiscarded {
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
     BurnToReview {
         psbt: String,
         details: BurnDetails,
@@ -620,6 +641,32 @@ impl From<RgbLibOperation> for Operation {
                     status: status.into(),
                 }
             }
+            RgbLibOperation::BridgeToReview {
+                psbt,
+                details,
+                status,
+            } => Operation::BridgeToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgePending { status, details } => Operation::BridgePending {
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgeCompleted {
+                txid,
+                details,
+                status,
+            } => Operation::BridgeCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgeDiscarded { details, status } => Operation::BridgeDiscarded {
+                details,
+                status: status.into(),
+            },
             RgbLibOperation::BurnToReview {
                 psbt,
                 details,
@@ -747,6 +794,32 @@ impl From<Operation> for RgbLibOperation {
                     status: status.into(),
                 }
             }
+            Operation::BridgeToReview {
+                psbt,
+                details,
+                status,
+            } => RgbLibOperation::BridgeToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            Operation::BridgePending { details, status } => RgbLibOperation::BridgePending {
+                details,
+                status: status.into(),
+            },
+            Operation::BridgeCompleted {
+                txid,
+                details,
+                status,
+            } => RgbLibOperation::BridgeCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            Operation::BridgeDiscarded { details, status } => RgbLibOperation::BridgeDiscarded {
+                details,
+                status: status.into(),
+            },
             Operation::BurnToReview {
                 psbt,
                 details,
@@ -1306,6 +1379,31 @@ impl Wallet {
         self._get_wallet().inflate_end(online, signed_psbt)
     }
 
+    fn bridge_begin(
+        &self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeBeginResult, RgbLibError> {
+        self._get_wallet().bridge_begin(
+            online,
+            asset_id,
+            recipient.into(),
+            fee_rate,
+            min_confirmations,
+        )
+    }
+
+    fn bridge_end(
+        &self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, RgbLibError> {
+        self._get_wallet().bridge_end(online, signed_psbt)
+    }
+
     fn issue_asset_nia(
         &self,
         ticker: String,
@@ -1363,6 +1461,25 @@ impl Wallet {
             precision,
             amounts,
             inflation_amounts,
+            reject_list_url,
+        )
+    }
+
+    fn issue_asset_bfa(
+        &self,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, RgbLibError> {
+        self._get_wallet().issue_asset_bfa(
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
             reject_list_url,
         )
     }
@@ -1785,6 +1902,23 @@ impl MultisigWallet {
         )
     }
 
+    fn bridge_init(
+        &self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<InitOperationResult, RgbLibError> {
+        self._get_wallet().bridge_init(
+            online,
+            asset_id,
+            recipient.into(),
+            fee_rate,
+            min_confirmations,
+        )
+    }
+
     fn issue_asset_nia(
         &self,
         online: Online,
@@ -1848,6 +1982,27 @@ impl MultisigWallet {
             precision,
             amounts,
             inflation_amounts,
+            reject_list_url,
+        )
+    }
+
+    fn issue_asset_bfa(
+        &self,
+        online: Online,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, RgbLibError> {
+        self._get_wallet().issue_asset_bfa(
+            online,
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
             reject_list_url,
         )
     }

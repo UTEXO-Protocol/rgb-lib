@@ -526,6 +526,40 @@ pub enum Operation {
         status: MultisigVotingStatus,
     },
 
+    // Bridge variants
+    /// Bridge operation waiting for user's response (ACK/NACK)
+    BridgeToReview {
+        /// PSBT to sign
+        psbt: String,
+        /// Operation details
+        details: BridgeDetails,
+        /// Operation voting status
+        status: MultisigVotingStatus,
+    },
+    /// Bridge operation already responded to, waiting for threshold to be met
+    BridgePending {
+        /// Operation details
+        details: BridgeDetails,
+        /// Operation voting status
+        status: MultisigVotingStatus,
+    },
+    /// Bridge operation approved and finalized (threshold reached)
+    BridgeCompleted {
+        /// Operation TXID
+        txid: String,
+        /// Operation details
+        details: BridgeDetails,
+        /// Operation voting status
+        status: MultisigVotingStatus,
+    },
+    /// Bridge operation rejected (NACKs exceeded threshold)
+    BridgeDiscarded {
+        /// Operation details
+        details: BridgeDetails,
+        /// Operation voting status
+        status: MultisigVotingStatus,
+    },
+
     // Burn variants
     /// Burn operation waiting for user's response (ACK/NACK)
     BurnToReview {
@@ -625,6 +659,21 @@ fn extract_fascia_from_files(files: &[FileResponse]) -> Result<Fascia, Error> {
     let reader = io::BufReader::new(file);
     serde_json::from_reader(reader).map_err(|_| Error::MultisigUnexpectedData {
         details: s!("invalid fascia"),
+    })
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn extract_bridge_opid_from_fascia(files: &[FileResponse]) -> Result<String, Error> {
+    let fascia = extract_fascia_from_files(files)?;
+    for (_, bundle) in fascia.bundles() {
+        for KnownTransition { transition, opid } in &bundle.known_transitions {
+            if transition.transition_type == TS_BRIDGE {
+                return Ok(opid.to_string());
+            }
+        }
+    }
+    Err(Error::MultisigUnexpectedData {
+        details: s!("bridge opid not found in fascia"),
     })
 }
 
@@ -850,6 +899,74 @@ impl OperationHandler for InflateHandler {
         combined_psbt: &Psbt,
     ) -> Result<String, Error> {
         let res = wallet.inflate_end_impl(txn, combined_psbt)?;
+        Ok(res.txid)
+    }
+
+    fn reconstruct_transfer_directory(
+        wallet: &MultisigWallet,
+        txid: &str,
+        files: &[FileResponse],
+    ) -> Result<(), Error> {
+        wallet.reconstruct_rgb_transfer_directory(txid, files)
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) struct BridgeHandler;
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl OperationHandler for BridgeHandler {
+    type Details = BridgeDetails;
+
+    fn extract_details(files: &[FileResponse]) -> Result<Self::Details, Error> {
+        let fascia_path = extract_fascia_path(files)?;
+        let info_batch_transfer = InfoBatchTransfer::extract_from_files(files)?;
+        if info_batch_transfer.transfers.len() != 1 {
+            return Err(Error::MultisigUnexpectedData {
+                details: format!(
+                    "expected 1 transfer for bridge, got {} transfers",
+                    info_batch_transfer.transfers.len()
+                ),
+            });
+        }
+        Ok(BridgeDetails {
+            fascia_path,
+            min_confirmations: info_batch_transfer.min_confirmations,
+            entropy: info_batch_transfer.entropy,
+            opid: extract_bridge_opid_from_fascia(files)?,
+        })
+    }
+
+    fn to_review(psbt: String, details: Self::Details, status: MultisigVotingStatus) -> Operation {
+        Operation::BridgeToReview {
+            psbt,
+            details,
+            status,
+        }
+    }
+
+    fn pending(details: Self::Details, status: MultisigVotingStatus) -> Operation {
+        Operation::BridgePending { details, status }
+    }
+
+    fn completed(txid: String, details: Self::Details, status: MultisigVotingStatus) -> Operation {
+        Operation::BridgeCompleted {
+            txid,
+            details,
+            status,
+        }
+    }
+
+    fn discarded(details: Self::Details, status: MultisigVotingStatus) -> Operation {
+        Operation::BridgeDiscarded { details, status }
+    }
+
+    fn finalize_and_execute(
+        txn: &DbTxn,
+        wallet: &mut MultisigWallet,
+        combined_psbt: &Psbt,
+    ) -> Result<String, Error> {
+        let res = wallet.bridge_end_impl(txn, combined_psbt)?;
         Ok(res.txid)
     }
 
@@ -1461,6 +1578,44 @@ impl MultisigWallet {
         let res = self.upload_and_process_issuance(&txn, &issue_data, files)?;
         txn.commit()?;
         info!(self.logger(), "Issue asset CFA completed");
+        Ok(res)
+    }
+
+    /// Issue a new RGB BFA asset with the provided `ticker`, `name`, `precision`,
+    /// `bridge_rights` and `contract_address`, post the issuance to the hub and return the asset.
+    ///
+    /// Genesis allocates no supply: every unit is minted later by a bridge transition, each of
+    /// which spends one bridge right and rolls a fresh one forward. `bridge_rights` is the number
+    /// of mints that can be in flight at once, not a supply cap.
+    ///
+    /// `contract_address` is the EVM bridge contract whose `FundsIn` events authorise minting; it
+    /// is committed to genesis and cannot be changed afterwards.
+    pub fn issue_asset_bfa(
+        &self,
+        online: Online,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error> {
+        info!(self.logger(), "Issuing BFA...");
+        self.check_online(online)?;
+        self.check_is_cosigner()?;
+        let txn = self.database().begin_transaction()?;
+        let issue_data = self.create_bfa_contract(
+            &txn,
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
+        )?;
+        let res = self.upload_and_process_issuance(&txn, &issue_data, vec![])?;
+        txn.commit()?;
+        info!(self.logger(), "Issue asset BFA completed");
         Ok(res)
     }
 
@@ -2086,6 +2241,7 @@ impl MultisigWallet {
             OperationType::SendRgb => self.handle_operation::<SendRgbHandler>(op, &files)?,
             OperationType::Inflation => self.handle_operation::<InflateHandler>(op, &files)?,
             OperationType::Burn => self.handle_operation::<BurnHandler>(op, &files)?,
+            OperationType::Bridge => self.handle_operation::<BridgeHandler>(op, &files)?,
             OperationType::Issuance => match op.status {
                 OperationStatus::Approved => {
                     let txn = self.database().begin_transaction()?;
@@ -2405,6 +2561,38 @@ impl MultisigWallet {
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Initiate inflating completed");
+        Ok(res)
+    }
+
+    /// Prepare a bridge (BFA mint) transition toward `recipient` and post the operation to the
+    /// hub.
+    ///
+    /// The returned [`InitOperationResult`] carries the OpId that must be committed to the
+    /// matching EVM lock: RGB consensus validates the mint against the bridge contract's
+    /// `FundsIn` log for that id. The PSBT is broadcast only after the lock is confirmed.
+    ///
+    /// Returns a PSBT ready to be signed and the operation index on the hub.
+    pub fn bridge_init(
+        &mut self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<InitOperationResult, Error> {
+        info!(self.logger(), "Initiate bridging...");
+        self.check_online(online)?;
+        self.check_is_cosigner()?;
+        let txn = self.database().begin_transaction()?;
+        let data =
+            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        let res = self.post_operation(
+            OperationType::Bridge,
+            PostData::BeginOperationData(Box::new(data)),
+        )?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Initiate bridging completed");
         Ok(res)
     }
 

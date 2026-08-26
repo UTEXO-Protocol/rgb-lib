@@ -738,7 +738,7 @@ pub(crate) fn now() -> OffsetDateTime {
 pub(crate) struct DumbResolver;
 
 impl ResolveWitness for DumbResolver {
-    fn resolve_witness(&self, _: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+    fn resolve_witness(&self, _: &PubWitness) -> Result<WitnessStatus, WitnessResolverError> {
         unreachable!()
     }
 
@@ -1045,16 +1045,20 @@ pub(crate) struct OffchainResolver<'a, 'cons, const TRANSFER: bool> {
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl<const TRANSFER: bool> ResolveWitness for OffchainResolver<'_, '_, TRANSFER> {
-    fn resolve_witness(&self, witness_id: RgbTxid) -> Result<WitnessStatus, WitnessResolverError> {
+    fn resolve_witness(
+        &self,
+        pub_witness: &PubWitness,
+    ) -> Result<WitnessStatus, WitnessResolverError> {
+        let witness_id = pub_witness.txid();
         if witness_id != self.witness_id {
-            return self.fallback.resolve_witness(witness_id);
+            return self.fallback.resolve_witness(pub_witness);
         }
         self.consignment
             .bundled_witnesses()
             .find(|bw| bw.witness_id() == witness_id)
             .and_then(|p| p.pub_witness.tx().cloned())
             .map_or_else(
-                || self.fallback.resolve_witness(witness_id),
+                || self.fallback.resolve_witness(pub_witness),
                 |tx| Ok(WitnessStatus::Resolved(tx, WitnessOrd::Tentative)),
             )
     }

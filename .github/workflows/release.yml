@@ -250,17 +250,23 @@ jobs:
           VERSION="v${VERSION}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Trigger rgb-lib-go workflow
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.RGB_LIB_GO_PAT }}
-          repository: UTEXO-Protocol/rgb-lib-go
-          event-type: rgb-lib-release
-          client-payload: |
-            {
-              "version": "${{ steps.version.outputs.version }}",
-              "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
-            }
+      # Disabled on this branch. repository_dispatch carries no ref, so the
+      # rgb-lib-go workflow checks out its DEFAULT branch and commits there -
+      # a tag cut here would push BFA bindings, and native libraries built
+      # against the rc.10 `s/bfa` crates, straight onto rgb-lib-go main.
+      # Until BFA is merged, trigger that workflow manually from its `bfa`
+      # branch instead. Restore this step when BFA lands on the mainline.
+      # - name: Trigger rgb-lib-go workflow
+      #   uses: peter-evans/repository-dispatch@v3
+      #   with:
+      #     token: ${{ secrets.RGB_LIB_GO_PAT }}
+      #     repository: UTEXO-Protocol/rgb-lib-go
+      #     event-type: rgb-lib-release
+      #     client-payload: |
+      #       {
+      #         "version": "${{ steps.version.outputs.version }}",
+      #         "release_url": "https://github.com/UTEXO-Protocol/rgb-lib/releases/tag/${{ steps.version.outputs.version }}"
+      #       }
 
       - name: Trigger rgb-lib-nodejs workflow
         uses: peter-evans/repository-dispatch@v3

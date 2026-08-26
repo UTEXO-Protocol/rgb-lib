@@ -72,6 +72,7 @@ pub struct OnlineData {
     pub(crate) indexer_url: String,
     pub(crate) indexer: Indexer,
     pub(crate) resolver: AnyResolver,
+    pub(crate) eth_rpc_url: Option<String>,
     pub(crate) hub_client: Option<MultisigHubClient>,
     pub(crate) user_role: Option<UserRole>,
     pub(crate) vanilla_sync_lookback: u32,
@@ -96,6 +97,9 @@ pub struct OnlineOptions {
     /// Number of addresses before the last used (or last revealed if none) address to sync when
     /// doing an automatic FastSync for the vanilla keychain
     pub vanilla_sync_lookback: u32,
+    /// Ethereum RPC endpoint, required by wallets supporting the BFA schema: BFA consignment
+    /// validation reads the bridge contract's FundsIn logs from it
+    pub eth_rpc_url: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -692,6 +696,82 @@ impl AssetIFA {
     }
 }
 
+/// A Bridged Fungible Asset.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct AssetBFA {
+    /// ID of the asset
+    pub asset_id: String,
+    /// Ticker of the asset
+    pub ticker: String,
+    /// Name of the asset
+    pub name: String,
+    /// Details of the asset
+    pub details: Option<String>,
+    /// Precision, also known as divisibility, of the asset
+    pub precision: u8,
+    /// Initial issued supply
+    pub initial_supply: u64,
+    /// Timestamp of asset genesis
+    pub timestamp: i64,
+    /// Timestamp of asset import
+    pub added_at: i64,
+    /// Current balance of the asset
+    pub balance: Balance,
+    /// Asset media attachment
+    pub media: Option<Media>,
+    /// Reject list URL
+    pub reject_list_url: Option<String>,
+}
+
+impl AssetBFA {
+    pub(crate) fn get_asset_details(
+        txn: &DbTxn,
+        wallet: &(impl WalletOffline + ?Sized),
+        asset: &DbAsset,
+        transfers: Option<Vec<DbTransfer>>,
+        asset_transfers: Option<Vec<DbAssetTransfer>>,
+        batch_transfers: Option<Vec<DbBatchTransfer>>,
+        colorings: Option<Vec<DbColoring>>,
+        txos: Option<Vec<DbTxo>>,
+        medias: Option<Vec<DbMedia>>,
+    ) -> Result<AssetBFA, Error> {
+        let media = {
+            let medias = if let Some(m) = medias {
+                m
+            } else {
+                txn.iter_media()?
+            };
+            medias
+                .iter()
+                .find(|m| Some(m.idx) == asset.media_idx)
+                .map(|m| Media::from_db_media(m, wallet.media_dir()))
+        };
+        let balance = txn.get_asset_balance(
+            asset.id.clone(),
+            transfers,
+            asset_transfers,
+            batch_transfers,
+            colorings,
+            txos,
+        )?;
+        let initial_supply = asset.initial_supply.parse::<u64>().unwrap();
+        Ok(AssetBFA {
+            asset_id: asset.id.clone(),
+            ticker: asset.ticker.clone().unwrap(),
+            name: asset.name.clone(),
+            details: asset.details.clone(),
+            precision: asset.precision,
+            initial_supply,
+            timestamp: asset.timestamp,
+            added_at: asset.added_at,
+            balance,
+            media,
+            reject_list_url: asset.reject_list_url.clone(),
+        })
+    }
+}
+
 /// List of RGB assets, grouped by asset schema.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
@@ -704,6 +784,8 @@ pub struct Assets {
     pub cfa: Option<Vec<AssetCFA>>,
     /// List of IFA assets
     pub ifa: Option<Vec<AssetIFA>>,
+    /// List of BFA assets
+    pub bfa: Option<Vec<AssetBFA>>,
 }
 
 pub(crate) trait IssuedAssetDetails: Sized {
@@ -770,6 +852,17 @@ impl IssuedAssetDetails for AssetIFA {
     }
 }
 
+impl IssuedAssetDetails for AssetBFA {
+    fn from_issuance(
+        txn: &DbTxn,
+        wallet: &(impl WalletOffline + ?Sized),
+        asset: &DbAsset,
+        _issue_data: &IssueData,
+    ) -> Result<Self, Error> {
+        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct LocalAssetData {
     pub(crate) asset_id: String,
@@ -811,6 +904,8 @@ pub struct AssignmentsCollection {
     pub non_fungible: bool,
     /// Inflation right assignments
     pub inflation: u64,
+    /// Bridge rights
+    pub bridge: u8,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -871,6 +966,10 @@ impl AssignmentsCollection {
                 .inflation
                 .checked_sub(needed.inflation)
                 .expect("selected inputs must cover outputs"),
+            bridge: self
+                .bridge
+                .checked_sub(needed.bridge)
+                .expect("selected inputs must cover outputs"),
         }
     }
 
@@ -882,6 +981,9 @@ impl AssignmentsCollection {
             return false;
         }
         if self.inflation < needed.inflation {
+            return false;
+        }
+        if self.bridge < needed.bridge {
             return false;
         }
         true
@@ -897,6 +999,8 @@ pub enum TypeOfTransition {
     Transfer,
     /// Burn transition (burning existing tokens)
     Burn,
+    /// Bridge transition (minting against an EVM lock)
+    Bridge,
 }
 
 impl TypeOfTransition {
@@ -906,6 +1010,7 @@ impl TypeOfTransition {
             Self::Inflate => "inflate",
             Self::Transfer => "transfer",
             Self::Burn => "burn",
+            Self::Bridge => "bridge",
         }
     }
 }
@@ -1085,6 +1190,22 @@ impl Invoice {
                         Assignment::InflationRight(v.value())
                     }
                     (None, Some(RGB_STATE_INFLATION_ALLOWANCE)) => Assignment::InflationRight(0),
+                    (Some(InvoiceState::Amount(_)), None) => Assignment::Any,
+                    (None, None) => Assignment::Any,
+                    (_, _) => {
+                        return Err(Error::InvalidInvoice {
+                            details: s!("invalid assignment"),
+                        });
+                    }
+                }
+            }
+            Some(AssetSchema::Bfa) => {
+                match (decoded.assignment_state, assignment_name.as_deref()) {
+                    (Some(InvoiceState::Amount(v)), Some(RGB_STATE_ASSET_OWNER)) => {
+                        Assignment::Fungible(v.value())
+                    }
+                    (None, Some(RGB_STATE_ASSET_OWNER)) => Assignment::Fungible(0),
+                    (None, Some(RGB_STATE_BRIDGE_RIGHT)) => Assignment::BridgeRight,
                     (Some(InvoiceState::Amount(_)), None) => Assignment::Any,
                     (None, None) => Assignment::Any,
                     (_, _) => {
@@ -1703,6 +1824,32 @@ pub struct InflateDetails {
     pub entropy: u64,
 }
 
+/// The result of a bridge (BFA mint) begin operation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeBeginResult {
+    /// PSBT to inspect and sign
+    pub psbt: String,
+    /// Batch transfer idx
+    pub batch_transfer_idx: Option<i32>,
+    /// Operation details
+    pub details: BridgeDetails,
+}
+
+/// Details for bridge operations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeDetails {
+    /// Path to fascia file for inspection
+    pub fascia_path: String,
+    /// Minimum confirmations for the operation
+    pub min_confirmations: u8,
+    /// Entropy used for the merkle tree construction operation
+    pub entropy: u64,
+    /// ID of the bridge transition, to be committed to the EVM lock
+    pub opid: String,
+}
+
 /// The result of a send begin operation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1941,6 +2088,8 @@ pub struct BeginOperationData {
     pub transfer_dir: PathBuf,
     pub info_batch_transfer: InfoBatchTransfer,
     pub batch_transfer_idx: Option<i32>,
+    /// Id of the bridge transition, set only for a BFA mint
+    pub opid: Option<String>,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
