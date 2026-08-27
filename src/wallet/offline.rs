@@ -2697,6 +2697,9 @@ pub trait WalletOffline: WalletBackup {
                     TS_TRANSFER => TypeOfTransition::Transfer,
                     TS_INFLATION => TypeOfTransition::Inflate,
                     TS_BURN => TypeOfTransition::Burn,
+                    // A cosigner inspects the signed PSBT before acking, so without
+                    // this arm every BFA mint is refused after the enclave signed it.
+                    TS_BRIDGE => TypeOfTransition::Bridge,
                     _ => {
                         return Err(Error::RgbInspection {
                             details: format!(
