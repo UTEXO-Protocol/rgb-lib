@@ -141,6 +141,41 @@ fn wrong_schema_fails() {
     ));
 }
 
+/// A BFA genesis mints no supply, so its bridge rights sit alone on their UTXOs.
+/// Every decision point that enumerates the other assignment variants has to know
+/// about them, or the mint fails against a wallet that holds exactly what it needs.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn selects_a_lone_bridge_right() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    let mut party = get_funded_party!();
+    let asset = party.issue_asset_bfa(1, bridge_contract.address.clone(), None);
+    assert_eq!(asset.initial_supply, 0);
+
+    party.create_utxos_default();
+    let receive_data = party.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+
+    // No EVM lock and no mining: this asserts only that the transition can be
+    // built from a wallet whose sole bridge assignment is the right itself.
+    let result = party.bridge_begin_result(&asset.asset_id, recipient);
+    assert!(
+        !matches!(result, Err(Error::InsufficientAssignments { .. })),
+        "the wallet holds the one right the mint needs, but selection did not find it"
+    );
+    assert_eq!(result.unwrap().details.opid.len(), 64);
+}
+
 /// The multisig path reads the OpId back out of the fascia file, the singlesig path gets it
 /// from the transition it just built. The Go bridge trusts them to be the same value.
 #[cfg(feature = "electrum")]

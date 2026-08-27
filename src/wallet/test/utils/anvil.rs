@@ -1,6 +1,10 @@
 use super::*;
 
 /// Anvil's first pre-funded account address
+/// The tests' anvil runs with network_mode: host, so the wallet under test
+/// reaches it at the same address the in-container tooling uses.
+pub(crate) const ANVIL_RPC_URL: &str = "http://localhost:8545";
+
 const ANVIL_ACCOUNT_0: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 /// Anvil's first pre-funded account private key
 const ANVIL_PRIVATE_KEY_0: &str =

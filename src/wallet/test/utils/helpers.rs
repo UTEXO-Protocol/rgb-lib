@@ -321,6 +321,9 @@ pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions
         indexer_url: indexer_url.unwrap_or(ELECTRUM_URL).to_string(),
         skip_consistency_check: true,
         vanilla_sync_lookback: INDEXER_SYNC_LOOKBACK as u32,
-        eth_rpc_url: None,
+        // Test wallets declare AssetSchema::VALUES, which now includes Bfa, and
+        // get_online_data refuses a Bfa-capable wallet without an endpoint - so
+        // with None here no test could bring any wallet online at all.
+        eth_rpc_url: Some(ANVIL_RPC_URL.to_string()),
     }
 }

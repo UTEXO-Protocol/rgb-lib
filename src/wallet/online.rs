@@ -2022,6 +2022,16 @@ pub trait WalletOnline: WalletOffline {
             {
                 needed = true;
             }
+            // Without this a bridge mint selects nothing: bridge_begin_impl asks for
+            // one right, every UTXO holding one is judged unneeded here, and the
+            // caller reports InsufficientAssignments against a wallet that has them.
+            if assignments_collected.bridge < assignments_needed.bridge
+                && asset_allocations
+                    .iter()
+                    .any(|a| matches!(a.assignment, Assignment::BridgeRight))
+            {
+                needed = true;
+            }
             // skip UTXOs with no needed allocations
             if !needed {
                 continue;
@@ -2378,6 +2388,16 @@ pub trait WalletOnline: WalletOffline {
                             seal,
                             *amt,
                         )?;
+                    }
+                    // bridge_begin_impl adds this recipient to roll the consumed
+                    // lane forward. Nothing else emits a bridge right, and the
+                    // bridge validator only checks supply against OS_ASSET - so a
+                    // missing arm here loses the lane without failing consensus.
+                    Assignment::BridgeRight => {
+                        seal = self.get_beneficiary_seal(&recipient.local_recipient_data);
+                        asset_transition_builder = asset_transition_builder
+                            .add_rights(RGB_STATE_BRIDGE_RIGHT, seal)
+                            .map_err(Error::from)?;
                     }
                     _ => unreachable!(),
                 };

@@ -922,6 +922,10 @@ impl AssignmentsCollection {
         self.inflation += amt;
     }
 
+    fn add_bridge(&mut self) {
+        self.bridge += 1;
+    }
+
     pub(crate) fn add_opout_state(&mut self, opout: &Opout, state: &AllocatedState) {
         match state {
             AllocatedState::Amount(amt) if opout.ty == OS_ASSET => {
@@ -932,6 +936,12 @@ impl AssignmentsCollection {
             }
             AllocatedState::Data(_) => {
                 self.add_non_fungible();
+            }
+            // A bridge right is Void state at OS_BRIDGE (see enums.rs). Counting it
+            // is what lets change() see the input the caller asked for; without this
+            // change() underflows on checked_sub.
+            AllocatedState::Void if opout.ty == OS_BRIDGE => {
+                self.add_bridge();
             }
             _ => {}
         }
@@ -951,6 +961,10 @@ impl AssignmentsCollection {
                 needed.inflation.saturating_sub(self.inflation) > 0
             }
             (AllocatedState::Data(_), _) => needed.non_fungible && !self.non_fungible,
+            // TS_BRIDGE takes OS_BRIDGE Occurrences::Once as an input, so the right
+            // has to be added as a real transition input rather than diverted to
+            // extra_state as an untouched leftover.
+            (AllocatedState::Void, OS_BRIDGE) => needed.bridge.saturating_sub(self.bridge) > 0,
             _ => false,
         }
     }
@@ -2121,4 +2135,78 @@ pub enum TryFailBatchTransferOutcome {
 pub struct FailTransfersOutcome {
     pub transfers_changed: bool,
     pub cannot_fail: bool,
+}
+
+#[cfg(test)]
+mod assignments_collection_tests {
+    use rgbstd::{AssignmentType, OpId};
+
+    use super::*;
+
+    fn opout(ty: AssignmentType) -> Opout {
+        Opout {
+            op: OpId::from([0u8; 32]),
+            ty,
+            no: 0,
+        }
+    }
+
+    fn needing_one_right() -> AssignmentsCollection {
+        AssignmentsCollection {
+            bridge: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn counts_a_bridge_right_as_an_input() {
+        let mut collected = AssignmentsCollection::default();
+        collected.add_opout_state(&opout(OS_BRIDGE), &AllocatedState::Void);
+        assert_eq!(collected.bridge, 1);
+    }
+
+    #[test]
+    fn ignores_void_state_outside_the_bridge_slot() {
+        let mut collected = AssignmentsCollection::default();
+        collected.add_opout_state(&opout(OS_ASSET), &AllocatedState::Void);
+        assert_eq!(collected.bridge, 0);
+    }
+
+    #[test]
+    fn takes_a_bridge_right_as_a_transition_input_while_one_is_needed() {
+        let collected = AssignmentsCollection::default();
+        assert!(collected.opout_contributes(
+            &opout(OS_BRIDGE),
+            &AllocatedState::Void,
+            &needing_one_right(),
+        ));
+    }
+
+    #[test]
+    fn leaves_further_bridge_rights_alone_once_enough_are_held() {
+        let collected = AssignmentsCollection {
+            bridge: 1,
+            ..Default::default()
+        };
+        assert!(!collected.opout_contributes(
+            &opout(OS_BRIDGE),
+            &AllocatedState::Void,
+            &needing_one_right(),
+        ));
+    }
+
+    // The two halves have to agree: whatever opout_contributes takes as an input,
+    // add_opout_state must count - or change() underflows on checked_sub.
+    #[test]
+    fn what_is_taken_as_input_is_also_counted() {
+        let mut collected = AssignmentsCollection::default();
+        let needed = needing_one_right();
+        let (out, state) = (opout(OS_BRIDGE), AllocatedState::Void);
+
+        assert!(collected.opout_contributes(&out, &state, &needed));
+        collected.add_opout_state(&out, &state);
+
+        assert!(collected.enough(&needed));
+        assert_eq!(collected.change(&needed).bridge, 0);
+    }
 }
