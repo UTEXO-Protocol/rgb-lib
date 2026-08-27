@@ -1632,6 +1632,15 @@ pub trait WalletOffline: WalletBackup {
         valid_contract: ValidContract,
         valid_transfer: Option<ValidTransfer>,
     ) -> Result<LocalAssetData, Error> {
+        #[cfg(any(feature = "electrum", feature = "esplora"))]
+        if let Some(valid_transfer) = valid_transfer.as_ref() {
+            return self.extract_asset_data_from_valid_transfer(
+                contract_id,
+                asset_schema,
+                &valid_contract,
+                valid_transfer,
+            );
+        }
         let timestamp = valid_contract.genesis.timestamp;
         let added_at = now().unix_timestamp();
         let media_dir = self.media_dir();
@@ -1755,6 +1764,115 @@ pub trait WalletOffline: WalletBackup {
                     max_supply: Some(max_supply),
                     known_circulating_supply: Some(known_circulating_supply),
                     reject_list_url,
+                    token: None,
+                    timestamp,
+                    added_at,
+                }
+            }
+        })
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn extract_asset_data_from_valid_transfer(
+        &self,
+        contract_id: ContractId,
+        asset_schema: AssetSchema,
+        valid_contract: &ValidContract,
+        valid_transfer: &ValidTransfer,
+    ) -> Result<LocalAssetData, Error> {
+        let timestamp = valid_transfer.genesis.timestamp;
+        let added_at = now().unix_timestamp();
+        let media_dir = self.media_dir();
+        Ok(match asset_schema {
+            AssetSchema::Nia => {
+                let contract = NiaWrapper::with(valid_contract.contract_data());
+                let spec = contract.spec();
+                LocalAssetData {
+                    asset_id: contract_id.to_string(),
+                    name: spec.name().to_string(),
+                    asset_schema,
+                    precision: spec.precision.into(),
+                    ticker: Some(spec.ticker().to_string()),
+                    details: spec.details().map(|details| details.to_string()),
+                    media: contract
+                        .contract_terms()
+                        .media
+                        .map(|attachment| Media::from_attachment(&attachment, media_dir)),
+                    initial_supply: contract.total_issued_supply().into(),
+                    max_supply: None,
+                    known_circulating_supply: None,
+                    reject_list_url: None,
+                    token: None,
+                    timestamp,
+                    added_at,
+                }
+            }
+            AssetSchema::Uda => {
+                let contract = UdaWrapper::with(valid_contract.contract_data());
+                let spec = contract.spec();
+                LocalAssetData {
+                    asset_id: contract_id.to_string(),
+                    name: spec.name().to_string(),
+                    asset_schema,
+                    precision: spec.precision.into(),
+                    ticker: Some(spec.ticker().to_string()),
+                    details: spec.details().map(|details| details.to_string()),
+                    media: contract
+                        .contract_terms()
+                        .media
+                        .map(|attachment| Media::from_attachment(&attachment, media_dir)),
+                    initial_supply: 1,
+                    max_supply: None,
+                    known_circulating_supply: None,
+                    reject_list_url: None,
+                    token: Some(Token::from_token_data(
+                        &contract.token_data(),
+                        self.media_dir(),
+                    )),
+                    timestamp,
+                    added_at,
+                }
+            }
+            AssetSchema::Cfa => {
+                let contract = CfaWrapper::with(valid_contract.contract_data());
+                LocalAssetData {
+                    asset_id: contract_id.to_string(),
+                    name: contract.name().to_string(),
+                    asset_schema,
+                    precision: contract.precision().into(),
+                    ticker: None,
+                    details: contract.details().map(|details| details.to_string()),
+                    media: contract
+                        .contract_terms()
+                        .media
+                        .map(|attachment| Media::from_attachment(&attachment, media_dir)),
+                    initial_supply: contract.total_issued_supply().into(),
+                    max_supply: None,
+                    known_circulating_supply: None,
+                    reject_list_url: None,
+                    token: None,
+                    timestamp,
+                    added_at,
+                }
+            }
+            AssetSchema::Ifa => {
+                let contract = IfaWrapper::with(valid_contract.contract_data());
+                let transfer_contract = IfaWrapper::with(valid_transfer.contract_data());
+                LocalAssetData {
+                    asset_id: contract_id.to_string(),
+                    name: contract.spec().name().to_string(),
+                    asset_schema,
+                    precision: contract.spec().precision.into(),
+                    ticker: Some(contract.spec().ticker().to_string()),
+                    details: contract.spec().details().map(|details| details.to_string()),
+                    media: contract
+                        .contract_terms()
+                        .media
+                        .map(|attachment| Media::from_attachment(&attachment, media_dir)),
+                    initial_supply: contract.total_issued_supply().into(),
+                    max_supply: Some(contract.max_supply().into()),
+                    known_circulating_supply: Some(transfer_contract.total_issued_supply().into()),
+                    reject_list_url: contract.reject_list_url().map(|url| url.to_string()),
                     token: None,
                     timestamp,
                     added_at,
@@ -2788,6 +2906,16 @@ pub trait WalletOffline: WalletBackup {
         transfer_dir: &PathBuf,
     ) -> Result<(), Error> {
         let runtime = self.rgb_runtime()?;
+        self.gen_consignments_with_runtime(&runtime, fascia, transfer_info_map, transfer_dir)
+    }
+
+    fn gen_consignments_with_runtime(
+        &self,
+        runtime: &RgbRuntime,
+        fascia: &Fascia,
+        transfer_info_map: &BTreeMap<String, InfoAssetTransfer>,
+        transfer_dir: &PathBuf,
+    ) -> Result<(), Error> {
         for (asset_id, transfer_info) in transfer_info_map {
             let consignment = runtime.transfer_from_fascia(
                 transfer_info.asset_info.contract_id,

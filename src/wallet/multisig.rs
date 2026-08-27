@@ -803,7 +803,7 @@ impl OperationHandler for SendRgbHandler {
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
     ) -> Result<String, Error> {
-        let res = wallet.send_end_impl(txn, combined_psbt)?;
+        let res = wallet.send_end_impl(txn, combined_psbt, true, None)?;
         Ok(res.txid)
     }
 

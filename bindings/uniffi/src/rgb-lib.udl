@@ -59,6 +59,7 @@ interface RgbLibError {
   InsufficientAssignments(string asset_id, AssignmentsCollection available);
   InsufficientBitcoins(u64 needed, u64 available);
   Internal(string details);
+  RgbOperationInProgress(string operation_id);
   InvalidAddress(string details);
   InvalidAmountZero();
   InvalidAssignment();

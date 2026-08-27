@@ -243,6 +243,12 @@ pub(crate) fn setup_rgb<P: AsRef<Path>>(
     if bitcoin_network == BitcoinNetwork::Mainnet && supported_schemas.contains(&AssetSchema::Ifa) {
         return Err(Error::CannotUseIfaOnMainnet);
     }
+    // A crash after stock promotion must not make the wallet impossible to reopen. Recovery only
+    // needs the wallet database and journal; opening or mutating RGB stock remains forbidden until
+    // the caller explicitly finalizes or rolls back the pending acceptance.
+    if crate::wallet::rust_only::pending_rgb_acceptance_operation(wallet_dir.as_ref())?.is_some() {
+        return Ok(());
+    }
     let mut runtime = load_rgb_runtime(wallet_dir)?;
     let known_schemas = runtime.schemata()?;
     if known_schemas.len() < NUM_KNOWN_SCHEMAS {
