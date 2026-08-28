@@ -3372,7 +3372,7 @@ dependencies = [
 [[package]]
 name = "rgb-schemas"
 version = "0.11.1-rc.10"
-source = "git+https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa?rev=2616a0096f4d908c37667063c3bef5d11c5ebdba#2616a0096f4d908c37667063c3bef5d11c5ebdba"
+source = "git+https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa?rev=af4f91e6807a9680ab195c28719197b7811ac5d6#af4f91e6807a9680ab195c28719197b7811ac5d6"
 dependencies = [
  "amplify",
  "rgb-aluvm",

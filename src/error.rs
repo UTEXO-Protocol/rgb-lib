@@ -624,6 +624,14 @@ pub enum Error {
     #[error("Burn recipient is required for a BFA burn")]
     MissingBurnRecipient,
 
+    /// The burn recipient is a fixed 32 bytes; the schema will not accept any
+    /// other width, so a mismatch is refused before the transition is built.
+    #[error("Burn recipient must be 32 bytes, got {len}")]
+    InvalidBurnRecipient {
+        /// Length actually supplied
+        len: u64,
+    },
+
     /// The schema doesn't support inflate transitions
     #[error("Inflation not supported")]
     UnsupportedInflation {

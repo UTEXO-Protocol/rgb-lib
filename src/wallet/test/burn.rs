@@ -435,10 +435,14 @@ fn fail() {
         let wallet = get_test_wallet(true, None);
         party!(wallet, Online { id: 0 })
     };
-    let result =
-        offline_party
-            .wallet
-            .burn(Online { id: 0 }, s!(""), 0, None, FEE_RATE, MIN_CONFIRMATIONS);
+    let result = offline_party.wallet.burn(
+        Online { id: 0 },
+        s!(""),
+        0,
+        None,
+        FEE_RATE,
+        MIN_CONFIRMATIONS,
+    );
     assert_matches!(result, Err(Error::Offline));
     let result = offline_party.wallet.burn_begin(
         Online { id: 0 },

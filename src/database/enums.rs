@@ -462,6 +462,22 @@ impl Nullable for Assignment {
 mod tests {
     use super::*;
 
+    /// The SCHEMA_ID_* constants are hand-copied from the schema crates, and
+    /// the roundtrip below only compares them against themselves - so a schema
+    /// change moves the real id and nothing notices. BFA drifted exactly that
+    /// way when it gained a burn recipient.
+    #[test]
+    fn schema_id_constants_match_their_schemas() {
+        for asset_schema in AssetSchema::VALUES {
+            let pinned: SchemaId = asset_schema.into();
+            assert_eq!(
+                pinned,
+                asset_schema.schema().schema_id(),
+                "the {asset_schema} constant is stale"
+            );
+        }
+    }
+
     #[test]
     fn test_schema_id() {
         // roundtrip

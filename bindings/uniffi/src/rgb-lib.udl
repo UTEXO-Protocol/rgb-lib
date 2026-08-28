@@ -62,6 +62,7 @@ interface RgbLibError {
   InvalidAttachments(string details);
   InvalidBitcoinKeys();
   InvalidBitcoinNetwork(string network);
+  InvalidBurnRecipient(u64 len);
   InvalidColoringInfo(string details);
   InvalidConsignment();
   InvalidCosigner(string details);
@@ -102,6 +103,7 @@ interface RgbLibError {
   MultisigOperationNotFound(i32 operation_idx);
   MultisigTransferStatusMismatch();
   MultisigUnexpectedData(string details);
+  MissingBurnRecipient();
   MultisigUserNotCosigner();
   Network(string details);
   NoConsignment();
@@ -1013,13 +1015,13 @@ interface Wallet {
 
   [Throws=RgbLibError]
   OperationResult burn(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations);
 
   [Throws=RgbLibError]
   BurnBeginResult burn_begin(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations, boolean dry_run);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations, boolean dry_run);
 
   [Throws=RgbLibError]
   OperationResult burn_end(Online online, string signed_psbt);
@@ -1212,8 +1214,8 @@ interface MultisigWallet {
 
   [Throws=RgbLibError]
   InitOperationResult burn_init(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations);
 
   [Throws=RgbLibError]
   InitOperationResult inflate_init(

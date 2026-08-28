@@ -1199,7 +1199,7 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
-        burn_recipient: Option<[u8; 32]>,
+        burn_recipient: Option<Vec<u8>>,
     ) -> Result<BurnBeginResult, Error> {
         self.wallet.burn_begin(
             self.online,
@@ -1217,7 +1217,7 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
-        burn_recipient: Option<[u8; 32]>,
+        burn_recipient: Option<Vec<u8>>,
     ) -> Result<OperationResult, Error> {
         self.wallet.burn(
             self.online,

@@ -94,7 +94,7 @@ pub(crate) const SCHEMA_ID_CFA: &str =
 pub(crate) const SCHEMA_ID_IFA: &str =
     "rgb:sch:IpjJhFLz3oywYKQxO3KmFgR0Aa415nlTNrNyEFqMZCE#shoe-colombo-mango";
 pub(crate) const SCHEMA_ID_BFA: &str =
-    "rgb:sch:mXfH3DI28cPIC8kkamtpgRC5Yct2WS6Cd6XPTGtst~A#first-bernard-paul";
+    "rgb:sch:qmzDdckKuOD~gVQyNz9I6B8YJiIUnaf7O6IPkzYG19E#zebra-consul-avenue";
 
 pub(crate) const RGB_STATE_ASSET_OWNER: &str = "assetOwner";
 pub(crate) const RGB_STATE_INFLATION_ALLOWANCE: &str = "inflationAllowance";

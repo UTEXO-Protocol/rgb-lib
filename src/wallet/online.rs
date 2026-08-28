@@ -4062,11 +4062,20 @@ pub trait WalletOnline: WalletOffline {
         txn: &DbTxn,
         asset_id: String,
         amount: u64,
-        burn_recipient: Option<[u8; 32]>,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
         dry_run: bool,
     ) -> Result<BeginOperationData, Error> {
+        // Fixed-width at the type level, a byte vector across the FFI: convert
+        // once, here, so a wrong length is a named error rather than a silent
+        // truncation deep inside the transition builder.
+        let burn_recipient: Option<[u8; 32]> = burn_recipient
+            .map(|r| {
+                let len = r.len() as u64;
+                <[u8; 32]>::try_from(r).map_err(|_| Error::InvalidBurnRecipient { len })
+            })
+            .transpose()?;
         let asset = txn.check_asset_exists(asset_id.clone())?;
         let schema = asset.schema;
         self.check_schema_support(&schema)?;

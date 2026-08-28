@@ -2656,7 +2656,7 @@ impl MultisigWallet {
         online: Online,
         asset_id: String,
         amount: u64,
-        burn_recipient: Option<[u8; 32]>,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<InitOperationResult, Error> {
@@ -2664,8 +2664,15 @@ impl MultisigWallet {
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
-        let data =
-            self.burn_begin_impl(&txn, asset_id, amount, burn_recipient, fee_rate, min_confirmations, true)?;
+        let data = self.burn_begin_impl(
+            &txn,
+            asset_id,
+            amount,
+            burn_recipient,
+            fee_rate,
+            min_confirmations,
+            true,
+        )?;
         let res = self.post_operation(
             OperationType::Burn,
             PostData::BeginOperationData(Box::new(data)),

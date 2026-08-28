@@ -492,7 +492,7 @@ dependencies = [
  "bitflags",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools",
  "log",
  "prettyplease 0.2.37",
  "proc-macro2",
@@ -1889,15 +1889,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2663,7 +2654,7 @@ checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
 dependencies = [
  "bytes",
  "heck 0.4.1",
- "itertools 0.10.5",
+ "itertools",
  "lazy_static",
  "log",
  "multimap",
@@ -2684,7 +2675,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 1.0.109",
@@ -3002,7 +2993,7 @@ dependencies = [
 [[package]]
 name = "rgb-consensus"
 version = "0.11.1-rc.10"
-source = "git+https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa?rev=66819e80df9adb3b5ad100467f3a7179e38ca5a4#66819e80df9adb3b5ad100467f3a7179e38ca5a4"
+source = "git+https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa?rev=68a1470e22ae4bb6a38205404e484b264b4139ee#68a1470e22ae4bb6a38205404e484b264b4139ee"
 dependencies = [
  "amplify",
  "baid64",
@@ -3149,7 +3140,7 @@ dependencies = [
 [[package]]
 name = "rgb-schemas"
 version = "0.11.1-rc.10"
-source = "git+https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa?rev=09d5d494706e75593f71c3f5f06cd89a8dcb807e#09d5d494706e75593f71c3f5f06cd89a8dcb807e"
+source = "git+https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa?rev=af4f91e6807a9680ab195c28719197b7811ac5d6#af4f91e6807a9680ab195c28719197b7811ac5d6"
 dependencies = [
  "amplify",
  "rgb-aluvm",
