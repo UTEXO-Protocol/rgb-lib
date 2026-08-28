@@ -438,12 +438,13 @@ fn fail() {
     let result =
         offline_party
             .wallet
-            .burn(Online { id: 0 }, s!(""), 0, FEE_RATE, MIN_CONFIRMATIONS);
+            .burn(Online { id: 0 }, s!(""), 0, None, FEE_RATE, MIN_CONFIRMATIONS);
     assert_matches!(result, Err(Error::Offline));
     let result = offline_party.wallet.burn_begin(
         Online { id: 0 },
         s!(""),
         0,
+        None,
         FEE_RATE,
         MIN_CONFIRMATIONS,
         false,
@@ -465,7 +466,7 @@ fn fail() {
     let mut wallet_wo = get_test_wallet(false, None);
     let online_wo = wallet_wo.go_online(test_go_online_options(None)).unwrap();
     let mut party_wo = party!(wallet_wo, online_wo);
-    let result = party_wo.burn_result(&asset_ifa.asset_id, 10);
+    let result = party_wo.burn_result(&asset_ifa.asset_id, 10, None);
     assert_matches!(result, Err(Error::WatchOnly));
 
     // - wrong online
@@ -475,14 +476,14 @@ fn fail() {
     // - check online is correct
     let good_online = party.online;
     party.online = wrong_online;
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 10);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 10, None);
     party.online = good_online;
     assert_matches!(result, Err(Error::CannotChangeOnline));
     // - invalid asset_id
-    let result = party.burn_begin_result("malformed", 10);
+    let result = party.burn_begin_result("malformed", 10, None);
     assert_matches!(result, Err(Error::AssetNotFound { asset_id: _ }));
     // - check zero burn amount
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 0);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 0, None);
     assert_matches!(result, Err(Error::NoBurnAmount));
     // - check fee_rate
     //   - low
@@ -490,6 +491,7 @@ fn fail() {
         party.online,
         asset_ifa.asset_id.clone(),
         10,
+        None,
         0,
         MIN_CONFIRMATIONS,
         false,
@@ -500,6 +502,7 @@ fn fail() {
         party.online,
         asset_ifa.asset_id.clone(),
         10,
+        None,
         u64::MAX,
         MIN_CONFIRMATIONS,
         false,
@@ -508,7 +511,7 @@ fn fail() {
 
     // burn_begin errors
     // - inexistent asset
-    let result = party.burn_begin_result("rgb1nexistent", 10);
+    let result = party.burn_begin_result("rgb1nexistent", 10, None);
     assert_matches!(result, Err(Error::AssetNotFound { asset_id: _ }));
     // - schema not supported
     create_test_data_dir();
@@ -572,7 +575,7 @@ fn fail() {
         .go_online(test_go_online_options(Some(ELECTRUM_URL)))
         .unwrap();
     let mut party_nia = party!(wallet_nia, online_nia);
-    let result = party_nia.burn_begin_result(&asset_ifa.asset_id, 10);
+    let result = party_nia.burn_begin_result(&asset_ifa.asset_id, 10, None);
     assert_matches!(result, Err(Error::UnsupportedSchema { asset_schema: _ }));
     // - burn not supported
     let asset_nia = party.issue_asset_nia(None);
@@ -584,11 +587,11 @@ fn fail() {
         (asset_uda.asset_id, AssetSchema::Uda),
     ];
     for (asset_id, schema) in unsupported_asset_ids {
-        let result = party.burn_result(&asset_id, 10);
+        let result = party.burn_result(&asset_id, 10, None);
         assert_matches!(result, Err(Error::UnsupportedBurn { asset_schema }) if asset_schema == schema);
     }
     // - burn zero amount
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 0);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 0, None);
     assert_matches!(result, Err(Error::NoBurnAmount));
 
     // burn_end input params
@@ -641,6 +644,7 @@ fn begin_end() {
             party.online,
             asset.asset_id.clone(),
             AMOUNT,
+            None,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             true,
@@ -660,6 +664,7 @@ fn begin_end() {
             party.online,
             asset.asset_id.clone(),
             AMOUNT,
+            None,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             false,

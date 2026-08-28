@@ -208,7 +208,7 @@ use rgbstd::{
     validation::{
         ResolveWitness, Scripts, Status, WitnessOrdProvider, WitnessResolverError, WitnessStatus,
     },
-    vm::ether_extension::BridgeLocation,
+    vm::ether_extension::{BridgeLocation, BurnRecipient},
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use rgbstd::{

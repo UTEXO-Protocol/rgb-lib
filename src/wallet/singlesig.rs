@@ -1300,6 +1300,7 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<[u8; 32]>,
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<OperationResult, Error> {
@@ -1308,7 +1309,7 @@ impl Wallet {
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let mut begin_op_data =
-            self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, true)?;
+            self.burn_begin_impl(&txn, asset_id, amount, burn_recipient, fee_rate, min_confirmations, true)?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.burn_end_impl(&txn, &begin_op_data.psbt)?;
         self.update_backup_info(&txn, false)?;
@@ -1339,6 +1340,7 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<[u8; 32]>,
         fee_rate: u64,
         min_confirmations: u8,
         dry_run: bool,
@@ -1347,7 +1349,7 @@ impl Wallet {
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
         let begin_operation_data =
-            self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, dry_run)?;
+            self.burn_begin_impl(&txn, asset_id, amount, burn_recipient, fee_rate, min_confirmations, dry_run)?;
         if !dry_run {
             self.update_backup_info(&txn, false)?;
         }

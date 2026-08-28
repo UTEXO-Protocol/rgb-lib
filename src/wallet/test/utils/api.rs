@@ -1186,12 +1186,12 @@ impl SinglesigParty {
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn burn(&mut self, asset_id: &str, amount: u64) -> OperationResult {
-        self.burn_result(asset_id, amount).unwrap()
+        self.burn_result(asset_id, amount, None).unwrap()
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn burn_begin(&mut self, asset_id: &str, amount: u64) -> String {
-        self.burn_begin_result(asset_id, amount).unwrap().psbt
+        self.burn_begin_result(asset_id, amount, None).unwrap().psbt
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1199,11 +1199,13 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
+        burn_recipient: Option<[u8; 32]>,
     ) -> Result<BurnBeginResult, Error> {
         self.wallet.burn_begin(
             self.online,
             asset_id.to_string(),
             amount,
+            burn_recipient,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             true,
@@ -1215,11 +1217,13 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
+        burn_recipient: Option<[u8; 32]>,
     ) -> Result<OperationResult, Error> {
         self.wallet.burn(
             self.online,
             asset_id.to_string(),
             amount,
+            burn_recipient,
             FEE_RATE,
             MIN_CONFIRMATIONS,
         )

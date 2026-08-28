@@ -2077,6 +2077,10 @@ pub struct InfoAssetTransfer {
     pub assignments_needed: AssignmentsCollection,
     pub assignments_spent: HashMap<OutPoint, Vec<Assignment>>,
     pub main_transition: TypeOfTransition,
+    /// Where a BFA burn's proceeds are owed, carried into the transition's
+    /// metadata. `None` for every other transition; the BFA schema makes it
+    /// mandatory on a burn, so a missing value is refused before the build.
+    pub burn_recipient: Option<[u8; 32]>,
     pub beneficiaries_blinded: Vec<SecretSeal>,
     pub beneficiaries_witness: Vec<ExplicitSeal<RgbTxid>>,
 }

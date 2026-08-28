@@ -1260,11 +1260,6 @@ pub trait WalletOnline: WalletOffline {
                     }
                 }
             }
-            info!(
-                self.logger(),
-                "BFA validation: {} FundsIn event(s) gathered from the bridge contract",
-                events.len()
-            );
             let schema = consignment.schema().clone();
             consignment
                 .clone()
@@ -2466,9 +2461,30 @@ pub trait WalletOnline: WalletOffline {
                     let burn = transfer_info.original_assignments_needed.fungible;
                     asset_transition_builder = asset_transition_builder
                         .add_metadata(RGB_METADATA_BURNED_ASSET, Amount::from(burn))
-                        .unwrap()
-                        .add_metadata(RGB_METADATA_BURNED_INFLATION, Amount::from(0u64))
                         .unwrap();
+                    // Metadata is a closed set and the builder panics on a name the
+                    // schema does not know, so each side writes only its own: IFA
+                    // declares burnedInflation, BFA declares burnRecipient, and
+                    // neither declares the other's.
+                    match txn.check_asset_exists(asset_id.clone())?.schema {
+                        AssetSchema::Ifa => {
+                            asset_transition_builder = asset_transition_builder
+                                .add_metadata(RGB_METADATA_BURNED_INFLATION, Amount::from(0u64))
+                                .unwrap();
+                        }
+                        AssetSchema::Bfa => {
+                            let recipient = transfer_info
+                                .burn_recipient
+                                .ok_or(Error::MissingBurnRecipient)?;
+                            asset_transition_builder = asset_transition_builder
+                                .add_metadata(
+                                    RGB_METADATA_BURN_RECIPIENT,
+                                    BurnRecipient::from(recipient),
+                                )
+                                .unwrap();
+                        }
+                        _ => {}
+                    }
                 }
                 _ => {}
             }
@@ -3507,6 +3523,7 @@ pub trait WalletOnline: WalletOffline {
                 )?;
 
                 let transfer_info = InfoAssetTransfer {
+                    burn_recipient: None,
                     asset_info,
                     recipients: local_recipients[asset_id].clone(),
                     asset_spend,
@@ -3778,6 +3795,7 @@ pub trait WalletOnline: WalletOffline {
             reject_list_url: asset.reject_list_url,
         };
         let transfer_info = InfoAssetTransfer {
+            burn_recipient: None,
             asset_info,
             recipients: local_recipients.clone(),
             asset_spend: asset_spend.clone(),
@@ -3911,6 +3929,7 @@ pub trait WalletOnline: WalletOffline {
             reject_list_url: asset.reject_list_url,
         };
         let transfer_info = InfoAssetTransfer {
+            burn_recipient: None,
             asset_info,
             recipients: local_recipients.clone(),
             asset_spend: asset_spend.clone(),
@@ -4043,6 +4062,7 @@ pub trait WalletOnline: WalletOffline {
         txn: &DbTxn,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<[u8; 32]>,
         fee_rate: u64,
         min_confirmations: u8,
         dry_run: bool,
@@ -4111,6 +4131,7 @@ pub trait WalletOnline: WalletOffline {
             assignments_needed,
             assignments_spent: HashMap::new(),
             main_transition: TypeOfTransition::Burn,
+            burn_recipient,
             beneficiaries_blinded: vec![],
             beneficiaries_witness: vec![],
         };

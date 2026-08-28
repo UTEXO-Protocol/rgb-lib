@@ -619,6 +619,11 @@ pub enum Error {
         asset_schema: AssetSchema,
     },
 
+    /// A BFA burn is a redemption, so the schema requires it to say where the
+    /// proceeds are owed. The field is not optional and cannot be defaulted.
+    #[error("Burn recipient is required for a BFA burn")]
+    MissingBurnRecipient,
+
     /// The schema doesn't support inflate transitions
     #[error("Inflation not supported")]
     UnsupportedInflation {

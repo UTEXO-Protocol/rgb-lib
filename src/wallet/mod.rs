@@ -109,3 +109,5 @@ pub(crate) const RGB_METADATA_ALLOWED_INFLATION: &str = "allowedInflation";
 pub(crate) const RGB_METADATA_BURNED_ASSET: &str = "burnedAsset";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_BURNED_INFLATION: &str = "burnedInflation";
+/// Where a BFA burn's proceeds are owed; declared only by the BFA schema.
+pub(crate) const RGB_METADATA_BURN_RECIPIENT: &str = "burnRecipient";

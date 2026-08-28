@@ -492,7 +492,7 @@ pub(super) trait MultisigOps: OfflineSigParty {
     fn burn_init_res(&mut self, asset_id: &str, amount: u64) -> Result<InitOperationResult, Error> {
         let online = self.online();
         self.multisig_mut()
-            .burn_init(online, asset_id.to_string(), amount, FEE_RATE, 1)
+            .burn_init(online, asset_id.to_string(), amount, None, FEE_RATE, 1)
     }
 
     fn issue_asset_cfa(&mut self, amounts: Option<&[u64]>, file_path: Option<String>) -> AssetCFA {

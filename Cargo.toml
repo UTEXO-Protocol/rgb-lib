@@ -177,7 +177,7 @@ debug = 1
 # the lock is force-updated with `cargo update -p rgb-ops -p rgb-consensus
 # -p rgb-invoicing`.
 [patch.crates-io]
-rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "9ce27c88e96b8cef16e3724ca88a84846462cf6d" }
+rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "68a1470e22ae4bb6a38205404e484b264b4139ee" }
 rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
 rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
-rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "09d5d494706e75593f71c3f5f06cd89a8dcb807e" }
+rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "2616a0096f4d908c37667063c3bef5d11c5ebdba" }
