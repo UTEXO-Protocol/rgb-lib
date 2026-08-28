@@ -1260,6 +1260,11 @@ pub trait WalletOnline: WalletOffline {
                     }
                 }
             }
+            info!(
+                self.logger(),
+                "BFA validation: {} FundsIn event(s) gathered from the bridge contract",
+                events.len()
+            );
             let schema = consignment.schema().clone();
             consignment
                 .clone()
