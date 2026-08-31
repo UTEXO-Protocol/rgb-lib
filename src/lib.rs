@@ -224,8 +224,8 @@ use rgbstd::{
 use schemata::{BfaWrapper, CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
     BridgedFungibleAsset, CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset,
-    NonInflatableAsset, OS_ASSET, OS_BRIDGE, OS_INFLATION, TS_BRIDGE, TS_BURN, TS_INFLATION,
-    TS_TRANSFER, UniqueDigitalAsset,
+    MS_BURN_RECIPIENT, NonInflatableAsset, OS_ASSET, OS_BRIDGE, OS_INFLATION, TS_BRIDGE, TS_BURN,
+    TS_INFLATION, TS_TRANSFER, UniqueDigitalAsset,
 };
 use scrypt::{
     Params, Scrypt,

@@ -2862,6 +2862,37 @@ pub trait WalletOffline: WalletBackup {
         asset_transfer_dir.as_ref().join(CONSIGNMENT_FILE)
     }
 
+    /// Read the payout target committed inside a BFA burn consignment.
+    ///
+    /// The 32 bytes are opaque to consensus - it neither interprets nor
+    /// validates them - but they sit inside the burn operation, so they are
+    /// covered by its OpId and signed by whoever spent the burned units. That
+    /// is what lets a bridge release funds to them without trusting whoever
+    /// submitted the consignment.
+    fn burn_recipient_from_consignment_impl(
+        &self,
+        consignment_path: String,
+    ) -> Result<Vec<u8>, Error> {
+        let consignment =
+            RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidConsignment)?;
+
+        for anchored_bundle in consignment.bundles.iter() {
+            for known in anchored_bundle.bundle.known_transitions.iter() {
+                if known.transition.transition_type != TS_BURN {
+                    continue;
+                }
+                for (meta_type, meta_value) in &known.transition.metadata {
+                    if *meta_type != MS_BURN_RECIPIENT {
+                        continue;
+                    }
+                    return Ok(meta_value.as_unconfined().as_slice().to_vec());
+                }
+            }
+        }
+
+        Err(Error::InvalidConsignment)
+    }
+
     fn gen_consignments(
         &self,
         fascia: &Fascia,
@@ -3113,5 +3144,19 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         txn.commit()?;
         info!(self.logger(), "RGB transfer inspection completed");
         Ok(inspection)
+    }
+
+    /// Return the 32-byte payout target committed inside a BFA burn.
+    ///
+    /// A redemption names its destination in the burn transition itself, so a
+    /// bridge reading it here does not have to trust whoever submitted the
+    /// consignment. Errors if the consignment carries no burn transition or the
+    /// burn carries no recipient - the latter means an IFA burn, which declares
+    /// burnedInflation instead.
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, Error> {
+        info!(self.logger(), "Reading burn recipient...");
+        let recipient = self.burn_recipient_from_consignment_impl(consignment_path)?;
+        info!(self.logger(), "Read burn recipient completed");
+        Ok(recipient)
     }
 }

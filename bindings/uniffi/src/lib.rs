@@ -1639,6 +1639,10 @@ impl Wallet {
             .into())
     }
 
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, RgbLibError> {
+        self._get_wallet().get_burn_recipient(consignment_path)
+    }
+
     fn list_pending_vanilla_txs(&self) -> Result<Vec<PendingVanillaTx>, RgbLibError> {
         self._get_wallet().list_pending_vanilla_txs()
     }
@@ -2142,6 +2146,10 @@ impl MultisigWallet {
             ._get_wallet()
             .inspect_rgb_transfer(psbt, fascia_path, entropy)?
             .into())
+    }
+
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, RgbLibError> {
+        self._get_wallet().get_burn_recipient(consignment_path)
     }
 
     fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {

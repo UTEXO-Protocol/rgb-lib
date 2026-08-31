@@ -4180,8 +4180,16 @@ pub trait WalletOnline: WalletOffline {
     }
 
     fn burn_end_impl(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<OperationResult, Error> {
-        let (txid, _transfer_dir, info_contents, fascia) =
+        let (txid, transfer_dir, info_contents, fascia) =
             self.get_transfer_end_data(signed_psbt)?;
+
+        // A BFA burn is the source proof for an EVM release, so it has to leave
+        // a verifiable artifact behind. Without this the transfer row records a
+        // consignment path that was never written, and a redeemer has nothing
+        // to submit. The beneficiary sets are empty for a burn, which is what
+        // makes the consignment terminal: it carries the history and the burn
+        // transition and assigns nothing onward.
+        self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
 
         let batch_transfer_idx = self.finalize_transfer_end(
             txn,

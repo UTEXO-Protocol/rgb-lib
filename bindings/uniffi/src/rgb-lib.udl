@@ -935,6 +935,9 @@ interface Wallet {
     string psbt, string fascia_path, u64 entropy);
 
   [Throws=RgbLibError]
+  sequence<u8> get_burn_recipient(string consignment_path);
+
+  [Throws=RgbLibError]
   void backup(string backup_path, string password);
 
   [Throws=RgbLibError]
@@ -1160,6 +1163,9 @@ interface MultisigWallet {
   [Throws=RgbLibError]
   RgbInspection inspect_rgb_transfer(
     string psbt, string fascia_path, u64 entropy);
+
+  [Throws=RgbLibError]
+  sequence<u8> get_burn_recipient(string consignment_path);
 
   [Throws=RgbLibError]
   void backup(string backup_path, string password);
