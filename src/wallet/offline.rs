@@ -2876,8 +2876,13 @@ pub trait WalletOffline: WalletBackup {
         let consignment =
             RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidConsignment)?;
 
-        for anchored_bundle in consignment.bundles.iter() {
-            for known in anchored_bundle.bundle.known_transitions.iter() {
+        // Newest first. A consignment carries the wallet's whole history, so
+        // an older burn's transition comes earlier and taking the first match
+        // would pay out to whoever that burn named. The burn being redeemed is
+        // the terminal one, which is also what the enclave binds the release
+        // to - reading from either end has to give the same answer.
+        for anchored_bundle in consignment.bundles.iter().rev() {
+            for known in anchored_bundle.bundle.known_transitions.iter().rev() {
                 if known.transition.transition_type != TS_BURN {
                     continue;
                 }
