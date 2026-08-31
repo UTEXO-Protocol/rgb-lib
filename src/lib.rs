@@ -188,7 +188,7 @@ use rgbinvoice::{AddressPayload, Beneficiary, RgbInvoice, RgbInvoiceBuilder, XCh
 #[cfg(feature = "electrum")]
 use rgbstd::indexers::electrum_blocking::electrum_client::ConfigBuilder;
 use rgbstd::{
-    Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, Opout,
+    Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, OpId, Opout,
     OutputSeal, OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition, TypeSystem,
     containers::{BuilderSeal, Kit, ValidContract, ValidKit, ValidTransfer},
     contract::{AllocatedState, ContractBuilder, IssuerWrapper, SchemaWrapper, TransitionBuilder},

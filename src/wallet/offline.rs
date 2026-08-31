@@ -2901,10 +2901,28 @@ pub trait WalletOffline: WalletBackup {
     ) -> Result<(), Error> {
         let runtime = self.rgb_runtime()?;
         for (asset_id, transfer_info) in transfer_info_map {
+            // A burn pays nobody, so no seal in the bundle points at a
+            // requested output and the builder would filter every transition
+            // away, leaving an empty known_transitions that panics on confine.
+            // Name the bundle's own transitions instead - for a burn they are
+            // exactly what the consignment has to carry.
+            let opids: BTreeSet<OpId> = if transfer_info.beneficiaries_witness.is_empty()
+                && transfer_info.beneficiaries_blinded.is_empty()
+            {
+                fascia
+                    .bundles()
+                    .get(&transfer_info.asset_info.contract_id)
+                    .map(|bundle| bundle.known_transitions_opids())
+                    .unwrap_or_default()
+            } else {
+                BTreeSet::new()
+            };
+
             let consignment = runtime.transfer_from_fascia(
                 transfer_info.asset_info.contract_id,
                 transfer_info.beneficiaries_witness.clone(),
                 transfer_info.beneficiaries_blinded.clone(),
+                opids,
                 fascia,
             )?;
             let asset_transfer_dir = self.get_asset_transfer_dir(transfer_dir, asset_id);

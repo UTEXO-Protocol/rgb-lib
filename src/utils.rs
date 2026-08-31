@@ -908,10 +908,11 @@ impl RgbRuntime {
         contract_id: ContractId,
         outputs: impl AsRef<[OutputSeal]>,
         secret_seals: impl AsRef<[SecretSeal]>,
+        opids: impl IntoIterator<Item = OpId>,
         fascia: &Fascia,
     ) -> Result<RgbTransfer, InternalError> {
         self.stock
-            .transfer_from_fascia(contract_id, outputs, secret_seals, [], fascia)
+            .transfer_from_fascia(contract_id, outputs, secret_seals, opids, fascia)
             .map_err(InternalError::from)
     }
 
