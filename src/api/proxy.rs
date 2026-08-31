@@ -76,14 +76,46 @@ pub(crate) struct AttachmentIdParam {
 
 impl ProxyClient {
     pub(crate) fn new(base_url: &str) -> Result<Self, Error> {
-        let client = RestClient::builder()
+        let mut builder = RestClient::builder()
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
             .timeout(Duration::from_secs(READ_WRITE_TIMEOUT))
-            .build()?;
+            .redirect(Policy::none());
+        if let Some((host, addrs)) = Self::plaintext_pin(base_url)? {
+            builder = builder.resolve_to_addrs(&host, &addrs);
+        }
+        let client = builder.build()?;
         Ok(Self {
             client,
             base_url: base_url.to_string(),
         })
+    }
+
+    /// Resolve a plaintext (`http`) proxy host once, at construction, and pin the
+    /// connection to the addresses it yielded. A `ProxyClient` is built per
+    /// operation and used immediately, so this closes the window in which a
+    /// hostname could be re-pointed between resolution and the request.
+    ///
+    /// Returns `None` for `https`, where TLS authenticates the host and pinning
+    /// would only defeat DNS-based failover.
+    fn plaintext_pin(base_url: &str) -> Result<Option<(String, Vec<SocketAddr>)>, Error> {
+        let url = Url::parse(base_url).map_err(Self::req_err)?;
+        if url.scheme() != "http" {
+            return Ok(None);
+        }
+        let host = url.host_str().ok_or_else(|| Error::Proxy {
+            details: s!("plaintext proxy URL has no host to resolve"),
+        })?;
+        let port = url.port_or_known_default().unwrap_or(80);
+        let addrs: Vec<SocketAddr> = (host, port)
+            .to_socket_addrs()
+            .map_err(Self::req_err)?
+            .collect();
+        if addrs.is_empty() {
+            return Err(Error::Proxy {
+                details: format!("plaintext proxy host '{host}' resolved to no addresses"),
+            });
+        }
+        Ok(Some((host.to_string(), addrs)))
     }
 
     fn req_err(e: impl std::fmt::Display) -> Error {
@@ -257,6 +289,42 @@ impl ProxyClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn https_host_is_not_pinned() {
+        assert!(
+            ProxyClient::plaintext_pin("https://proxy.example.com/json-rpc")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn plaintext_host_is_pinned_to_its_resolved_addresses() {
+        let (host, addrs) = ProxyClient::plaintext_pin("http://127.0.0.1:3000/json-rpc")
+            .unwrap()
+            .expect("a plaintext endpoint must be pinned");
+        assert_eq!(host, "127.0.0.1");
+        assert!(
+            addrs
+                .iter()
+                .any(|a| a.ip().is_loopback() && a.port() == 3000)
+        );
+    }
+
+    #[test]
+    fn plaintext_without_explicit_port_pins_the_http_default() {
+        let (_, addrs) = ProxyClient::plaintext_pin("http://127.0.0.1/json-rpc")
+            .unwrap()
+            .expect("a plaintext endpoint must be pinned");
+        assert!(addrs.iter().all(|a| a.port() == 80));
+    }
+
+    #[test]
+    fn plaintext_host_that_does_not_resolve_is_refused_rather_than_left_unpinned() {
+        let result = ProxyClient::plaintext_pin("http://rgb-lib-nonexistent-host.invalid/json-rpc");
+        assert_matches!(result, Err(Error::Proxy { .. }));
+    }
 
     #[test]
     fn get_info_error() {

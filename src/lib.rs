@@ -150,6 +150,7 @@ use std::{
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},
+    net::{SocketAddr, ToSocketAddrs},
     panic,
     path::{Path, PathBuf},
     str::FromStr,
@@ -216,6 +217,7 @@ use rand::{RngExt, distr::Alphanumeric};
 use reqwest::{
     blocking::{Client as RestClient, multipart},
     header::CONTENT_TYPE,
+    redirect::Policy,
 };
 use rgb_lib_migration::{
     ArrayType, ColumnType, Migrator, MigratorTrait, Nullable, Value, ValueTypeErr,

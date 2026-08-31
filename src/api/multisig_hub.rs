@@ -169,6 +169,7 @@ impl MultisigHubClient {
         let client = RestClient::builder()
             .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT))
             .timeout(Duration::from_secs(READ_WRITE_TIMEOUT))
+            .redirect(Policy::none())
             .build()?;
         Ok(Self {
             client,
