@@ -185,7 +185,7 @@ use bdk_wallet::{
         OutPoint, OutPoint as BdkOutPoint, ScriptBuf, TxOut,
         bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv, Xpub},
         hashes::{Hash as Sha256Hash, sha256},
-        psbt::{ExtractTxError, Psbt},
+        psbt::Psbt,
         secp256k1::Secp256k1,
     },
     chain::{CanonicalizationParams, ChainPosition},

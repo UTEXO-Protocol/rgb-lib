@@ -5647,7 +5647,8 @@ fn script_buf_to_from_recipient_id() {
     let script_buf = party.wallet.get_script_pubkey(&address_str).unwrap();
 
     // recipient ID from script buf
-    let recipient_id = recipient_id_from_script_buf(script_buf.clone(), BitcoinNetwork::Regtest);
+    let recipient_id =
+        recipient_id_from_script_buf(script_buf.clone(), BitcoinNetwork::Regtest).unwrap();
 
     // script buf from recipient ID Some
     let script_from_recipient = script_buf_from_recipient_id(recipient_id).unwrap();
@@ -5664,6 +5665,16 @@ fn script_buf_to_from_recipient_id() {
     // script buf from recipient ID None (bad recipient ID)
     let result = script_buf_from_recipient_id(s!(""));
     assert!(matches!(result, Err(Error::InvalidRecipientID)));
+
+    // bare CHECKMULTISIG is not an AddressPayload
+    let mut bare_multisig = vec![0x51, 0x21, 0x02];
+    bare_multisig.extend([0x11u8; 32]);
+    bare_multisig.extend([0x51, 0xae]);
+    let result = recipient_id_from_script_buf(
+        ScriptBuf::from_bytes(bare_multisig),
+        BitcoinNetwork::Regtest,
+    );
+    assert!(matches!(result, Err(Error::InvalidAddress { .. })));
 }
 
 #[cfg(feature = "electrum")]

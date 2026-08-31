@@ -2087,6 +2087,9 @@ pub struct ReceivedConsignmentMeta {
 pub enum TryFailBatchTransferOutcome {
     Failed,
     Refreshed,
+    /// Failing the batch would misreport state that already landed elsewhere: its TX is known to
+    /// the indexer (so the inputs cannot be credited back), or its fascia is already in the stash
+    CannotFail,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]

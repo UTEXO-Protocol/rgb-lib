@@ -21,9 +21,9 @@ fn vss_runtime() -> &'static tokio::runtime::Runtime {
 }
 
 use rgb_lib::{
-    AssetSchema, Assignment as RgbLibAssignment, CloseMethod, Error as RgbLibError, TransferStatus,
-    TransportType, WalletTransactionType,
-    bdk_wallet::bitcoin::secp256k1::SecretKey,
+    AssetSchema, Assignment as RgbLibAssignment, CloseMethod, ContractId, Error as RgbLibError,
+    FileContent, RgbTransfer, TransferStatus, TransportType, WalletTransactionType,
+    bdk_wallet::bitcoin::{OutPoint as BitcoinOutPoint, Psbt, Txid, secp256k1::SecretKey},
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
@@ -47,6 +47,10 @@ use rgb_lib::{
         TransferTransportEndpoint, TransportEndpoint as RgbLibTransportEndpoint, TypeOfTransition,
         Unspent as RgbLibUnspent, UserRole, Utxo, Wallet as RgbLibWallet, WalletData,
         WalletDescriptors, WitnessData,
+        rust_only::{
+            AssetColoringInfo as RgbAssetColoringInfo, ColoringInfo as RgbColoringInfo,
+            ExpectedTransfer as RgbExpectedTransfer,
+        },
         vss::{
             VssBackupClient as RgbLibVssBackupClient, VssBackupConfig as RgbLibVssBackupConfig,
             VssBackupInfo, VssBackupMode, restore_from_vss as rgb_lib_restore_from_vss,
@@ -135,6 +139,133 @@ impl From<Assignment> for RgbLibAssignment {
         }
     }
 }
+
+/// Result of accepting a transfer from consignment bytes.
+pub struct AcceptTransferResult {
+    pub consignment: Vec<u8>,
+    pub assignments: Vec<Assignment>,
+}
+
+/// Caller intent for `fetch_and_accept_transfer_by_recipient_id`.
+pub struct ExpectedTransfer {
+    pub asset_id: String,
+    pub asset_schema: AssetSchema,
+    pub assignment: Assignment,
+}
+
+impl From<ExpectedTransfer> for RgbExpectedTransfer {
+    fn from(orig: ExpectedTransfer) -> Self {
+        Self {
+            asset_id: orig.asset_id,
+            asset_schema: orig.asset_schema,
+            assignment: orig.assignment.into(),
+        }
+    }
+}
+
+/// FFI coloring input for a single asset (see `rgb_lib::wallet::rust_only::AssetColoringInfo`).
+pub struct AssetColoringInfo {
+    pub asset_id: String,
+    pub output_map: HashMap<u32, u64>,
+    pub static_blinding: Option<u64>,
+}
+
+/// FFI coloring info for `htlc_prepare` (final PSBT vout indices).
+pub struct ColoringInfo {
+    pub assets: Vec<AssetColoringInfo>,
+    pub static_blinding: Option<u64>,
+    pub nonce: Option<u64>,
+}
+
+/// Status of a file-backed HTLC coloring operation.
+pub enum HtlcOperationStatus {
+    Prepared,
+    Applied,
+    Failed,
+    Settled,
+}
+
+impl From<rgb_lib::wallet::rust_only::HtlcOperationStatus> for HtlcOperationStatus {
+    fn from(s: rgb_lib::wallet::rust_only::HtlcOperationStatus) -> Self {
+        match s {
+            rgb_lib::wallet::rust_only::HtlcOperationStatus::Prepared => Self::Prepared,
+            rgb_lib::wallet::rust_only::HtlcOperationStatus::Applied => Self::Applied,
+            rgb_lib::wallet::rust_only::HtlcOperationStatus::Failed => Self::Failed,
+            rgb_lib::wallet::rust_only::HtlcOperationStatus::Settled => Self::Settled,
+        }
+    }
+}
+
+/// Result of `htlc_prepare`: opaque operation ID + colored PSBT + file-backed payload dir.
+pub struct HtlcPrepareResult {
+    pub operation_id: String,
+    pub colored_psbt: String,
+    pub operation_dir: String,
+}
+
+/// RGB assignments on a (possibly foreign) outpoint.
+pub struct OutpointAssignments {
+    pub outpoint: Outpoint,
+    pub assignments: Vec<Assignment>,
+}
+
+fn contract_id_from_asset_id_for_coloring(asset_id: &str) -> Result<ContractId, RgbLibError> {
+    ContractId::from_str(asset_id).map_err(|e| RgbLibError::InvalidColoringInfo {
+        details: format!("invalid asset_id '{asset_id}': {e}"),
+    })
+}
+
+fn contract_id_from_asset_id(asset_id: &str) -> Result<ContractId, RgbLibError> {
+    ContractId::from_str(asset_id).map_err(|_| RgbLibError::AssetNotFound {
+        asset_id: asset_id.to_string(),
+    })
+}
+
+fn to_rgb_coloring_info(coloring_info: ColoringInfo) -> Result<RgbColoringInfo, RgbLibError> {
+    let mut asset_info_map = HashMap::new();
+    for asset in coloring_info.assets {
+        let contract_id = contract_id_from_asset_id_for_coloring(&asset.asset_id)?;
+        if asset_info_map.contains_key(&contract_id) {
+            return Err(RgbLibError::InvalidColoringInfo {
+                details: format!("duplicate asset_id '{}'", asset.asset_id),
+            });
+        }
+        asset_info_map.insert(
+            contract_id,
+            RgbAssetColoringInfo {
+                output_map: asset.output_map,
+                static_blinding: asset.static_blinding,
+            },
+        );
+    }
+    Ok(RgbColoringInfo {
+        asset_info_map,
+        static_blinding: coloring_info.static_blinding,
+        nonce: coloring_info.nonce,
+    })
+}
+
+fn to_bitcoin_outpoints(outpoints: Vec<Outpoint>) -> Result<Vec<BitcoinOutPoint>, RgbLibError> {
+    outpoints
+        .into_iter()
+        .map(|outpoint| {
+            let txid = Txid::from_str(&outpoint.txid).map_err(|_| RgbLibError::InvalidTxid)?;
+            Ok(BitcoinOutPoint {
+                txid,
+                vout: outpoint.vout,
+            })
+        })
+        .collect()
+}
+
+fn save_rgb_transfer(transfer: &RgbTransfer) -> Result<Vec<u8>, RgbLibError> {
+    let mut buf = Vec::new();
+    transfer
+        .save(&mut buf)
+        .map_err(|_| RgbLibError::InvalidConsignment)?;
+    Ok(buf)
+}
+
 pub struct InvoiceData {
     pub recipient_id: String,
     pub proxy_recipient_id: String,
@@ -910,6 +1041,11 @@ fn validate_consignment_offchain(
     })
 }
 
+fn script_hex_from_recipient_id(recipient_id: String) -> Result<Option<String>, RgbLibError> {
+    Ok(rgb_lib::utils::script_buf_from_recipient_id(recipient_id)?
+        .map(|script| script.to_hex_string()))
+}
+
 struct RecipientInfo {
     recipient_info: RwLock<RgbLibRecipientInfo>,
 }
@@ -1115,6 +1251,88 @@ impl Wallet {
             transport_endpoints,
             min_confirmations,
         )
+    }
+
+    fn htlc_prepare(
+        &self,
+        psbt: String,
+        coloring_info: ColoringInfo,
+        input_outpoints: Vec<Outpoint>,
+        min_confirmations: u8,
+        expiration_timestamp: Option<u64>,
+    ) -> Result<HtlcPrepareResult, RgbLibError> {
+        let mut psbt = Psbt::from_str(&psbt)?;
+        let coloring = to_rgb_coloring_info(coloring_info)?;
+        let input_outpoints = to_bitcoin_outpoints(input_outpoints)?;
+        let result = self._get_wallet().htlc_prepare(
+            &mut psbt,
+            coloring,
+            input_outpoints,
+            min_confirmations,
+            expiration_timestamp,
+        )?;
+        Ok(HtlcPrepareResult {
+            operation_id: result.operation_id,
+            colored_psbt: result.colored_psbt,
+            operation_dir: result.operation_dir,
+        })
+    }
+
+    fn htlc_apply(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().htlc_apply(online, &operation_id)
+    }
+
+    fn htlc_abort(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().htlc_abort(online, &operation_id)
+    }
+
+    fn htlc_reconcile(&self, operation_id: String) -> Result<HtlcOperationStatus, RgbLibError> {
+        Ok(self._get_wallet().htlc_reconcile(&operation_id)?.into())
+    }
+
+    fn contract_assignments_for_outpoints(
+        &self,
+        asset_id: String,
+        outpoints: Vec<Outpoint>,
+    ) -> Result<Vec<OutpointAssignments>, RgbLibError> {
+        let contract_id = contract_id_from_asset_id(&asset_id)?;
+        let rows = self
+            ._get_wallet()
+            .contract_assignments_for_outpoints(contract_id, outpoints)?;
+        Ok(rows
+            .into_iter()
+            .map(|(outpoint, assignments)| OutpointAssignments {
+                outpoint,
+                assignments: assignments.into_iter().map(Into::into).collect(),
+            })
+            .collect())
+    }
+
+    fn fetch_and_accept_transfer_by_recipient_id(
+        &self,
+        online: Online,
+        proxy_recipient_id: String,
+        witness_recipient_id: String,
+        consignment_endpoint: String,
+        blinding: u64,
+        min_confirmations: u8,
+        expected: ExpectedTransfer,
+    ) -> Result<AcceptTransferResult, RgbLibError> {
+        let (transfer, assignments) = self
+            ._get_wallet()
+            .fetch_and_accept_transfer_by_recipient_id(
+                online,
+                proxy_recipient_id,
+                witness_recipient_id,
+                &consignment_endpoint,
+                blinding,
+                min_confirmations,
+                expected.into(),
+            )?;
+        Ok(AcceptTransferResult {
+            consignment: save_rgb_transfer(&transfer)?,
+            assignments: assignments.into_iter().map(Into::into).collect(),
+        })
     }
 
     fn finalize_psbt(&self, signed_psbt: String) -> Result<String, RgbLibError> {
@@ -2065,3 +2283,90 @@ impl MultisigWallet {
 }
 
 uniffi::deps::static_assertions::assert_impl_all!(MultisigWallet: Sync, Send);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rgb_lib::{
+        bdk_wallet::{
+            KeychainKind, Wallet as BdkWallet,
+            bitcoin::{Network as BdkNetwork, bip32::Xpriv},
+            keys::bip39::{Language, Mnemonic},
+        },
+        utils::{BitcoinNetwork, recipient_id_from_script_buf},
+    };
+
+    #[test]
+    fn contract_id_from_asset_id_for_coloring_rejects_malformed() {
+        let result = contract_id_from_asset_id_for_coloring("not-a-contract-id");
+        assert!(matches!(
+            result,
+            Err(RgbLibError::InvalidColoringInfo { details: m })
+                if m.starts_with("invalid asset_id 'not-a-contract-id':")
+        ));
+    }
+
+    #[test]
+    fn contract_id_from_asset_id_rejects_malformed() {
+        let result = contract_id_from_asset_id("not-a-contract-id");
+        assert!(matches!(
+            result,
+            Err(RgbLibError::AssetNotFound { asset_id }) if asset_id == "not-a-contract-id"
+        ));
+    }
+
+    #[test]
+    fn to_rgb_coloring_info_rejects_duplicate_asset_id() {
+        let asset_id = "rgb:Ar4ouaLv-b7f7Dc_-z5EMvtu-FA5KNh1-nlae~jk-8xMBo7E".to_string();
+        let coloring_info = ColoringInfo {
+            assets: vec![
+                AssetColoringInfo {
+                    asset_id: asset_id.clone(),
+                    output_map: HashMap::new(),
+                    static_blinding: None,
+                },
+                AssetColoringInfo {
+                    asset_id,
+                    output_map: HashMap::new(),
+                    static_blinding: None,
+                },
+            ],
+            static_blinding: None,
+            nonce: None,
+        };
+        let result = to_rgb_coloring_info(coloring_info);
+        assert!(matches!(
+            result,
+            Err(RgbLibError::InvalidColoringInfo { details: m })
+                if m.contains("duplicate asset_id")
+        ));
+    }
+
+    #[test]
+    fn script_hex_from_recipient_id_blinded_returns_none() {
+        let blinded =
+            "bcrt:utxob:tjVmHbI2-U0_umHn-bU4cmP6-l3VW00H-ewoi2uz-XZG6O3i-wUFBW".to_string();
+        assert!(script_hex_from_recipient_id(blinded).unwrap().is_none());
+    }
+
+    #[test]
+    fn script_hex_from_recipient_id_witness_returns_some() {
+        let mnemonic = Mnemonic::parse_in(
+            Language::English,
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .unwrap();
+        let xprv = Xpriv::new_master(BdkNetwork::Regtest, &mnemonic.to_seed("")).unwrap();
+        let wallet = BdkWallet::create(format!("tr({xprv}/0/*)"), format!("tr({xprv}/1/*)"))
+            .network(BdkNetwork::Regtest)
+            .create_wallet_no_persist()
+            .unwrap();
+        let script = wallet
+            .peek_address(KeychainKind::External, 0)
+            .script_pubkey();
+        let recipient_id =
+            recipient_id_from_script_buf(script.clone(), BitcoinNetwork::Regtest).unwrap();
+        let script_hex = script_hex_from_recipient_id(recipient_id).unwrap().unwrap();
+        assert_eq!(script_hex, script.to_hex_string());
+    }
+}
