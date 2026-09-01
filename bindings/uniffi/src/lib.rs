@@ -923,6 +923,14 @@ pub struct ValidateConsignmentResult {
     pub details: Option<String>,
 }
 
+/// The pinned schema id for an asset schema, as a consignment's genesis
+/// carries it. Exposed so a caller can tell what a consignment is without
+/// hardcoding the id: the listener has to know a BFA consignment cannot be
+/// validated without the enclave's EVM events.
+fn asset_schema_id(asset_schema: AssetSchema) -> String {
+    asset_schema.schema_id()
+}
+
 fn validate_consignment(
     file_path: String,
     indexer_url: String,

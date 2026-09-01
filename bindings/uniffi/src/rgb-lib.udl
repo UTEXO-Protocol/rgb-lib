@@ -4,6 +4,8 @@ namespace rgb_lib {
   [Throws=RgbLibError]
   Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic, WitnessVersion witness_version);
 
+  string asset_schema_id(AssetSchema asset_schema);
+
   [Throws=RgbLibError]
   ValidateConsignmentResult validate_consignment(
     string file_path,

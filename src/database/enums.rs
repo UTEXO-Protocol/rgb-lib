@@ -67,6 +67,13 @@ impl AssetSchema {
         })
     }
 
+    /// The pinned schema id, in the exact form a consignment's genesis carries
+    /// it. Callers outside this crate compare against it to tell what a
+    /// consignment is without hardcoding the id a second time.
+    pub fn schema_id(&self) -> String {
+        SchemaId::from(*self).to_string()
+    }
+
     /// Get [`AssetSchema`] from [`SchemaId`].
     pub fn from_schema_id(schema_id: SchemaId) -> Result<Self, Error> {
         Self::from_schema_id_str(schema_id.to_string())
@@ -475,6 +482,10 @@ mod tests {
                 asset_schema.schema().schema_id(),
                 "the {asset_schema} constant is stale"
             );
+            // What the bindings hand out has to be the same string a
+            // consignment's genesis carries, or a caller comparing the two
+            // quietly decides every consignment is some other schema.
+            assert_eq!(asset_schema.schema_id(), pinned.to_string());
         }
     }
 
