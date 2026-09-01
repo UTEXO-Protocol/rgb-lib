@@ -685,3 +685,62 @@ fn begin_end() {
     let bak_info_after = party.db_backup_info();
     assert!(bak_info_after.last_operation_timestamp > bak_info_before.last_operation_timestamp);
 }
+
+/// A real BFA consignment from the stand: one mint and two burns, each naming a
+/// different payout target. The older burn's transition comes first in history,
+/// so reading front-to-back returns the wrong one - which is exactly what the
+/// bridge did on 2026-08-31, claiming a fresh burn for a previous test's
+/// recipient. The enclave binds the release to the *terminal* burn, so the two
+/// readers have to agree.
+///
+/// Needs no chain: the reader is a pure parse over the consignment bytes.
+mod terminal_burn_recipient {
+    use crate::wallet::offline::terminal_burn_recipient;
+    use rgbstd::containers::{FileContent, Transfer as RgbTransfer};
+    use std::io::Cursor;
+
+    const FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/bfa_two_burns.rgb");
+
+    /// The burn being redeemed, 10000 BUSDT to this address.
+    const TERMINAL: &str = "000000000000000000000000436365aab93332ad6555c78b6ab000fcea95c2eb";
+    /// An earlier burn in the same wallet's history. Returning this would send
+    /// someone else's money to a stale target.
+    const EARLIER: &str = "000000000000000000000000923ff778228c0f1bc8a12f7b364f0d6eb6a0bab3";
+
+    fn fixture() -> RgbTransfer {
+        RgbTransfer::load(Cursor::new(FIXTURE)).expect("fixture must parse")
+    }
+
+    #[test]
+    fn returns_the_terminal_burn_not_the_first_in_history() {
+        let got = hex::encode(terminal_burn_recipient(&fixture()).unwrap());
+        assert_eq!(got, TERMINAL, "expected the burn being redeemed");
+        assert_ne!(got, EARLIER, "returned an older burn's recipient");
+    }
+
+    #[test]
+    fn the_recipient_is_a_left_padded_evm_address() {
+        // The bridge rejects anything else, so a reader that returned a
+        // differently shaped value would fail there instead of here.
+        let got = terminal_burn_recipient(&fixture()).unwrap();
+        assert_eq!(got.len(), 32);
+        assert_eq!(&got[..12], &[0u8; 12]);
+    }
+
+    /// The fixture must really contain more than one burn, or the test above
+    /// passes for the wrong reason.
+    #[test]
+    fn the_fixture_carries_more_than_one_burn() {
+        let transfer = fixture();
+        let burns = transfer
+            .bundles
+            .iter()
+            .flat_map(|b| b.bundle.known_transitions.iter())
+            .filter(|k| k.transition.transition_type == super::super::TS_BURN)
+            .count();
+        assert!(
+            burns >= 2,
+            "fixture has {burns} burn transitions, expected 2+"
+        );
+    }
+}

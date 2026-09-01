@@ -2876,26 +2876,7 @@ pub trait WalletOffline: WalletBackup {
         let consignment =
             RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidConsignment)?;
 
-        // Newest first. A consignment carries the wallet's whole history, so
-        // an older burn's transition comes earlier and taking the first match
-        // would pay out to whoever that burn named. The burn being redeemed is
-        // the terminal one, which is also what the enclave binds the release
-        // to - reading from either end has to give the same answer.
-        for anchored_bundle in consignment.bundles.iter().rev() {
-            for known in anchored_bundle.bundle.known_transitions.iter().rev() {
-                if known.transition.transition_type != TS_BURN {
-                    continue;
-                }
-                for (meta_type, meta_value) in &known.transition.metadata {
-                    if *meta_type != MS_BURN_RECIPIENT {
-                        continue;
-                    }
-                    return Ok(meta_value.as_unconfined().as_slice().to_vec());
-                }
-            }
-        }
-
-        Err(Error::InvalidConsignment)
+        terminal_burn_recipient(&consignment)
     }
 
     fn gen_consignments(
@@ -3182,4 +3163,31 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         info!(self.logger(), "Read burn recipient completed");
         Ok(recipient)
     }
+}
+
+/// The payout target committed inside the burn a consignment is redeeming.
+///
+/// Newest first. A consignment carries the wallet's whole history, so an older
+/// burn's transition comes earlier and taking the first match would pay out to
+/// whoever *that* burn named - a real bug, caught on the stand when a fresh
+/// burn was claimed for a previous test's recipient. The burn being redeemed is
+/// the terminal one, which is also what the enclave binds the release to
+/// (`read_last_transition_burn_recipient`); reading from either end has to give
+/// the same answer.
+pub(crate) fn terminal_burn_recipient(consignment: &RgbTransfer) -> Result<Vec<u8>, Error> {
+    for anchored_bundle in consignment.bundles.iter().rev() {
+        for known in anchored_bundle.bundle.known_transitions.iter().rev() {
+            if known.transition.transition_type != TS_BURN {
+                continue;
+            }
+            for (meta_type, meta_value) in &known.transition.metadata {
+                if *meta_type != MS_BURN_RECIPIENT {
+                    continue;
+                }
+                return Ok(meta_value.as_unconfined().as_slice().to_vec());
+            }
+        }
+    }
+
+    Err(Error::InvalidConsignment)
 }
