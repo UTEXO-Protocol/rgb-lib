@@ -35,23 +35,6 @@ pub(crate) struct DbAssetTransferData {
 }
 
 impl DbBatchTransfer {
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub(crate) fn incoming(
-        &self,
-        asset_transfers: &[DbAssetTransfer],
-        transfers: &[DbTransfer],
-    ) -> bool {
-        let asset_transfer_ids: Vec<i32> = asset_transfers
-            .iter()
-            .filter(|t| t.batch_transfer_idx == self.idx)
-            .map(|t| t.idx)
-            .collect();
-        transfers
-            .iter()
-            .filter(|t| asset_transfer_ids.contains(&t.asset_transfer_idx))
-            .all(|t| t.incoming)
-    }
-
     pub(crate) fn get_asset_transfers(
         &self,
         asset_transfers: &[DbAssetTransfer],
@@ -165,6 +148,15 @@ impl DbTransfer {
             .expect("asset transfer should be connected to a batch transfer");
 
         (asset_transfer.clone(), batch_transfer.clone())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn uses_out_of_band_exchange(&self) -> bool {
+        self.invoice_string
+            .as_deref()
+            .and_then(|s| RgbInvoice::from_str(s).ok())
+            .map(|invoice| invoice.transports == vec![])
+            .unwrap_or(false)
     }
 }
 
@@ -553,12 +545,6 @@ impl DbTxn {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn del_transfer_transport_endpoint(&self, idx: i32) -> Result<(), Error> {
-        block_on(transfer_transport_endpoint::Entity::delete_by_id(idx).exec(self.inner()))?;
-        Ok(())
-    }
-
     pub(crate) fn del_txo(&self, idx: i32) -> Result<(), Error> {
         block_on(Txo::delete_by_id(idx).exec(self.inner()))?;
         Ok(())
@@ -610,18 +596,17 @@ impl DbTxn {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub(crate) fn get_batch_transfer_by_txid(
+    pub(crate) fn get_batch_transfers_by_txid(
         &self,
         txid: &str,
-    ) -> Result<Option<DbBatchTransfer>, Error> {
+    ) -> Result<Vec<DbBatchTransfer>, Error> {
         Ok(block_on(
             BatchTransfer::find()
                 .filter(batch_transfer::Column::Txid.eq(txid))
-                .one(self.inner()),
+                .all(self.inner()),
         )?)
     }
 
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn get_media(&self, media_idx: i32) -> Result<Option<DbMedia>, Error> {
         Ok(block_on(Media::find_by_id(media_idx).one(self.inner()))?)
     }
@@ -824,6 +809,49 @@ impl DbTxn {
         Ok(txos.into_iter().filter(|t| !t.spent).collect())
     }
 
+    pub(crate) fn get_issuance_link_right_outpoint(
+        &self,
+        asset_id: &str,
+        asset_transfers: Option<Vec<DbAssetTransfer>>,
+        colorings: Option<Vec<DbColoring>>,
+        txos: Option<Vec<DbTxo>>,
+    ) -> Result<Option<Outpoint>, Error> {
+        let asset_transfers = asset_transfers
+            .map(Ok)
+            .unwrap_or_else(|| self.iter_asset_transfers())?;
+        let colorings = colorings.map(Ok).unwrap_or_else(|| self.iter_colorings())?;
+        let txos = txos.map(Ok).unwrap_or_else(|| self.iter_txos())?;
+        let issuance_link_right_coloring = colorings.iter().find(|coloring| {
+            coloring.r#type == ColoringType::Issue
+                && coloring.assignment == Assignment::LinkRight
+                && asset_transfers.iter().any(|asset_transfer| {
+                    asset_transfer.idx == coloring.asset_transfer_idx
+                        && asset_transfer.asset_id.as_deref() == Some(asset_id)
+                })
+        });
+        Ok(issuance_link_right_coloring
+            .and_then(|coloring| txos.iter().find(|txo| txo.idx == coloring.txo_idx))
+            .map(|txo| txo.outpoint()))
+    }
+
+    pub(crate) fn get_unspent_link_right_outpoint(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<Outpoint>, Error> {
+        let unspent_txos = self.get_unspent_txos(vec![])?;
+        let unspents = self.get_rgb_allocations(unspent_txos, None, None, None, None)?;
+        Ok(unspents
+            .iter()
+            .find(|unspent| {
+                unspent.rgb_allocations.iter().any(|allocation| {
+                    allocation.asset_id.as_deref() == Some(asset_id)
+                        && allocation.assignment == Assignment::LinkRight
+                        && allocation.settled()
+                })
+            })
+            .map(|unspent| unspent.utxo.outpoint()))
+    }
+
     pub(crate) fn get_asset_balance(
         &self,
         asset_id: String,
@@ -866,19 +894,17 @@ impl DbTxn {
             .map(|a| a.assignment.main_amount())
             .sum();
 
-        let mut ass_pending_incoming: u64 = ass_allocations
+        let allocations_pending_incoming: u64 = ass_allocations
             .iter()
             .filter(|a| !a.txo_spent && a.incoming && a.status.pending())
             .map(|a| a.assignment.main_amount())
             .sum();
         let witness_pending: u64 = transfers
             .iter()
-            .filter(|t| {
-                t.incoming && matches!(t.recipient_type, Some(RecipientTypeFull::Witness { .. }))
-            })
+            .filter(|t| matches!(t.recipient_type, Some(RecipientTypeFull::Witness { .. })))
             .filter_map(|t| {
                 let (at, bt) = t.related_transfers(&asset_transfers, &batch_transfers);
-                if bt.status.waiting_confirmations() {
+                if bt.incoming && bt.status.waiting_confirmations() {
                     // filter for asset ID (always present in WaitingConfirmations status)
                     if at.asset_id.unwrap() != asset_id {
                         return None;
@@ -894,7 +920,9 @@ impl DbTxn {
                 }
             })
             .sum();
-        ass_pending_incoming += witness_pending;
+        let ass_pending_incoming = allocations_pending_incoming
+            .checked_add(witness_pending)
+            .expect("total pending incoming amount cannot exceed u64::MAX");
         let ass_pending_outgoing: u64 = ass_allocations
             .iter()
             .filter(|a| !a.incoming && a.status.pending())
@@ -934,11 +962,14 @@ impl DbTxn {
             })
             .sum();
 
-        let spendable = settled - unspendable;
+        let spendable = settled
+            .checked_sub(unspendable)
+            .expect("unspendable allocations are a subset of settled ones");
 
         Ok(Balance {
             settled,
-            future: future as u64,
+            future: u64::try_from(future)
+                .expect("pending outgoing cannot exceed available balance"),
             spendable,
         })
     }
@@ -997,10 +1028,10 @@ impl DbTxn {
 
         let pending_blinded_utxos = transfers
             .iter()
-            .filter_map(|t| match (&t.recipient_type, t.incoming) {
-                (Some(RecipientTypeFull::Blind { unblinded_utxo }), true) => {
+            .filter_map(|t| match &t.recipient_type {
+                Some(RecipientTypeFull::Blind { unblinded_utxo }) => {
                     let (_, bt) = t.related_transfers(&asset_transfers, &batch_transfers);
-                    bt.status.waiting_counterparty().then_some(unblinded_utxo)
+                    (bt.incoming && bt.status.waiting_counterparty()).then_some(unblinded_utxo)
                 }
                 _ => None,
             })

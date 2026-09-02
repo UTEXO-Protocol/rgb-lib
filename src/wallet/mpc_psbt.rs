@@ -3,6 +3,7 @@
 //! Since MPC wallets don't have a BDK wallet instance, we build PSBTs manually
 //! using the `bitcoin` crate primitives.
 
+use amplify::s;
 use bdk_wallet::bitcoin::{
     OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, XOnlyPublicKey,
     locktime::absolute::LockTime, psbt::Psbt, transaction::Version,
@@ -34,9 +35,14 @@ pub fn calculate_fee(
     num_inputs: usize,
     num_outputs: usize,
     fee_rate: bdk_wallet::bitcoin::blockdata::fee_rate::FeeRate,
-) -> u64 {
+) -> Result<u64, Error> {
     let vbytes = estimate_tx_vbytes(num_inputs, num_outputs);
-    fee_rate.to_sat_per_vb_ceil() * vbytes
+    fee_rate
+        .to_sat_per_vb_ceil()
+        .checked_mul(vbytes)
+        .ok_or_else(|| Error::InvalidFeeRate {
+            details: s!("fee amount overflows u64"),
+        })
 }
 
 /// Build an unsigned PSBT from the provided inputs and outputs.
@@ -103,20 +109,26 @@ pub fn select_coins(
     for utxo in sorted {
         selected.push(utxo.clone());
         total += utxo.1.value.to_sat();
-        let fee = calculate_fee(selected.len(), num_outputs + 1, fee_rate); // +1 for change
-        if total >= target + fee {
+        let fee = calculate_fee(selected.len(), num_outputs + 1, fee_rate)?; // +1 for change
+        if target
+            .checked_add(fee)
+            .is_some_and(|needed| total >= needed)
+        {
             return Ok((selected, total));
         }
     }
 
     // Check if we have enough even without change output
-    let fee = calculate_fee(selected.len(), num_outputs, fee_rate);
-    if total >= target + fee {
+    let fee = calculate_fee(selected.len(), num_outputs, fee_rate)?;
+    if target
+        .checked_add(fee)
+        .is_some_and(|needed| total >= needed)
+    {
         return Ok((selected, total));
     }
 
     Err(Error::InsufficientBitcoins {
-        needed: target + fee,
+        needed: target.saturating_add(fee),
         available: total,
     })
 }
@@ -141,9 +153,16 @@ mod tests {
     #[test]
     fn test_calculate_fee() {
         let fee_rate = FeeRate::from_sat_per_vb(2).unwrap();
-        let fee = calculate_fee(1, 2, fee_rate);
+        let fee = calculate_fee(1, 2, fee_rate).unwrap();
         // 155 vbytes * 2 sat/vb = 310
         assert_eq!(fee, 310);
+    }
+
+    #[test]
+    fn test_calculate_fee_overflow() {
+        let fee_rate = FeeRate::from_sat_per_vb(1_000_000_000_000_000).unwrap();
+        let result = calculate_fee(1000, 2, fee_rate);
+        assert!(matches!(result, Err(Error::InvalidFeeRate { .. })));
     }
 
     #[test]
@@ -244,5 +263,29 @@ mod tests {
         let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
         let result = select_coins(&utxos, 10000, fee_rate, 1);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_select_coins_target_overflow() {
+        use bdk_wallet::bitcoin::hashes::Hash;
+
+        let txid1 = bdk_wallet::bitcoin::Txid::from_byte_array([1u8; 32]);
+
+        let utxos = vec![(
+            OutPoint::new(txid1, 0),
+            TxOut {
+                value: Amount::from_sat(100),
+                script_pubkey: ScriptBuf::new(),
+            },
+        )];
+        let fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
+        let result = select_coins(&utxos, u64::MAX, fee_rate, 1);
+        assert!(matches!(
+            result,
+            Err(Error::InsufficientBitcoins {
+                needed: u64::MAX,
+                available: 100
+            })
+        ));
     }
 }

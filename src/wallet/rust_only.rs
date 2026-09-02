@@ -25,6 +25,18 @@ pub struct ColoringInfo {
     pub nonce: Option<u64>,
 }
 
+/// Result of importing an RGB contract without receiving asset allocations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportAssetContractResult {
+    /// Imported contract ID.
+    pub asset_id: String,
+    /// Whether the wallet's RGB stock and asset database both contained the contract before the
+    /// call.
+    pub already_imported: bool,
+    /// Metadata derived from the validated contract.
+    pub metadata: Metadata,
+}
+
 /// Map of contract ID and list of its beneficiaries
 pub type AssetBeneficiariesMap = BTreeMap<ContractId, Vec<BuilderSeal<GraphSeal>>>;
 
@@ -241,6 +253,112 @@ pub fn validate_consignment(
 
 /// Rust-only APIs of the wallet.
 impl Wallet {
+    /// Export an RGB contract known to this wallet.
+    ///
+    /// The returned consignment contains the public contract definition and genesis metadata, but
+    /// no transfer or allocation state. It can be distributed as public contract metadata and
+    /// imported with [`import_asset_contract`](Wallet::import_asset_contract).
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    pub fn export_asset_contract(&self, asset_id: String) -> Result<RgbContract, Error> {
+        let contract_id = ContractId::from_str(&asset_id).map_err(|error| Error::Internal {
+            details: format!("invalid asset ID: {error}"),
+        })?;
+        self.rgb_runtime()?
+            .export_contract(contract_id)
+            .map_err(Error::from)
+    }
+
+    /// Validate and import an RGB contract without importing any asset allocations.
+    ///
+    /// This registers the contract and its metadata in the wallet. It does not transfer ownership
+    /// and the imported asset therefore starts with a zero balance. Re-importing a fully persisted
+    /// contract is idempotent and returns the existing metadata. If an earlier import was
+    /// interrupted between its RGB stock and database writes, retrying repairs the partial state.
+    ///
+    /// Contract attachments are not embedded in a contract consignment. Contracts declaring
+    /// attachments must be imported through a flow that supplies and verifies those files.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed,
+    /// use it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn import_asset_contract(
+        &self,
+        contract: RgbContract,
+    ) -> Result<ImportAssetContractResult, Error> {
+        let contract_id = contract.contract_id();
+        let asset_id = contract_id.to_string();
+
+        let asset_schema: AssetSchema = contract.schema_id().try_into()?;
+        self.check_schema_support(&asset_schema)?;
+        let validation_config = ValidationConfig {
+            chain_net: self.chain_net(),
+            trusted_typesystem: asset_schema.types(),
+            ..Default::default()
+        };
+        let valid_contract = contract
+            .validate(&DumbResolver, &validation_config)
+            .map_err(|_| Error::InvalidConsignment)?;
+
+        // The RGB runtime lock serializes the stock and database state transition. Persisting the
+        // stock before committing the database makes every interrupted state repairable on retry.
+        let mut runtime = self.rgb_runtime()?;
+        let contract_in_stock = runtime.export_contract(contract_id).is_ok();
+        let txn = self.database().begin_transaction()?;
+        let asset_in_database = txn.get_asset(asset_id.clone())?.is_some();
+        let already_imported = contract_in_stock && asset_in_database;
+
+        if already_imported {
+            drop(txn);
+            drop(runtime);
+            return Ok(ImportAssetContractResult {
+                asset_id: asset_id.clone(),
+                already_imported: true,
+                metadata: self.get_asset_metadata(asset_id)?,
+            });
+        }
+
+        if !asset_in_database
+            && !self
+                .extract_attachments(&valid_contract, asset_schema)
+                .is_empty()
+        {
+            return Err(Error::InvalidAttachments {
+                details: "contract import requires the declared attachment files".to_string(),
+            });
+        }
+
+        if !contract_in_stock {
+            runtime.require_explicit_persistence();
+            runtime.import_contract(valid_contract.clone(), &DumbResolver)?;
+        }
+
+        if !asset_in_database {
+            self.save_new_asset_internal(
+                &txn,
+                &runtime,
+                contract_id,
+                asset_schema,
+                valid_contract,
+                None,
+            )?;
+        }
+        self.update_backup_info(&txn, false)?;
+        if !contract_in_stock {
+            runtime.persist()?;
+        }
+        txn.commit()?;
+        drop(runtime);
+        self.trigger_auto_backup();
+
+        Ok(ImportAssetContractResult {
+            asset_id: asset_id.clone(),
+            already_imported,
+            metadata: self.get_asset_metadata(asset_id)?,
+        })
+    }
+
     /// Color a PSBT.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -292,19 +410,26 @@ impl Wallet {
         let assignment_name = FieldName::from(RGB_STATE_ASSET_OWNER);
 
         for (contract_id, asset_coloring_info) in coloring_info.asset_info_map.clone() {
-            let schema = AssetSchema::get_from_contract_id(contract_id, &runtime)?;
+            let schema =
+                AssetSchema::get_from_contract_id(contract_id, &runtime).map_err(|_| {
+                    Error::AssetNotFound {
+                        asset_id: contract_id.to_string(),
+                    }
+                })?;
 
             let mut asset_transition_builder =
                 runtime.transition_builder(contract_id, "transfer")?;
 
-            let mut asset_available_amt = 0;
+            let mut asset_available_amt: u64 = 0;
             let mut uda_state = None;
             for (_, opout_state_map) in
                 runtime.contract_assignments_for(contract_id, prev_outputs.iter().copied())?
             {
                 for (opout, state) in opout_state_map {
                     if let AllocatedState::Amount(amt) = &state {
-                        asset_available_amt += amt.as_u64();
+                        asset_available_amt = asset_available_amt
+                            .checked_add(amt.as_u64())
+                            .expect("total available asset amount cannot exceed u64::MAX");
                     } else if let AllocatedState::Data(_) = &state {
                         asset_available_amt = 1;
                         // there can be only a single state when contract is UDA
@@ -315,15 +440,24 @@ impl Wallet {
             }
 
             let mut beneficiaries = vec![];
-            let mut sending_amt = 0;
+            let mut sending_amt: u64 = 0;
             for (mut vout, amount) in asset_coloring_info.output_map {
                 if amount == 0 {
                     continue;
                 }
                 if opreturn_first {
-                    vout += 1;
+                    vout = vout
+                        .checked_add(1)
+                        .ok_or_else(|| Error::InvalidColoringInfo {
+                            details: s!("vout in output_map is too large"),
+                        })?;
                 }
-                sending_amt += amount;
+                sending_amt =
+                    sending_amt
+                        .checked_add(amount)
+                        .ok_or_else(|| Error::InvalidColoringInfo {
+                            details: s!("total amount in output_map exceeds u64::MAX"),
+                        })?;
                 if vout as usize > psbt.outputs.len() {
                     return Err(Error::InvalidColoringInfo {
                         details: s!("invalid vout in output_map, does not exist in the given PSBT"),
@@ -501,27 +635,29 @@ impl Wallet {
         Ok(consignment_paths)
     }
 
-    /// Accept an RGB transfer using a TXID to retrieve its consignment.
+    /// Accept an RGB transfer using a consignment received out-of-band.
+    ///
+    /// Returns the consignment, the received assignments and the hex-encoded digests of the media
+    /// attachments defined in the consignment.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn accept_transfer(
+    pub fn accept_transfer_consignment(
         &mut self,
+        online: Online,
+        consignment_path: PathBuf,
         txid: String,
         vout: u32,
-        consignment_endpoint: RgbTransport,
         blinding: u64,
-    ) -> Result<(RgbTransfer, Vec<Assignment>), Error> {
-        info!(self.logger(), "Accepting transfer...");
+    ) -> Result<(RgbTransfer, Vec<Assignment>, HashSet<String>), Error> {
+        info!(self.logger(), "Accepting transfer consignment...");
+        self.check_online(online)?;
         let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
-        let proxy_url = TransportEndpoint::try_from(consignment_endpoint)?.endpoint;
-
-        let consignment_res = self.get_consignment(&proxy_url, txid.clone())?;
-        let consignment_bytes = general_purpose::STANDARD
-            .decode(consignment_res.consignment)
-            .map_err(InternalError::from)?;
-        let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
+        let consignment =
+            RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidFilePath {
+                file_path: consignment_path.to_string_lossy().to_string(),
+            })?;
 
         let schema_id = consignment.schema_id().to_string();
         let asset_schema: AssetSchema = schema_id.try_into()?;
@@ -567,9 +703,12 @@ impl Wallet {
         debug!(self.logger(), "Consignment validity: {:?}", validity);
 
         let valid_contract = valid_consignment.clone().into_valid_contract();
-        runtime
-            .import_contract(valid_contract, self.blockchain_resolver())
-            .expect("failure importing validated contract");
+        let media_digests = self
+            .extract_attachments(&valid_contract, asset_schema)
+            .iter()
+            .map(|a| hex::encode(a.digest))
+            .collect::<HashSet<_>>();
+        runtime.import_contract(valid_contract, self.blockchain_resolver())?;
 
         let received_rgb_assignments =
             self.extract_received_assignments(&consignment, witness_id, Some(vout), None);
@@ -580,6 +719,7 @@ impl Wallet {
         Ok((
             consignment,
             received_rgb_assignments.into_values().collect(),
+            media_digests,
         ))
     }
 
@@ -604,8 +744,9 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn get_tx_height(&self, txid: String) -> Result<Option<u32>, Error> {
+    pub fn get_tx_height(&self, online: Online, txid: String) -> Result<Option<u32>, Error> {
         info!(self.logger(), "Getting TX height...");
+        self.check_online(online)?;
         let height = self.tx_height(txid)?;
         info!(self.logger(), "Get TX height completed");
         Ok(height)
@@ -618,10 +759,12 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn update_witnesses(
         &self,
+        online: Online,
         after_height: u32,
         force_witnesses: Vec<RgbTxid>,
     ) -> Result<UpdateRes, Error> {
         info!(self.logger(), "Updating witnesses...");
+        self.check_online(online)?;
         let update_res = self.rgb_runtime()?.update_witnesses(
             self.blockchain_resolver(),
             after_height,
@@ -635,7 +778,6 @@ impl Wallet {
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn upsert_witness(
         &self,
         witness_id: RgbTxid,
@@ -646,26 +788,6 @@ impl Wallet {
         Ok(())
     }
 
-    /// Post a consignment to the proxy server.
-    ///
-    /// <div class="warning">This method is meant for special usage and is normally not needed, use
-    /// it only if you know what you're doing</div>
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn post_consignment<P: AsRef<Path>>(
-        &self,
-        proxy_url: &str,
-        recipient_id: String,
-        consignment_path: P,
-        txid: String,
-        vout: Option<u32>,
-    ) -> Result<(), Error> {
-        info!(self.logger(), "Posting consignment...");
-        let proxy_client = ProxyClient::new(proxy_url)?;
-        self.post_consignment_to_proxy(&proxy_client, recipient_id, consignment_path, txid, vout)?;
-        info!(self.logger(), "Post consignment completed");
-        Ok(())
-    }
-
     /// Extract the metadata of a new RGB asset and save the asset into the DB.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -673,14 +795,13 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn save_new_asset(
         &self,
+        online: Online,
         consignment: RgbTransfer,
         offchain_txid: String,
     ) -> Result<(), Error> {
         info!(self.logger(), "Saving new asset...");
-        let runtime = self.rgb_runtime()?;
-
+        self.check_online(online)?;
         let contract_id = consignment.contract_id();
-
         let witness_id = RgbTxid::from_str(&offchain_txid).map_err(|_| Error::InvalidTxid)?;
         let resolver = OffchainResolver {
             witness_id,
@@ -694,13 +815,30 @@ impl Wallet {
             trusted_typesystem,
             ..Default::default()
         };
-        let valid_transfer = consignment
-            .clone()
-            .validate(&resolver, &validation_config)
-            .expect("valid consignment");
+        let valid_transfer = match consignment.clone().validate(&resolver, &validation_config) {
+            Ok(consignment) => consignment,
+            Err(ValidationError::InvalidConsignment(error)) => {
+                error!(self.logger(), "Consignment is invalid: {}", error);
+                return Err(Error::InvalidConsignment);
+            }
+            Err(ValidationError::ResolverError(error)) => {
+                return Err(Error::Network {
+                    details: error.to_string(),
+                });
+            }
+        };
         let valid_contract = valid_transfer.clone().into_valid_contract();
 
+        let runtime = self.rgb_runtime()?;
         let txn = self.database().begin_transaction()?;
+        if txn.get_asset(contract_id.to_string())?.is_some() {
+            // Metadata registration is idempotent only when the RGB stock agrees with the database.
+            // A missing stock entry means the caller has not completed transfer acceptance.
+            runtime.export_contract(contract_id)?;
+            drop(txn);
+            info!(self.logger(), "Save new asset completed");
+            return Ok(());
+        }
         self.save_new_asset_internal(
             &txn,
             &runtime,
@@ -763,6 +901,46 @@ impl Wallet {
         res
     }
 
+    /// Return whether the RGB asset with the provided ID is known to the wallet.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn is_asset_known(&self, contract_id: ContractId) -> Result<bool, Error> {
+        let asset_id = contract_id.to_string();
+        info!(
+            self.logger(),
+            "Checking if asset '{}' is known...", asset_id
+        );
+        let txn = self.database().begin_transaction()?;
+        let known = txn.get_asset(asset_id)?.is_some();
+        txn.commit()?;
+        info!(self.logger(), "Check if asset is known completed");
+        Ok(known)
+    }
+
+    /// List the media files for a given RGB asset.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn list_asset_media(&self, asset_id: String) -> Result<HashSet<Media>, Error> {
+        info!(self.logger(), "Listing media for asset '{}'...", asset_id);
+        let txn = self.database().begin_transaction()?;
+        let asset = txn.check_asset_exists(asset_id)?;
+        let token = match asset.schema {
+            AssetSchema::Uda => self.get_asset_token(
+                asset.idx,
+                &txn.iter_media()?,
+                &txn.iter_tokens()?,
+                &txn.iter_token_medias()?,
+            ),
+            AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa | AssetSchema::Bfa => None,
+        };
+        let medias = self.get_asset_medias(&txn, asset.media_idx, token)?;
+        txn.commit()?;
+        info!(self.logger(), "List asset media completed");
+        Ok(medias)
+    }
+
     /// Return the consignment file path for a send transfer of an asset.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
@@ -770,9 +948,51 @@ impl Wallet {
     pub fn get_send_consignment_path(&self, asset_id: &str, transfer_id: &str) -> PathBuf {
         self.send_consignment_path(asset_id, transfer_id)
     }
+
+    /// Complete the donation send operation by updating the DB only. This will also broadcast the
+    /// transaction to update the DB with the new UTXOs and BDK.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn send_end_db_update_only(
+        &mut self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, Error> {
+        info!(self.logger(), "Sending (end) db update only...");
+        self.check_online(online)?;
+        let psbt = Psbt::from_str(&signed_psbt)?;
+        let txn = self.database().begin_transaction()?;
+
+        // this will also update the DB with the new UTXOs and BDK
+        self.broadcast_psbt(&txn, &psbt)?;
+
+        let (txid, _, info_contents, _) = self.get_transfer_end_data(&psbt)?;
+
+        let batch_transfer_idx = self.update_or_save_transfers(
+            &txn,
+            txid.clone(),
+            &info_contents,
+            TransferStatus::WaitingConfirmations,
+            true,
+        )?;
+
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+
+        info!(self.logger(), "Send (end) db update only completed");
+        Ok(OperationResult {
+            txid,
+            batch_transfer_idx,
+            entropy: info_contents.entropy,
+        })
+    }
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 mod tests {
     use super::*;
 

@@ -157,12 +157,6 @@ pub enum ColoringType {
     Change = 4,
 }
 
-impl IntoActiveValue<ColoringType> for ColoringType {
-    fn into_active_value(self) -> ActiveValue<ColoringType> {
-        ActiveValue::Set(self)
-    }
-}
-
 /// The type of an RGB recipient.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum RecipientTypeFull {
@@ -262,12 +256,18 @@ pub enum TransportType {
 )]
 #[sea_orm(rs_type = "u8", db_type = "TinyUnsigned")]
 pub enum TransferStatus {
+    /// Transfer has been initiated (PSBT prepared) but not yet finalized
+    #[sea_orm(num_value = 5)]
+    Initiated = 5,
     /// Waiting for the counterparty to take action
     #[sea_orm(num_value = 1)]
     WaitingCounterparty = 1,
     /// Waiting for safe height to be reached
     #[sea_orm(num_value = 6)]
     WaitingSafeHeight = 6,
+    /// Waiting for the transfer transaction to be broadcasted
+    #[sea_orm(num_value = 7)]
+    WaitingBroadcast = 7,
     /// Waiting for the transfer transaction to reach the required number of confirmations
     #[sea_orm(num_value = 2)]
     WaitingConfirmations = 2,
@@ -277,9 +277,6 @@ pub enum TransferStatus {
     /// Failed transfer, this status is final
     #[sea_orm(num_value = 4)]
     Failed = 4,
-    /// Transfer has been initiated (PSBT prepared) but not yet finalized
-    #[sea_orm(num_value = 5)]
-    Initiated = 5,
 }
 
 impl TransferStatus {
@@ -297,6 +294,7 @@ impl TransferStatus {
             TransferStatus::WaitingCounterparty,
             TransferStatus::WaitingSafeHeight,
             TransferStatus::WaitingConfirmations,
+            TransferStatus::WaitingBroadcast,
         ]
         .contains(self)
     }
@@ -307,6 +305,7 @@ impl TransferStatus {
             TransferStatus::WaitingCounterparty,
             TransferStatus::WaitingSafeHeight,
             TransferStatus::WaitingConfirmations,
+            TransferStatus::WaitingBroadcast,
         ]
         .contains(self)
     }
@@ -329,6 +328,7 @@ impl TransferStatus {
             TransferStatus::Initiated,
             TransferStatus::WaitingCounterparty,
             TransferStatus::WaitingSafeHeight,
+            TransferStatus::WaitingBroadcast,
         ]
         .contains(self)
     }
@@ -360,6 +360,8 @@ pub enum Assignment {
     InflationRight(u64),
     /// Bridge right
     BridgeRight,
+    /// Link right
+    LinkRight,
     /// Any assignment
     Any,
 }
@@ -373,6 +375,7 @@ impl Assignment {
             }
             AllocatedState::Data(_) => Self::NonFungible,
             AllocatedState::Void if opout.ty == OS_BRIDGE => Self::BridgeRight,
+            AllocatedState::Void if opout.ty == OS_LINK => Self::LinkRight,
             _ => unreachable!(),
         }
     }
@@ -380,10 +383,21 @@ impl Assignment {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) fn add_to_assignments(&self, assignments: &mut AssignmentsCollection) {
         match self {
-            Self::Fungible(amt) => assignments.fungible += amt,
+            Self::Fungible(amt) => {
+                assignments.fungible = assignments
+                    .fungible
+                    .checked_add(*amt)
+                    .expect("total fungible amount cannot exceed u64::MAX")
+            }
             Self::NonFungible => assignments.non_fungible = true,
-            Self::InflationRight(amt) => assignments.inflation += amt,
+            Self::InflationRight(amt) => {
+                assignments.inflation = assignments
+                    .inflation
+                    .checked_add(*amt)
+                    .expect("total inflation amount cannot exceed u64::MAX")
+            }
             Self::BridgeRight => assignments.bridge += 1,
+            Self::LinkRight => {}
             _ => unreachable!("when using this method we should know the assignment type"),
         }
     }
@@ -467,6 +481,8 @@ impl Nullable for Assignment {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::IntoActiveValue;
+
     use super::*;
 
     /// The SCHEMA_ID_* constants are hand-copied from the schema crates, and
@@ -702,26 +718,58 @@ mod tests {
         assert!(!TransferStatus::WaitingCounterparty.failed());
         assert!(!TransferStatus::WaitingConfirmations.failed());
         assert!(!TransferStatus::Initiated.failed());
+        assert!(!TransferStatus::WaitingBroadcast.failed());
+        assert!(!TransferStatus::WaitingSafeHeight.failed());
 
         assert!(TransferStatus::Initiated.initiated());
         assert!(!TransferStatus::WaitingCounterparty.initiated());
         assert!(!TransferStatus::WaitingConfirmations.initiated());
+        assert!(!TransferStatus::WaitingSafeHeight.initiated());
         assert!(!TransferStatus::Settled.initiated());
         assert!(!TransferStatus::Failed.initiated());
+        assert!(!TransferStatus::WaitingBroadcast.initiated());
 
         assert!(TransferStatus::Initiated.pending());
         assert!(TransferStatus::WaitingCounterparty.pending());
         assert!(TransferStatus::WaitingConfirmations.pending());
+        assert!(TransferStatus::WaitingSafeHeight.pending());
+        assert!(TransferStatus::WaitingBroadcast.pending());
         assert!(!TransferStatus::Settled.pending());
         assert!(!TransferStatus::Failed.pending());
 
         assert!(TransferStatus::Settled.settled());
         assert!(!TransferStatus::Failed.settled());
+        assert!(!TransferStatus::WaitingCounterparty.settled());
+        assert!(!TransferStatus::WaitingConfirmations.settled());
+        assert!(!TransferStatus::WaitingSafeHeight.settled());
+        assert!(!TransferStatus::Initiated.settled());
+        assert!(!TransferStatus::WaitingBroadcast.settled());
 
         assert!(TransferStatus::WaitingConfirmations.waiting_confirmations());
         assert!(!TransferStatus::WaitingCounterparty.waiting_confirmations());
+        assert!(!TransferStatus::WaitingSafeHeight.waiting_confirmations());
+        assert!(!TransferStatus::WaitingBroadcast.waiting_confirmations());
+        assert!(!TransferStatus::Initiated.waiting_confirmations());
+        assert!(!TransferStatus::Settled.waiting_confirmations());
+        assert!(!TransferStatus::Failed.waiting_confirmations());
 
         assert!(TransferStatus::WaitingCounterparty.waiting_counterparty());
         assert!(!TransferStatus::WaitingConfirmations.waiting_counterparty());
+        assert!(!TransferStatus::WaitingSafeHeight.waiting_counterparty());
+        assert!(!TransferStatus::Initiated.waiting_counterparty());
+        assert!(!TransferStatus::Settled.waiting_counterparty());
+        assert!(!TransferStatus::Failed.waiting_counterparty());
+        assert!(!TransferStatus::WaitingBroadcast.waiting_counterparty());
+
+        #[cfg(any(feature = "electrum", feature = "esplora"))]
+        {
+            assert!(TransferStatus::WaitingCounterparty.waiting());
+            assert!(TransferStatus::WaitingConfirmations.waiting());
+            assert!(TransferStatus::WaitingBroadcast.waiting());
+            assert!(TransferStatus::WaitingSafeHeight.waiting());
+            assert!(!TransferStatus::Initiated.waiting());
+            assert!(!TransferStatus::Settled.waiting());
+            assert!(!TransferStatus::Failed.waiting());
+        }
     }
 }

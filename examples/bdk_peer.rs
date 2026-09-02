@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rgb_lib::wallet::{
     DatabaseType, Online, OnlineOptions, Recipient, RgbWalletOpsOffline, RgbWalletOpsOnline,
@@ -112,6 +113,14 @@ fn electrum_url() -> String {
 fn proxy_url() -> String {
     env::var("RGB_PROXY_URL")
         .unwrap_or_else(|_| "rpc://proxy.iriswallet.com/0.2/json-rpc".to_string())
+}
+
+fn default_expiration() -> u64 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    now + 86400
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +279,7 @@ fn cmd_receive(state: &mut PeerState) {
         .blind_receive(
             asset_id,
             Assignment::Fungible(amount),
-            None,
+            default_expiration(),
             vec![proxy_url()],
             0,
         )
@@ -319,7 +328,15 @@ fn cmd_send(state: &mut PeerState) {
     );
 
     println!("[..] Sending {amount} tokens to {recipient_id}...");
-    match wallet.send(online, recipient_map, true, 1, 0, None, None) {
+    match wallet.send(
+        online,
+        recipient_map,
+        true,
+        1,
+        0,
+        default_expiration(),
+        None,
+    ) {
         Ok(result) => {
             println!("[OK] Sent! Txid: {}", result.txid);
         }

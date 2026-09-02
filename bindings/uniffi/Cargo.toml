@@ -6,7 +6,7 @@ authors = [
     "Nicola Busanello <nicola.busanello@gmail.com>",
 ]
 edition = "2024"
-rust-version = "1.88.0"
+rust-version = "1.94.0"
 
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
@@ -20,21 +20,21 @@ path = "uniffi-bindgen.rs"
 default = ["uniffi/cli"]
 
 [dependencies]
-rgb-lib = { version = "0.3.0-beta.6", path = "../../", features = [
+rgb-lib = { version = "0.3.0-beta.7", path = "../../", features = [
     "electrum",
     "esplora",
     "vss",
 ] }
-uniffi = { version = "0.31.0", default-features = false }
+uniffi = { version = "0.32", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [build-dependencies]
-uniffi = { version = "0.31.0", default-features = false, features = [
+uniffi = { version = "0.32", default-features = false, features = [
     "build",
 ] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
-aws-lc-rs = { version = "1.16.2", default-features = false, features = [
+aws-lc-rs = { version = "1.17", default-features = false, features = [
     "bindgen",
 ] }
 
@@ -43,7 +43,7 @@ aws-lc-rs = { version = "1.16.2", default-features = false, features = [
 # Mirrors the root Cargo.toml patch - this crate is its own workspace, so it
 # does not inherit it. Keep the two in step.
 [patch.crates-io]
-rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "68a1470e22ae4bb6a38205404e484b264b4139ee" }
-rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
-rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
-rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "af4f91e6807a9680ab195c28719197b7811ac5d6" }
+rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "2faf6118b2f5fe30dd90dd5244d5a7dc32bcd757" }
+rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "773766b5ca7a9e705ec68c2f9ed0917f505cd6e3" }
+rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "773766b5ca7a9e705ec68c2f9ed0917f505cd6e3" }
+rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "238dfe7a89db998107fd87d919bf2757a2746d7f" }

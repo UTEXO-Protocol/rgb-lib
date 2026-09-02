@@ -274,6 +274,107 @@ fn casting() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn up_to_allocatable_above_u8_max() {
+    initialize();
+
+    let mut party = get_empty_party!();
+    fund_wallet(party.get_address());
+
+    // create 256 allocatable UTXOs; num is u8 so it takes two calls
+    party.create_utxos(false, Some(255), None, FEE_RATE, Some(255));
+    party.create_utxos(false, Some(1), None, FEE_RATE, Some(1));
+    let colorable = party
+        .list_unspents(false)
+        .iter()
+        .filter(|u| u.utxo.colorable)
+        .count();
+    assert_eq!(colorable, 256);
+
+    // when up_to is true, detect that the required num (u8) of allocations is already available
+    // and reject creation, even with more than u8::MAX already available allocations
+    let result = party
+        .wallet
+        .create_utxos(party.online, true, Some(1), None, FEE_RATE, false);
+    assert_matches!(result, Err(Error::AllocationsAlreadyAvailable));
+}
+
+// the MPC provider is only asked for addresses and signatures, both of which the up_to check
+// short-circuits, so a stub is enough to drive create_utxos_begin
+#[cfg(all(feature = "mpc", feature = "electrum"))]
+struct StubMpcProvider;
+
+#[cfg(all(feature = "mpc", feature = "electrum"))]
+impl crate::mpc::MpcWalletProvider for StubMpcProvider {
+    fn create_address(
+        &self,
+        bitcoin_network: BitcoinNetwork,
+        _keychain: KeychainKind,
+        index: u32,
+    ) -> Result<crate::mpc::MpcAddressInfo, Error> {
+        let script = ScriptBuf::new_p2wpkh(&crate::bitcoin::WPubkeyHash::from_byte_array(
+            [index as u8; 20],
+        ));
+        let address =
+            BdkAddress::from_script(&script, BdkNetwork::from(bitcoin_network)).map_err(|e| {
+                Error::Internal {
+                    details: e.to_string(),
+                }
+            })?;
+        Ok(crate::mpc::MpcAddressInfo {
+            address: address.to_string(),
+            script_pubkey: script,
+            signing_key_id: format!("stub-key-{index}"),
+            derivation_index: index,
+        })
+    }
+
+    fn sign_psbt(&self, _psbt: Psbt, _signing_key_ids: Vec<String>) -> Result<Psbt, Error> {
+        Err(Error::Internal {
+            details: s!("stub provider cannot sign"),
+        })
+    }
+}
+
+#[cfg(all(feature = "mpc", feature = "electrum"))]
+#[test]
+#[parallel]
+fn mpc_up_to_allocatable_above_u8_max() {
+    initialize();
+
+    create_test_data_dir();
+    let mut wallet = MpcWallet::new(
+        get_test_wallet_data(&get_test_data_dir_string()),
+        format!("mpc-up-to-{}", get_current_time()),
+        Box::new(StubMpcProvider),
+    )
+    .unwrap();
+    let online = wallet.go_online(test_go_online_options(None)).unwrap();
+
+    // register 256 allocatable TXOs, more than a u8 can hold
+    let txn = wallet.database().begin_transaction().unwrap();
+    for vout in 0..256u32 {
+        txn.set_txo(DbTxoActMod {
+            idx: ActiveValue::NotSet,
+            txid: ActiveValue::Set(FAKE_TXID.to_string()),
+            vout: ActiveValue::Set(vout),
+            btc_amount: ActiveValue::Set(s!("1000")),
+            spent: ActiveValue::Set(false),
+            exists: ActiveValue::Set(true),
+            pending_witness: ActiveValue::Set(false),
+        })
+        .unwrap();
+    }
+    txn.commit().unwrap();
+
+    // when up_to is true, detect that the required num (u8) of allocations is already available
+    // and reject creation, even with more than u8::MAX already available allocations
+    let result = wallet.create_utxos_begin(online, true, Some(1), None, FEE_RATE, true, true);
+    assert_matches!(result, Err(Error::AllocationsAlreadyAvailable));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn skip_sync() {
     initialize();
 

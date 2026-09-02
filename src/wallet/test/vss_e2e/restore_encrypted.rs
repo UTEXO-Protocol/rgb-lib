@@ -38,7 +38,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -62,7 +62,7 @@ fn scenario_1_encrypted_backup_restore_matches_state_and_wallet_operational() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");

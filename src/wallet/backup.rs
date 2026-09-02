@@ -19,8 +19,6 @@ pub struct ScryptParams {
     r: u32,
     p: u32,
     len: usize,
-    version: Option<u32>,
-    algorithm: Option<String>,
 }
 
 impl ScryptParams {
@@ -30,8 +28,6 @@ impl ScryptParams {
             r: r.unwrap_or(Params::RECOMMENDED_R),
             p: p.unwrap_or(Params::RECOMMENDED_P),
             len: BACKUP_KEY_LENGTH,
-            version: None,
-            algorithm: None,
         }
     }
 }
@@ -46,8 +42,10 @@ impl TryInto<Params> for ScryptParams {
     type Error = Error;
 
     fn try_into(self: ScryptParams) -> Result<Params, Error> {
-        Params::new(self.log_n, self.r, self.p, self.len).map_err(|e| Error::Internal {
-            details: format!("invalid params {e}"),
+        Params::new_with_output_len(self.log_n, self.r, self.p, self.len).map_err(|e| {
+            Error::Internal {
+                details: format!("invalid params {e}"),
+            }
         })
     }
 }
@@ -118,7 +116,11 @@ pub trait WalletBackup: WalletCore {
         let tmp_base_path = get_parent_path(&backup_file)?;
         let files = get_backup_paths(&tmp_base_path)?;
         let scrypt_params = scrypt_params.unwrap_or_default();
-        let salt = SaltString::generate(&mut OsRng);
+        let salt: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(24)
+            .map(char::from)
+            .collect();
         let str_params = serde_json::to_string(&scrypt_params).map_err(InternalError::from)?;
         debug!(
             self.logger(),
@@ -132,7 +134,7 @@ pub trait WalletBackup: WalletCore {
         debug!(self.logger(), "using generated nonce: {}", &nonce);
         let backup_pub_data = BackupPubData {
             scrypt_params,
-            salt: salt.to_string(),
+            salt,
             nonce,
             version: BACKUP_VERSION,
         };
@@ -268,9 +270,21 @@ pub trait WalletBackup: WalletCore {
     /// VSS server after operations like send, receive, issue, etc.
     #[cfg(feature = "vss")]
     fn configure_vss_backup(&mut self, config: super::vss::VssBackupConfig) -> Result<(), Error> {
+        let auto_backup = config.auto_backup;
         let client = super::vss::VssBackupClient::new(config)?;
         self.set_vss_client(Some(Arc::new(client)));
         info!(self.logger(), "VSS auto-backup configured");
+        // Upload an initial backup if the wallet has unsaved state, so
+        // enabling auto-backup never leaves an empty store behind.
+        if auto_backup {
+            let txn = self.database().begin_transaction()?;
+            let backup_required = self.get_backup_info(&txn)?;
+            txn.commit()?;
+            if backup_required {
+                info!(self.logger(), "VSS auto-backup: uploading initial backup");
+                self.trigger_auto_backup();
+            }
+        }
         Ok(())
     }
 
@@ -333,6 +347,7 @@ pub trait WalletBackup: WalletCore {
                     self.logger(),
                     "VSS auto-backup: failed to create data: {}", e
                 );
+                client.record_auto_backup_result(Some(e.to_string()));
                 self.auto_backup_in_progress()
                     .store(false, Ordering::SeqCst);
                 return;
@@ -352,6 +367,7 @@ pub trait WalletBackup: WalletCore {
             match client.upload_backup(backup_data).await {
                 Ok(version) => {
                     info!(logger, "VSS auto-backup completed, version: {}", version);
+                    client.record_auto_backup_result(None);
                     // Update backup timestamp on success
                     if let Ok(txn) = database.begin_transaction()
                         && let Ok(Some(backup_info)) = txn.get_backup_info()
@@ -369,6 +385,7 @@ pub trait WalletBackup: WalletCore {
                 }
                 Err(e) => {
                     error!(logger, "VSS auto-backup failed: {}", e);
+                    client.record_auto_backup_result(Some(e.to_string()));
                 }
             }
         };
@@ -404,6 +421,7 @@ pub trait WalletBackup: WalletCore {
             backup_exists,
             server_version,
             backup_required,
+            last_auto_backup_error: client.last_auto_backup_error(),
         })
     }
 
@@ -507,7 +525,7 @@ pub(crate) fn zip_dir(
 ) -> Result<(), Error> {
     // setup
     let writer = fs::File::create(path_out)?;
-    let mut zip = zip::ZipWriter::new(writer);
+    let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Zstd);
     let mut buffer = [0u8; 4096];
 
@@ -559,9 +577,13 @@ pub(crate) fn zip_dir(
     Ok(())
 }
 
-fn get_zip_archive(zip_path: &PathBuf) -> Result<zip::ZipArchive<std::fs::File>, Error> {
-    let file = fs::File::open(zip_path).map_err(InternalError::from)?;
-    Ok(zip::ZipArchive::new(file).map_err(InternalError::from)?)
+fn get_zip_archive(zip_path: &PathBuf) -> Result<ZipArchive<fs::File>, Error> {
+    let file = fs::File::open(zip_path).map_err(|_| Error::InvalidFilePath {
+        file_path: zip_path.to_string_lossy().to_string(),
+    })?;
+    ZipArchive::new(file).map_err(|_| Error::InvalidFilePath {
+        file_path: zip_path.to_string_lossy().to_string(),
+    })
 }
 
 fn get_fingerprint_from_zip(zip_path: &PathBuf) -> Result<String, Error> {
@@ -595,38 +617,40 @@ pub(crate) fn unzip(zip_path: &PathBuf, path_out: &Path, logger: &Logger) -> Res
                 fs::create_dir_all(p)?;
             }
             let mut outfile = fs::File::create(&outpath)?;
-            std::io::copy(&mut file, &mut outfile)?;
+            io::copy(&mut file, &mut outfile)?;
         }
     }
 
     Ok(())
 }
 
-fn get_cypher_secrets(
-    password: &str,
-    backup_pub_data: &BackupPubData,
-) -> Result<GenericArray<u8, U32>, Error> {
+fn get_cypher_secrets(password: &str, backup_pub_data: &BackupPubData) -> Result<Key, Error> {
     // hash password using scrypt with the provided salt
     let password_bytes = password.as_bytes();
     let salt = Salt::from_b64(&backup_pub_data.salt).map_err(InternalError::from)?;
-    let password_hash = Scrypt
-        .hash_password_customized(
-            password_bytes,
-            None,
-            None,
-            backup_pub_data.scrypt_params.clone().try_into()?,
-            salt,
-        )
-        .map_err(InternalError::from)?;
-    let hash_output = password_hash
-        .hash
-        .ok_or_else(|| InternalError::NoPasswordHashError)?;
-    let hash = hash_output.as_bytes();
+    let params = backup_pub_data.scrypt_params.clone().try_into()?;
+    let mut hash = [0u8; BACKUP_KEY_LENGTH];
+    scrypt(password_bytes, salt.as_ref(), &params, &mut hash).map_err(|_| Error::Internal {
+        details: s!("failed to derive backup encryption key"),
+    })?;
 
     // get key from password hash
-    let key = Key::clone_from_slice(hash);
+    let key =
+        Key::try_from(hash.as_slice()).expect("scrypt output length matches XChaCha20 key size");
 
     Ok(key)
+}
+
+pub(crate) fn stream_be32_nonce(
+    prefix: &[u8; BACKUP_NONCE_LENGTH],
+    position: u32,
+    last_block: bool,
+) -> XNonce {
+    let mut nonce = [0u8; 24];
+    nonce[..BACKUP_NONCE_LENGTH].copy_from_slice(prefix);
+    nonce[BACKUP_NONCE_LENGTH..(BACKUP_NONCE_LENGTH + 4)].copy_from_slice(&position.to_be_bytes());
+    nonce[BACKUP_NONCE_LENGTH + 4] = u8::from(last_block);
+    nonce.into()
 }
 
 fn encrypt_file(
@@ -637,14 +661,13 @@ fn encrypt_file(
 ) -> Result<(), Error> {
     let key = get_cypher_secrets(password, backup_pub_data)?;
 
-    // - XChacha20Poly1305 is fast, requires no special hardware and supports stream operation
-    // - stream mode required as files to encrypt may be big, so avoiding a memory buffer
+    // - XChacha20Poly1305 is fast and requires no special hardware
+    // - files are encrypted chunk-by-chunk to avoid buffering large backups in memory
 
     // setup
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = backup_pub_data.nonce()?;
-    let nonce = GenericArray::from_slice(&nonce);
-    let mut stream_encryptor = stream::EncryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = backup_pub_data.nonce()?;
+    let mut position: u32 = 0;
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_ENCRYPT];
     let mut source_file = fs::File::open(path_cleartext)?;
     let mut destination_file = fs::File::create(path_encrypted)?;
@@ -652,18 +675,23 @@ fn encrypt_file(
     // encrypt file
     loop {
         let read_count = source_file.read(&mut buffer)?;
-        if read_count == BACKUP_BUFFER_LEN_ENCRYPT {
-            let ciphertext = stream_encryptor
-                .encrypt_next(buffer.as_slice())
-                .map_err(|e| InternalError::AeadError(e.to_string()))?;
-            destination_file.write_all(&ciphertext)?;
-        } else {
-            let ciphertext = stream_encryptor
-                .encrypt_last(&buffer[..read_count])
-                .map_err(|e| InternalError::AeadError(e.to_string()))?;
-            destination_file.write_all(&ciphertext)?;
+        let is_last = read_count != BACKUP_BUFFER_LEN_ENCRYPT;
+        if !is_last && position == u32::MAX {
+            return Err(Error::Internal {
+                details: s!("backup file too large"),
+            });
+        }
+
+        let nonce = stream_be32_nonce(&nonce_prefix, position, is_last);
+        let ciphertext = aead
+            .encrypt(&nonce, &buffer[..read_count])
+            .expect("chunk size is within XChaCha20Poly1305 limits");
+        destination_file.write_all(&ciphertext)?;
+
+        if is_last {
             break;
         }
+        position += 1;
     }
 
     // remove cleartext source file
@@ -682,9 +710,8 @@ fn decrypt_file(
 
     // setup
     let aead = XChaCha20Poly1305::new(&key);
-    let nonce = backup_pub_data.nonce()?;
-    let nonce = GenericArray::from_slice(&nonce);
-    let mut stream_decryptor = stream::DecryptorBE32::from_aead(aead, nonce);
+    let nonce_prefix = backup_pub_data.nonce()?;
+    let mut position: u32 = 0;
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_DECRYPT];
     let mut source_file = fs::File::open(path_encrypted)?;
     let mut destination_file = fs::File::create(path_cleartext)?;
@@ -693,19 +720,27 @@ fn decrypt_file(
     loop {
         let read_count = source_file.read(&mut buffer)?;
         if read_count == BACKUP_BUFFER_LEN_DECRYPT {
-            let cleartext = stream_decryptor
-                .decrypt_next(buffer.as_slice())
+            if position == u32::MAX {
+                return Err(Error::Internal {
+                    details: s!("backup file too large"),
+                });
+            }
+            let nonce = stream_be32_nonce(&nonce_prefix, position, false);
+            let cleartext = aead
+                .decrypt(&nonce, buffer.as_slice())
                 .map_err(|_| Error::WrongPassword)?;
             destination_file.write_all(&cleartext)?;
         } else if read_count == 0 {
             break;
         } else {
-            let cleartext = stream_decryptor
-                .decrypt_last(&buffer[..read_count])
+            let nonce = stream_be32_nonce(&nonce_prefix, position, true);
+            let cleartext = aead
+                .decrypt(&nonce, &buffer[..read_count])
                 .map_err(|_| Error::WrongPassword)?;
             destination_file.write_all(&cleartext)?;
             break;
         }
+        position += 1;
     }
 
     Ok(())

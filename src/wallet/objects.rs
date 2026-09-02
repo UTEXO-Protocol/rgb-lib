@@ -193,6 +193,17 @@ pub struct BlockTime {
 // Assets, tokens & media
 // ────────────────────────────────────────────────────────────
 
+/// An asset filter.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum AssetFilter {
+    /// Match any or no asset
+    AnyOrNone,
+    /// Match no asset
+    None,
+    /// Match the asset with the given ID
+    Id(String),
+}
+
 /// An asset media file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
@@ -389,6 +400,16 @@ pub struct Metadata {
     pub token: Option<Token>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Parent asset ID declared by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked by IFA contract
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
+    /// Outpoint currently holding the asset's unspent link right; None when the right was never
+    /// created, was already consumed by a link or is not held by this wallet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unspent_link_right_outpoint: Option<Outpoint>,
 }
 
 /// A Non-Inflatable Asset.
@@ -637,6 +658,16 @@ pub struct AssetIFA {
     pub media: Option<Media>,
     /// Reject list URL
     pub reject_list_url: Option<String>,
+    /// Outpoint where the link right was allocated at issuance (may have been moved or consumed
+    /// since; see `Metadata::unspent_link_right_outpoint` for the current location)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_link_right_outpoint: Option<Outpoint>,
+    /// Parent asset ID declared by this contract at genesis
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from_asset_id: Option<String>,
+    /// Child asset ID linked to this contract by the link_ifa transition
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_asset_id: Option<String>,
 }
 
 impl AssetIFA {
@@ -662,6 +693,12 @@ impl AssetIFA {
                 .find(|m| Some(m.idx) == asset.media_idx)
                 .map(|m| Media::from_db_media(m, wallet.media_dir()))
         };
+        let issuance_link_right_outpoint = txn.get_issuance_link_right_outpoint(
+            &asset.id,
+            asset_transfers.clone(),
+            colorings.clone(),
+            txos.clone(),
+        )?;
         let balance = txn.get_asset_balance(
             asset.id.clone(),
             transfers,
@@ -692,6 +729,9 @@ impl AssetIFA {
             balance,
             media,
             reject_list_url: asset.reject_list_url.clone(),
+            issuance_link_right_outpoint,
+            linked_from_asset_id: None,
+            linked_to_asset_id: None,
         })
     }
 }
@@ -846,9 +886,25 @@ impl IssuedAssetDetails for AssetIFA {
         txn: &DbTxn,
         wallet: &(impl WalletOffline + ?Sized),
         asset: &DbAsset,
-        _issue_data: &IssueData,
+        issue_data: &IssueData,
     ) -> Result<Self, Error> {
-        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
+        let mut asset_details =
+            Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)?;
+        let contract = IfaWrapper::with(issue_data.valid_contract.contract_data());
+        asset_details.issuance_link_right_outpoint = issue_data.link_right_outpoint.clone();
+        asset_details.linked_from_asset_id = contract
+            .link_from()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        asset_details.linked_to_asset_id = contract
+            .link_to()
+            .map_err(|e| Error::Internal {
+                details: e.to_string(),
+            })?
+            .map(|contract_id| contract_id.to_string());
+        Ok(asset_details)
     }
 }
 
@@ -881,6 +937,45 @@ pub struct LocalAssetData {
     pub(crate) added_at: i64,
 }
 
+/// Controls how an IFA contract is issued.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub enum IfaIssuanceType {
+    /// Legacy IFA issuance without a link-right UTXO reservation or parent contract declaration.
+    #[default]
+    Legacy,
+    /// IFA issuance that reserves a link-right UTXO but does not declare a parent contract.
+    LinkRightOnly,
+    /// IFA issuance that declares the parent contract and optionally reserves a link-right UTXO.
+    LinkedFromParent {
+        /// Parent contract ID.
+        contract_id: String,
+        /// Whether issuance should create a link-right UTXO.
+        #[serde(default)]
+        request_link_right: bool,
+    },
+}
+
+impl IfaIssuanceType {
+    pub(crate) fn into_ifa_link_data(self) -> Result<(bool, Option<ContractId>), Error> {
+        Ok(match self {
+            Self::Legacy => (false, None),
+            Self::LinkRightOnly => (true, None),
+            Self::LinkedFromParent {
+                contract_id,
+                request_link_right,
+            } => (
+                request_link_right,
+                Some(
+                    ContractId::from_str(&contract_id).map_err(|e| Error::Internal {
+                        details: e.to_string(),
+                    })?,
+                ),
+            ),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IssueData {
     pub(crate) asset_data: LocalAssetData,
@@ -888,6 +983,7 @@ pub struct IssueData {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub(crate) contract_path: PathBuf,
     pub(crate) issue_utxos: HashMap<i32, Vec<Assignment>>,
+    pub(crate) link_right_outpoint: Option<Outpoint>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -911,7 +1007,10 @@ pub struct AssignmentsCollection {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl AssignmentsCollection {
     fn add_fungible(&mut self, amt: u64) {
-        self.fungible += amt;
+        self.fungible = self
+            .fungible
+            .checked_add(amt)
+            .expect("total fungible amount cannot exceed u64::MAX");
     }
 
     fn add_non_fungible(&mut self) {
@@ -919,7 +1018,10 @@ impl AssignmentsCollection {
     }
 
     fn add_inflation(&mut self, amt: u64) {
-        self.inflation += amt;
+        self.inflation = self
+            .inflation
+            .checked_add(amt)
+            .expect("total inflation amount cannot exceed u64::MAX");
     }
 
     fn add_bridge(&mut self) {
@@ -1015,6 +1117,8 @@ pub enum TypeOfTransition {
     Burn,
     /// Bridge transition (minting against an EVM lock)
     Bridge,
+    /// Link transition (linking the contract to a child contract)
+    Link,
 }
 
 impl TypeOfTransition {
@@ -1025,6 +1129,7 @@ impl TypeOfTransition {
             Self::Transfer => "transfer",
             Self::Burn => "burn",
             Self::Bridge => "bridge",
+            Self::Link => "link",
         }
     }
 }
@@ -1261,6 +1366,7 @@ impl Invoice {
                 expiration_timestamp: decoded.expiry.map(|t| t as u64),
                 transport_endpoints,
                 network,
+                unknown_query_params: decoded.unknown_query.into_iter().collect(),
             },
         })
     }
@@ -1277,7 +1383,7 @@ impl Invoice {
 }
 
 /// The data of an RGB invoice.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct InvoiceData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
@@ -1300,6 +1406,8 @@ pub struct InvoiceData {
     pub expiration_timestamp: Option<u64>,
     /// Transport endpoints
     pub transport_endpoints: Vec<String>,
+    /// Unknown query parameters carried by the invoice
+    pub unknown_query_params: HashMap<String, String>,
 }
 
 /// An RGB transport endpoint.
@@ -1359,6 +1467,8 @@ pub enum TransferKind {
     Inflation,
     /// A burn transfer
     Burn,
+    /// A transfer that consumes the contract's link-right seal
+    Link,
 }
 
 #[derive(Debug, Clone)]
@@ -1499,7 +1609,7 @@ pub struct ReceiveData {
     /// ID of the receive operation (blinded UTXO or Bitcoin script)
     pub recipient_id: String,
     /// Expiration of the receive operation
-    pub expiration_timestamp: Option<u64>,
+    pub expiration_timestamp: u64,
     /// Batch transfer idx
     pub batch_transfer_idx: i32,
 }
@@ -1512,7 +1622,7 @@ pub struct ReceiveDataInternal {
     pub(crate) recipient_id: String,
     pub(crate) endpoints: Vec<String>,
     pub(crate) created_at: i64,
-    pub(crate) expiration_timestamp: Option<i64>,
+    pub(crate) expiration_timestamp: i64,
     pub(crate) recipient_type_full: RecipientTypeFull,
     pub(crate) blind_seal: Option<GraphSeal>,
     pub(crate) script_pubkey: Option<ScriptBuf>,
@@ -1534,6 +1644,10 @@ pub struct Utxo {
     pub colorable: bool,
     /// Defines if the UTXO already exists (TX that creates it has been broadcasted)
     pub exists: bool,
+    /// Derivation index of the UTXO's script pubkey. `None` if the transaction creating the UTXO
+    /// is not known to the underlying BDK wallet, which is the case while the UTXO does not yet
+    /// exist on-chain and for outputs that do not belong to this wallet.
+    pub derivation_index: Option<u32>,
 }
 
 impl From<DbTxo> for Utxo {
@@ -1546,6 +1660,7 @@ impl From<DbTxo> for Utxo {
                 .expect("DB should contain a valid u64 value"),
             colorable: true,
             exists: x.exists,
+            derivation_index: None,
         }
     }
 }
@@ -1557,6 +1672,7 @@ impl From<LocalOutput> for Utxo {
             btc_amount: x.txout.value.to_sat(),
             colorable: false,
             exists: true,
+            derivation_index: Some(x.derivation_index),
         }
     }
 }
@@ -1913,6 +2029,8 @@ pub enum RefreshTransferStatus {
     WaitingCounterparty,
     /// Waiting for the safe height to be reached
     WaitingSafeHeight,
+    /// Waiting for the transfer transaction to be broadcasted
+    WaitingBroadcast,
     /// Waiting for the transfer transaction to reach the minimum number of confirmations
     WaitingConfirmations,
 }
@@ -1925,8 +2043,9 @@ impl TryFrom<TransferStatus> for RefreshTransferStatus {
         match x {
             TransferStatus::WaitingCounterparty => Ok(RefreshTransferStatus::WaitingCounterparty),
             TransferStatus::WaitingSafeHeight => Ok(RefreshTransferStatus::WaitingSafeHeight),
+            TransferStatus::WaitingBroadcast => Ok(RefreshTransferStatus::WaitingBroadcast),
             TransferStatus::WaitingConfirmations => Ok(RefreshTransferStatus::WaitingConfirmations),
-            _ => Err("RefreshTransferStatus only accepts pending statuses"),
+            _ => Err("RefreshTransferStatus only accepts waiting statuses"),
         }
     }
 }
@@ -2083,6 +2202,8 @@ pub struct InfoAssetTransfer {
     pub burn_recipient: Option<[u8; 32]>,
     pub beneficiaries_blinded: Vec<SecretSeal>,
     pub beneficiaries_witness: Vec<ExplicitSeal<RgbTxid>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_to_contract_id: Option<ContractId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2212,5 +2333,64 @@ mod assignments_collection_tests {
 
         assert!(collected.enough(&needed));
         assert_eq!(collected.change(&needed).bridge, 0);
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub enum ReceiveMode {
+    Proxy { proxy_url: String },
+    OutOfBand { media_file_paths: Vec<String> },
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) enum ReceiveMatcher {
+    Blind(SecretSeal),
+    Witness(ScriptBuf),
+}
+
+impl DbTransfer {
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn receive_matcher(&self) -> Result<ReceiveMatcher, Error> {
+        let recipient_id = self
+            .recipient_id
+            .clone()
+            .expect("transfer should have a recipient ID");
+        match self
+            .recipient_type
+            .as_ref()
+            .expect("transfer should have a recipient type")
+        {
+            RecipientTypeFull::Blind { .. } => {
+                let beneficiary = XChainNet::<Beneficiary>::from_str(&recipient_id)
+                    .expect("saved recipient ID is invalid");
+                match beneficiary.into_inner() {
+                    Beneficiary::BlindedSeal(secret_seal) => Ok(ReceiveMatcher::Blind(secret_seal)),
+                    _ => unreachable!("beneficiary is blinded"),
+                }
+            }
+            RecipientTypeFull::Witness { .. } => {
+                let script_pubkey = script_buf_from_recipient_id(recipient_id)?
+                    .expect("witness recipient ID should yield a script");
+                Ok(ReceiveMatcher::Witness(script_pubkey))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+mod tests {
+    use super::*;
+    use sea_orm::Iterable;
+
+    #[test]
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn refresh_transfer_status_matches_waiting() {
+        for status in TransferStatus::iter() {
+            assert_eq!(
+                status.waiting(),
+                RefreshTransferStatus::try_from(status).is_ok(),
+            );
+        }
     }
 }

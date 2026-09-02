@@ -36,8 +36,10 @@ interface RgbLibError {
   BatchTransferNotFound(i32 idx);
   BitcoinNetworkMismatch();
   CannotAbortPendingVanillaTx();
+  CannotProvideOutOfBandAck(string details);
   CannotChangeOnline();
   CannotCombinePsbts();
+  CannotProvideOutOfBandConsignment(string details);
   CannotDeleteBatchTransfer();
   CannotEstimateFees();
   CannotFailBatchTransfer();
@@ -54,6 +56,7 @@ interface RgbLibError {
   Inconsistency(string details);
   Indexer(string details);
   InexistentDataDir();
+  InexistentWalletManifest(string path);
   InsufficientAllocationSlots();
   InsufficientAssignments(string asset_id, AssignmentsCollection available);
   InsufficientBitcoins(u64 needed, u64 available);
@@ -67,6 +70,7 @@ interface RgbLibError {
   InvalidBurnRecipient(u64 len);
   InvalidColoringInfo(string details);
   InvalidConsignment();
+  InvalidContractLink(string details);
   InvalidCosigner(string details);
   InvalidDetails(string details);
   InvalidElectrum(string details);
@@ -89,6 +93,7 @@ interface RgbLibError {
   InvalidRecipientMap();
   InvalidRecipientNetwork();
   InvalidRejectListUrl(string details);
+  InvalidRightOutpoint(string details);
   InvalidTicker(string details);
   InvalidTransportEndpoint(string details);
   InvalidTransportEndpoints(string details);
@@ -114,6 +119,7 @@ interface RgbLibError {
   NoInflationAmounts();
   NoIssuanceAmounts();
   NoKeysSupplied();
+  NoMaxAllocationsPerUtxo();
   NoSupportedSchemas();
   NoValidTransportEndpoint();
   Offline();
@@ -125,6 +131,7 @@ interface RgbLibError {
   RecipientIDDuplicated();
   RejectListService(string details);
   RestClientBuild(string details);
+  RestoredBackupInconsistent(string details);
   RgbInspection(string details);
   TooHighInflationAmounts();
   TooHighIssuanceAmounts();
@@ -141,11 +148,13 @@ interface RgbLibError {
   UnsupportedLayer1(string layer_1);
   UnsupportedSchema(AssetSchema asset_schema);
   UnsupportedTransportType();
+  UnsupportedWalletManifestVersion(string version);
   VssAuth(string details);
   VssBackupNotFound();
   VssError(string details);
   VssVersionConflict(string details);
   WalletDirAlreadyExists(string path);
+  WalletSettingMismatch(string setting, string expected, string provided);
   WatchOnly();
   WrongPassword();
 };
@@ -234,6 +243,9 @@ dictionary AssetIFA {
   Balance balance;
   Media? media;
   string? reject_list_url;
+  Outpoint? issuance_link_right_outpoint;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
 };
 
 [Remote]
@@ -287,7 +299,7 @@ enum BitcoinNetwork {
 dictionary ReceiveData {
   string invoice;
   string recipient_id;
-  u64? expiration_timestamp;
+  u64 expiration_timestamp;
   i32 batch_transfer_idx;
 };
 
@@ -374,11 +386,19 @@ interface Invoice {
 };
 
 [Enum]
+interface AssetFilter {
+  AnyOrNone();
+  None();
+  Id(string asset_id);
+};
+
+[Enum]
 interface Assignment {
   Fungible(u64 amount);
   NonFungible();
   InflationRight(u64 amount);
   BridgeRight();
+  LinkRight();
   Any();
 };
 
@@ -400,6 +420,7 @@ dictionary InvoiceData {
   BitcoinNetwork network;
   u64? expiration_timestamp;
   sequence<string> transport_endpoints;
+  record<string, string> unknown_query_params;
 };
 
 dictionary ValidateConsignmentResult {
@@ -456,6 +477,9 @@ dictionary Metadata {
   string? details;
   Token? token;
   string? reject_list_url;
+  string? linked_from_asset_id;
+  string? linked_to_asset_id;
+  Outpoint? unspent_link_right_outpoint;
 };
 
 [Remote]
@@ -519,6 +543,7 @@ dictionary RefreshedTransfer {
 enum RefreshTransferStatus {
   "WaitingCounterparty",
   "WaitingSafeHeight",
+  "WaitingBroadcast",
   "WaitingConfirmations",
 };
 
@@ -543,16 +568,18 @@ enum TransferKind {
   "Send",
   "Inflation",
   "Burn",
+  "Link",
 };
 
 [Remote]
 enum TransferStatus {
+  "Initiated",
   "WaitingCounterparty",
   "WaitingSafeHeight",
+  "WaitingBroadcast",
   "WaitingConfirmations",
   "Settled",
   "Failed",
-  "Initiated",
 };
 
 [Remote]
@@ -626,6 +653,7 @@ dictionary Utxo {
   u64 btc_amount;
   boolean colorable;
   boolean exists;
+  u32? derivation_index;
 };
 
 [Remote]
@@ -827,6 +855,7 @@ enum TypeOfTransition {
   "Transfer",
   "Burn",
   "Bridge",
+  "Link",
 };
 
 [Remote]
@@ -903,6 +932,7 @@ dictionary VssBackupInfo {
   boolean backup_exists;
   i64? server_version;
   boolean backup_required;
+  string? last_auto_backup_error;
 };
 
 interface VssBackupClient {
@@ -918,6 +948,9 @@ interface VssBackupClient {
 interface Wallet {
   [Throws=RgbLibError]
   constructor(WalletData wallet_data, SinglesigKeys keys);
+
+  [Name=load, Throws=RgbLibError]
+  constructor(string data_dir, string master_fingerprint, string? mnemonic);
 
   WalletData get_wallet_data();
 
@@ -947,12 +980,12 @@ interface Wallet {
 
   [Throws=RgbLibError]
   ReceiveData blind_receive(
-    string? asset_id, Assignment assignment, u64? expiration_timestamp,
+    string? asset_id, Assignment assignment, u64 expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
   [Throws=RgbLibError]
   ReceiveData witness_receive(
-    string? asset_id, Assignment assignment, u64? expiration_timestamp,
+    string? asset_id, Assignment assignment, u64 expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
   [Throws=RgbLibError]
@@ -1083,7 +1116,7 @@ interface Wallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(string? asset_id);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(
@@ -1098,16 +1131,23 @@ interface Wallet {
   OperationResult send(
     Online online, record<DOMString, sequence<Recipient>> recipient_map,
     boolean donation, u64 fee_rate, u8 min_confirmations,
-    u64? expiration_timestamp);
+    u64 expiration_timestamp);
 
   [Throws=RgbLibError]
   SendBeginResult send_begin(
     Online online, record<DOMString, sequence<Recipient>> recipient_map,
     boolean donation, u64 fee_rate, u8 min_confirmations,
-    u64? expiration_timestamp, boolean dry_run);
+    u64 expiration_timestamp, boolean dry_run);
 
   [Throws=RgbLibError]
   OperationResult send_end(Online online, string signed_psbt);
+
+  [Throws=RgbLibError]
+  record<i32, RefreshedTransfer> provide_out_of_band_consignment(
+    Online online, string consignment_path, sequence<string> media_file_paths);
+
+  [Throws=RgbLibError]
+  OperationResult? provide_out_of_band_ack(Online online, string recipient_id);
 
   [Throws=RgbLibError]
   string send_btc(
@@ -1177,12 +1217,12 @@ interface MultisigWallet {
 
   [Throws=RgbLibError]
   ReceiveData blind_receive(
-    Online online, string? asset_id, Assignment assignment, u64? expiration_timestamp,
+    Online online, string? asset_id, Assignment assignment, u64 expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
   [Throws=RgbLibError]
   ReceiveData witness_receive(
-    Online online, string? asset_id, Assignment assignment, u64? expiration_timestamp,
+    Online online, string? asset_id, Assignment assignment, u64 expiration_timestamp,
     sequence<string> transport_endpoints, u8 min_confirmations);
 
   [Throws=RgbLibError]
@@ -1266,7 +1306,7 @@ interface MultisigWallet {
   sequence<Transaction> list_transactions(Online? online, boolean skip_sync);
 
   [Throws=RgbLibError]
-  sequence<Transfer> list_transfers(string? asset_id);
+  sequence<Transfer> list_transfers(AssetFilter asset_filter, string? txid);
 
   [Throws=RgbLibError]
   sequence<Unspent> list_unspents(
@@ -1280,7 +1320,7 @@ interface MultisigWallet {
   [Throws=RgbLibError]
   InitOperationResult send_init(
     Online online, record<DOMString, sequence<Recipient>> recipient_map,
-    boolean donation, u64 fee_rate, u8 min_confirmations, u64? expiration_timestamp);
+    boolean donation, u64 fee_rate, u8 min_confirmations, u64 expiration_timestamp);
 
   [Throws=RgbLibError]
   InitOperationResult send_btc_init(

@@ -138,13 +138,10 @@ fn success() {
         transfer_recv_witness.assignments,
         vec![Assignment::Fungible(amount * 2)]
     );
-    assert_eq!(
-        transfer_recv_blind.status,
-        TransferStatus::WaitingConfirmations
-    );
+    assert_eq!(transfer_recv_blind.status, TransferStatus::WaitingBroadcast);
     assert_eq!(
         transfer_recv_witness.status,
-        TransferStatus::WaitingConfirmations
+        TransferStatus::WaitingBroadcast
     );
     assert_eq!(transfer_recv_blind.txid, Some(txid.clone()));
     assert_eq!(transfer_recv_witness.txid, Some(txid.clone()));
@@ -172,7 +169,7 @@ fn success() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn by_txid() {
+fn filters() {
     initialize();
 
     let amount: u64 = 66;
@@ -180,44 +177,103 @@ fn by_txid() {
     let mut party = get_funded_party!();
     let mut rcv_party = get_funded_party!();
 
-    let asset = party.issue_asset_nia(None);
+    let asset_nia = party.issue_asset_nia(None);
+    let asset_cfa = party.issue_asset_cfa(None, None);
 
-    let receive_data = rcv_party.blind_receive();
+    // one batch tx carrying transfers of both assets
+    let receive_nia = rcv_party.blind_receive();
+    let receive_cfa = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([
+        (
+            asset_nia.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_nia.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+        (
+            asset_cfa.asset_id.clone(),
+            vec![Recipient {
+                assignment: Assignment::Fungible(amount),
+                recipient_id: receive_cfa.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            }],
+        ),
+    ]);
+    let txid = party.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+
+    // AnyOrNone + txid: the tx's transfers across all assets
+    let by_txid = party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
+    assert_eq!(by_txid.len(), 2);
+    assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
+
+    // Id + txid: intersection, restricted to the given asset
+    let nia_by_txid =
+        party.list_transfers_filtered(AssetFilter::Id(asset_nia.asset_id.clone()), Some(&txid));
+    assert_eq!(nia_by_txid.len(), 1);
+    let expected: Vec<i32> = party
+        .list_transfers(Some(&asset_nia.asset_id))
+        .into_iter()
+        .filter(|t| t.txid == Some(txid.clone()))
+        .map(|t| t.idx)
+        .collect();
+    assert_eq!(vec![nia_by_txid[0].idx], expected);
+
+    // AnyOrNone + no txid: the whole history (2 issuances + 2 sends)
+    let all = party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
+    assert_eq!(all.len(), 4);
+
+    // None: receiver's pending blind receives not yet tied to an asset
+    let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
+    assert_eq!(pending.len(), 2);
+
+    // extra receive that nothing is sent to, stays asset-less
+    let receive_extra = rcv_party.blind_receive();
+
+    // settle the batch so the change is spendable again
+    rcv_party.wait_for_refresh(None);
+    // the refresh tied the 2 receives to their assets, only the extra one stays asset-less
+    let all_rcv = rcv_party.list_transfers_filtered(AssetFilter::AnyOrNone, None);
+    assert_eq!(all_rcv.len(), 3);
+    let pending = rcv_party.list_transfers_filtered(AssetFilter::None, None);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].recipient_id, Some(receive_extra.recipient_id));
+    // receiver side: the tx's transfers span 2 batch transfers sharing the same txid
+    let rcv_by_txid = rcv_party.list_transfers_filtered(AssetFilter::AnyOrNone, Some(&txid));
+    assert_eq!(rcv_by_txid.len(), 2);
+    party.wait_for_refresh(None);
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+
+    // Id + txid of a tx not carrying that asset: empty
+    let receive_nia_2 = rcv_party.blind_receive();
     let recipient_map = HashMap::from([(
-        asset.asset_id.clone(),
+        asset_nia.asset_id.clone(),
         vec![Recipient {
             assignment: Assignment::Fungible(amount),
-            recipient_id: receive_data.recipient_id.clone(),
+            recipient_id: receive_nia_2.recipient_id.clone(),
             witness_data: None,
             transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
         }],
     )]);
-    let txid = party.send_retry(&recipient_map);
-    assert!(!txid.is_empty());
-
-    // by-txid returns exactly the transfers of that on-chain tx
-    let by_txid = party.list_transfers_by_txid(&txid);
-    assert!(!by_txid.is_empty());
-    assert!(by_txid.iter().all(|t| t.txid == Some(txid.clone())));
-
-    // and matches the asset-scoped list filtered to that txid
-    let expected: Vec<_> = party
-        .list_transfers(Some(&asset.asset_id))
-        .into_iter()
-        .filter(|t| t.txid == Some(txid.clone()))
-        .collect();
-    let mut by_txid_sorted = by_txid;
-    by_txid_sorted.sort_by_key(|t| t.idx);
-    let mut expected_sorted = expected;
-    expected_sorted.sort_by_key(|t| t.idx);
-    assert_eq!(
-        by_txid_sorted.iter().map(|t| t.idx).collect::<Vec<_>>(),
-        expected_sorted.iter().map(|t| t.idx).collect::<Vec<_>>()
+    let txid_2 = party.send_retry(&recipient_map);
+    assert!(
+        party
+            .list_transfers_filtered(AssetFilter::Id(asset_cfa.asset_id.clone()), Some(&txid_2))
+            .is_empty()
     );
 
-    // unknown txid yields an empty list
-    let unknown = "0000000000000000000000000000000000000000000000000000000000000000";
-    assert!(party.list_transfers_by_txid(unknown).is_empty());
+    // unknown txid: empty
+    assert!(
+        party
+            .list_transfers_filtered(AssetFilter::AnyOrNone, Some(FAKE_TXID))
+            .is_empty()
+    );
 }
 
 #[test]
@@ -227,5 +283,10 @@ fn fail() {
 
     // asset not found
     let result = party.list_transfers_result(Some("rgb1inexistent"));
+    assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
+
+    // asset not found also when a txid is given
+    let result = party
+        .list_transfers_filtered_result(AssetFilter::Id(s!("rgb1inexistent")), Some(FAKE_TXID));
     assert!(matches!(result, Err(Error::AssetNotFound { asset_id: _ })));
 }

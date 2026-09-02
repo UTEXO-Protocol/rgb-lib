@@ -38,6 +38,11 @@ error is returned in case discrepancies are detected.
 ## Language bindings
 Bindings for other languages are available. Check the [bindings] directory.
 
+## AI code review
+The repository supports AI-assisted pull request reviews.
+Setup details for Claude, Codex, and extendable provider onboarding are documented in
+[`/.github/ai-review-bots.md`](.github/ai-review-bots.md).
+
 ## Tests
 In order to run the available tests, execute:
 ```sh

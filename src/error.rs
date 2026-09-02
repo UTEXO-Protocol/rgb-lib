@@ -38,9 +38,23 @@ pub enum Error {
     #[error("Cannot change online object")]
     CannotChangeOnline,
 
+    /// An out-of-band ACK cannot be provided for this transfer
+    #[error("Cannot provide out-of-band ACK: {details}")]
+    CannotProvideOutOfBandAck {
+        /// Error details
+        details: String,
+    },
+
     /// The given PSBTs cannot be combined
     #[error("The given PSBTs cannot be combined")]
     CannotCombinePsbts,
+
+    /// An out-of-band consignment cannot be provided for this transfer
+    #[error("Cannot provide out-of-band consignment: {details}")]
+    CannotProvideOutOfBandConsignment {
+        /// Error details
+        details: String,
+    },
 
     /// Requested pending vanilla TX cannot be aborted
     #[error("Pending vanilla TX cannot be aborted")]
@@ -127,6 +141,17 @@ pub enum Error {
         details: String,
     },
 
+    /// The consistency check failed on a wallet that was just restored from a VSS backup,
+    /// meaning the backup itself is inconsistent or older than other wallet state
+    #[error(
+        "The restored VSS backup is inconsistent ({details}). The backup is likely stale or was \
+         taken mid-operation; restore a newer backup or recover from the original wallet data."
+    )]
+    RestoredBackupInconsistent {
+        /// Error details
+        details: String,
+    },
+
     /// An error was received from the indexer
     #[error("Indexer error: {details}")]
     Indexer {
@@ -137,6 +162,13 @@ pub enum Error {
     /// The provided directory does not exist
     #[error("Inexistent data directory")]
     InexistentDataDir,
+
+    /// The wallet directory holds no manifest to load the wallet from
+    #[error("Inexistent wallet manifest: {path}")]
+    InexistentWalletManifest {
+        /// The manifest path
+        path: String,
+    },
 
     /// There are not enough available allocation slots (UTXOs with available slots)
     #[error("Insufficient allocations")]
@@ -211,6 +243,13 @@ pub enum Error {
     /// The consignment is invalid
     #[error("Invalid consignment")]
     InvalidConsignment,
+
+    /// The provided contracts cannot be linked
+    #[error("Invalid contract link: {details}")]
+    InvalidContractLink {
+        /// Error details
+        details: String,
+    },
 
     /// The provided cosigner is invalid
     #[error("Invalid cosigner: {details}")]
@@ -362,6 +401,13 @@ pub enum Error {
         details: String,
     },
 
+    /// The provided outpoint does not hold a spendable right
+    #[error("Invalid right outpoint: {details}")]
+    InvalidRightOutpoint {
+        /// Error details
+        details: String,
+    },
+
     /// The provided asset ticker is invalid
     #[error("Invalid ticker: {details}")]
     InvalidTicker {
@@ -496,6 +542,10 @@ pub enum Error {
     /// No keys supplied
     #[error("No keys supplied")]
     NoKeysSupplied,
+
+    /// Cannot allocate assets with zero allocations per UTXO
+    #[error("Cannot allocate assets with zero allocations per UTXO")]
+    NoMaxAllocationsPerUtxo,
 
     /// Cannot create a wallet with no supported schemas
     #[error("Cannot create a wallet with no supported schemas")]
@@ -657,6 +707,13 @@ pub enum Error {
     #[error("Transport type is not supported")]
     UnsupportedTransportType,
 
+    /// The wallet manifest version is not supported
+    #[error("Wallet manifest version not supported")]
+    UnsupportedWalletManifestVersion {
+        /// Wallet manifest version
+        version: String,
+    },
+
     /// VSS authentication failed
     #[error("VSS authentication failed: {details}")]
     VssAuth {
@@ -689,6 +746,19 @@ pub enum Error {
         path: String,
     },
 
+    /// A wallet setting fixed when the wallet was created has been given a different value
+    #[error(
+        "Wallet setting '{setting}' cannot be changed: the wallet was created with '{expected}', got '{provided}'"
+    )]
+    WalletSettingMismatch {
+        /// The setting name
+        setting: String,
+        /// The value the wallet was created with
+        expected: String,
+        /// The value that has been provided
+        provided: String,
+    },
+
     /// The requested operation cannot be processed by a watch-only wallet
     #[error("Operation not allowed on watch only wallet")]
     WatchOnly,
@@ -711,15 +781,9 @@ pub(crate) enum IndexerError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum InternalError {
-    #[error("Aead error: {0}")]
-    AeadError(String),
-
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     #[error("API error: {0}")]
     Api(#[from] reqwest::Error),
-
-    #[error("Invalid backup path")]
-    BackupInvalidPath(#[from] std::io::Error),
 
     #[error("Base64 decode error: {0}")]
     Base64Decode(#[from] base64::DecodeError),
@@ -746,13 +810,10 @@ pub(crate) enum InternalError {
     FromSlice(#[from] amplify::FromSliceError),
 
     #[error("Hash error: {0}")]
-    HashError(#[from] scrypt::password_hash::Error),
+    HashError(#[from] scrypt::password_hash::phc::Error),
 
     #[error("Infallible error: {0}")]
     Infallible(#[from] std::convert::Infallible),
-
-    #[error("No password hash returned")]
-    NoPasswordHashError,
 
     #[error("PSBT parse error: {0}")]
     PsbtParse(#[from] bdk_wallet::bitcoin::psbt::PsbtParseError),
@@ -1063,7 +1124,7 @@ mod tests {
         }
         #[cfg(all(feature = "esplora", not(feature = "electrum")))]
         {
-            let err = IndexerError::Esplora(EsploraError::Minreq(minreq::Error::AddressNotFound));
+            let err = IndexerError::Esplora(EsploraError::InvalidResponse);
             let err = Error::from(err);
             assert_matches!(err, Error::Indexer { details } if !details.is_empty());
         }
@@ -1071,14 +1132,6 @@ mod tests {
 
     #[test]
     fn from_internal_error() {
-        // BackupInvalidPath error
-        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no access");
-        let internal = InternalError::from(io_err);
-        assert_matches!(
-            internal,
-            InternalError::BackupInvalidPath(ref e) if e.to_string().contains("no access")
-        );
-
         // SerdeJSON error
         let serde_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
         let msg = serde_err.to_string();

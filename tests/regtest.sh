@@ -132,7 +132,7 @@ stop_services() {
     local proxy_mod_proto
     proxy_mod_proto="$($COMPOSE ps -q proxy-mod-proto)"
     if [ -n "$proxy_mod_proto" ] && docker ps -q --no-trunc | grep -q "$proxy_mod_proto"; then
-        $COMPOSE exec proxy-mod-proto pkill -f '^node'
+        $COMPOSE exec proxy-mod-proto pkill -f '^node' || true
     fi
     # bring all services down
     $COMPOSE --profile '*' down -v --remove-orphans

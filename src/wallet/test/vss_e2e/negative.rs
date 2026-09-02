@@ -15,8 +15,10 @@ use crate::wallet::vss::{
     BackupManifest, VssBackupClient, VssBackupConfig, VssEncryptionMetadata, restore_from_vss,
 };
 
-use chacha20poly1305::aead::stream;
+use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305};
+
+use crate::wallet::backup::stream_be32_nonce;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -53,9 +55,12 @@ fn decrypt_bytes_with_signing_key(
             details: format!("HKDF expansion failed: {e}"),
         })?;
 
-    let aead = XChaCha20Poly1305::new(Key::from_slice(&key_bytes));
-    let nonce = chacha20poly1305::aead::generic_array::GenericArray::from_slice(&nonce_bytes);
-    let mut stream_decryptor = stream::DecryptorBE32::from_aead(aead, nonce);
+    let aead = XChaCha20Poly1305::new(&Key::from(key_bytes));
+    let nonce_prefix: [u8; BACKUP_NONCE_LENGTH] =
+        nonce_bytes.try_into().map_err(|_| Error::Internal {
+            details: "Invalid nonce length".to_string(),
+        })?;
+    let mut position: u32 = 0;
 
     let mut decrypted = Vec::new();
     let mut buffer = [0u8; BACKUP_BUFFER_LEN_DECRYPT];
@@ -67,23 +72,28 @@ fn decrypt_bytes_with_signing_key(
         })?;
 
         if read_count == BACKUP_BUFFER_LEN_DECRYPT {
-            let cleartext = stream_decryptor
-                .decrypt_next(buffer.as_slice())
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            let nonce = stream_be32_nonce(&nonce_prefix, position, false);
+            let cleartext =
+                aead.decrypt(&nonce, buffer.as_slice())
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
         } else if read_count == 0 {
             break;
         } else {
-            let cleartext = stream_decryptor
-                .decrypt_last(&buffer[..read_count])
-                .map_err(|_| Error::VssError {
-                    details: "decryption failed: wrong signing key or corrupted data".to_string(),
-                })?;
+            let nonce = stream_be32_nonce(&nonce_prefix, position, true);
+            let cleartext =
+                aead.decrypt(&nonce, &buffer[..read_count])
+                    .map_err(|_| Error::VssError {
+                        details: "decryption failed: wrong signing key or corrupted data"
+                            .to_string(),
+                    })?;
             decrypted.extend(cleartext);
             break;
         }
+        position += 1;
     }
 
     Ok(decrypted)
@@ -127,7 +137,7 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
         .witness_receive(
             None,
             Assignment::Fungible(send_amount),
-            None,
+            default_rcv_expiration(),
             TRANSPORT_ENDPOINTS.clone(),
             MIN_CONFIRMATIONS,
         )
@@ -151,7 +161,7 @@ fn scenario_4_1_wrong_signing_key_restore_fails_and_writes_no_wallet_data() {
             true,
             FEE_RATE,
             MIN_CONFIRMATIONS,
-            None,
+            default_send_expiration(),
             None,
         )
         .expect("send");

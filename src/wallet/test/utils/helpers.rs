@@ -1,22 +1,31 @@
 use super::*;
 
+#[cfg(feature = "electrum")]
+use regex::RegexSet;
+#[cfg(feature = "electrum")]
+use std::io::Write;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use std::time::{Duration, Instant};
+
 /// Panic if the given expression doesn't match the provided pattern, logging the unexpected result
 #[macro_export]
 macro_rules! assert_matches {
-    ($expression:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {
+    ($expression:expr, $pattern:pat $(if $guard:expr)? $(,)?) => {{
+        #[allow(unreachable_patterns)]
         match $expression {
             $pattern $(if $guard)? => {},
             _ => {
                 panic!("received unexpected result: {}", format!("{:?}", $expression));
             }
         }
-    };
+    }};
 }
 
 pub(crate) fn join_with_sep(parts: &[&str]) -> String {
     parts.join(MAIN_SEPARATOR_STR)
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn get_current_time() -> u128 {
     let now = std::time::SystemTime::now();
     now.duration_since(std::time::UNIX_EPOCH)
@@ -63,6 +72,7 @@ pub(crate) fn get_test_wallet_data(data_dir: &str) -> WalletData {
     }
 }
 
+#[cfg(feature = "electrum")]
 pub(crate) fn get_test_wallet_with_keys(keys: &Keys) -> Wallet {
     let wallet_keys = SinglesigKeys::from_keys(keys, None);
     get_test_wallet_raw(&wallet_keys, None, BitcoinNetwork::Regtest)
@@ -116,7 +126,7 @@ pub(crate) fn get_test_wallet(private_keys: bool, max_allocations_per_utxo: Opti
     )
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(feature = "electrum")]
 pub(crate) fn get_funded_party_p2wpkh() -> SinglesigParty {
     let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::SegWitV0);
     let wallet_keys = SinglesigKeys::from_keys(&keys, None);
@@ -251,6 +261,7 @@ pub(crate) fn fund_wallet(address: String) {
     mine(false);
 }
 
+#[cfg(feature = "electrum")]
 pub(crate) fn compare_test_directories(src: &Path, dst: &Path, skip: &[&str]) {
     let ignores = RegexSet::new(skip).unwrap();
     let cmp = dircmp::Comparison::new(ignores);
@@ -258,6 +269,7 @@ pub(crate) fn compare_test_directories(src: &Path, dst: &Path, skip: &[&str]) {
     assert!(diff.is_empty());
 }
 
+#[cfg(feature = "electrum")]
 pub(crate) fn print_unspents(unspents: &[Unspent], msg: &str) {
     println!("\n{msg} ({} unspents)", unspents.len());
     for u in unspents {
@@ -282,6 +294,7 @@ pub(crate) fn print_unspents(unspents: &[Unspent], msg: &str) {
     }
 }
 
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn wait_for_function<F>(mut func: F, timeout_secs: u8, interval_ms: u16) -> bool
 where
     F: FnMut() -> bool,
@@ -297,7 +310,7 @@ where
     false
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(feature = "electrum")]
 pub(crate) fn write_opouts_to_reject_list(filename: &str, opouts: &[String]) {
     let lists_dir = PathBuf::from(join_with_sep(&LISTS_DIR_PARTS));
     if !lists_dir.exists() {
@@ -310,7 +323,7 @@ pub(crate) fn write_opouts_to_reject_list(filename: &str, opouts: &[String]) {
     }
 }
 
-#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[cfg(feature = "electrum")]
 pub(crate) fn get_proxy_client(proxy_url: Option<&str>) -> ProxyClient {
     ProxyClient::new(proxy_url.unwrap_or(PROXY_URL)).unwrap()
 }
@@ -318,7 +331,7 @@ pub(crate) fn get_proxy_client(proxy_url: Option<&str>) -> ProxyClient {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions {
     OnlineOptions {
-        indexer_url: indexer_url.unwrap_or(ELECTRUM_URL).to_string(),
+        indexer_url: indexer_url.unwrap_or(DEFAULT_INDEXER_URL).to_string(),
         skip_consistency_check: true,
         vanilla_sync_lookback: INDEXER_SYNC_LOOKBACK as u32,
         // Test wallets declare AssetSchema::VALUES, which now includes Bfa, and
@@ -326,4 +339,14 @@ pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions
         // with None here no test could bring any wallet online at all.
         eth_rpc_url: Some(ANVIL_RPC_URL.to_string()),
     }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn default_rcv_expiration() -> u64 {
+    (now().unix_timestamp() + DURATION_RCV_TRANSFER as i64) as u64
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn default_send_expiration() -> u64 {
+    (now().unix_timestamp() + DURATION_SEND_TRANSFER as i64) as u64
 }

@@ -277,7 +277,9 @@ impl WalletOffline for MultisigWallet {
         let is_internal = keychain == KeychainKind::Internal;
         let start_index = self.hub_client().bump_address_indices(count, is_internal)?;
         let local_index = self.bdk_wallet().derivation_index(keychain).unwrap_or(0);
-        let target_index = start_index + count;
+        let target_index = start_index
+            .checked_add(count)
+            .expect("address derivation index cannot exceed u32::MAX");
         let (bdk_wallet, bdk_database) = self.bdk_wallet_db_mut();
         for _ in local_index..target_index {
             bdk_wallet.reveal_next_address(keychain);
@@ -292,6 +294,10 @@ impl WalletOffline for MultisigWallet {
 impl WalletOnline for MultisigWallet {
     fn wallet_specific_consistency_checks(&mut self, _txn: &DbTxn) -> Result<(), Error> {
         Ok(())
+    }
+
+    fn supports_out_of_band_exchange(&self) -> bool {
+        false
     }
 
     fn get_hub_fail_status(&self, batch_transfer_idx: i32) -> Result<bool, Error> {
@@ -397,14 +403,29 @@ pub struct MultisigVotingStatus {
 struct ReceiveMetadata {
     invoice: String,
     min_confirmations: u8,
-    expiration_timestamp: Option<i64>,
+    #[serde(deserialize_with = "deserialize_mandatory_expiration")]
+    expiration_timestamp: i64,
     secret_seal: Option<GraphSeal>,
+}
+
+// tolerate a null expiration from coordinators running an older rgb-lib version so the failure is
+// reported as a version mismatch instead of a generic parse error
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn deserialize_mandatory_expiration<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<i64>::deserialize(deserializer)?.ok_or_else(|| {
+        serde::de::Error::custom(
+            "expiration timestamp is null: receive data was created by an older rgb-lib version \
+             (expiration is now mandatory)",
+        )
+    })
 }
 
 /// Operations for multisig wallets.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum Operation {
     // CreateUtxos variants
     /// Create UTXOs operation waiting for user's response (ACK/NACK)
@@ -1081,7 +1102,6 @@ pub struct OperationInfo {
 /// Response to an operation.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum RespondToOperation {
     /// ACK the operation with a signed PSBT
     Ack(String),
@@ -1116,7 +1136,6 @@ pub struct BridgeInitResult {
 /// The role of the user on the hub.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub enum UserRole {
     /// A cosigner
     Cosigner,
@@ -1662,6 +1681,9 @@ impl MultisigWallet {
     ///
     /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
     /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// `issuance_type` controls whether a link-right UTXO is created and whether the genesis
+    /// contract declares a parent contract.
     pub fn issue_asset_ifa(
         &self,
         online: Online,
@@ -1671,10 +1693,13 @@ impl MultisigWallet {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        issuance_type: Option<IfaIssuanceType>,
     ) -> Result<AssetIFA, Error> {
         info!(self.logger(), "Issuing IFA...");
         self.check_online(online)?;
         self.check_is_cosigner()?;
+        let (create_link_right, linked_from_contract_id) =
+            issuance_type.unwrap_or_default().into_ifa_link_data()?;
         let txn = self.database().begin_transaction()?;
         let issue_data = self.create_ifa_contract(
             &txn,
@@ -1684,6 +1709,8 @@ impl MultisigWallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            linked_from_contract_id,
+            create_link_right,
         )?;
         let res = self.upload_and_process_issuance(&txn, &issue_data, vec![])?;
         txn.commit()?;
@@ -1695,12 +1722,16 @@ impl MultisigWallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
         recipient_type: RecipientType,
         operation_type: OperationType,
     ) -> Result<ReceiveData, Error> {
+        if transport_endpoints.is_empty() {
+            return Err(Error::UnsupportedTransportType);
+        }
+
         let txn = self.database().begin_transaction()?;
 
         // shared receive data creation logic
@@ -1708,7 +1739,7 @@ impl MultisigWallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             recipient_type,
         )?;
@@ -1739,7 +1770,7 @@ impl MultisigWallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -1753,7 +1784,7 @@ impl MultisigWallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
@@ -1762,7 +1793,8 @@ impl MultisigWallet {
     /// endpoint string encodes an
     /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
     /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
-    /// `rpcs://example.com`).
+    /// `rpcs://example.com`). The out-of-band exchange (requested with an empty list) is not
+    /// supported for multisig wallets and results in an error.
     ///
     /// The `min_confirmations` number determines the minimum number of confirmations needed for
     /// the transaction anchoring the transfer for it to be considered final and move (while
@@ -1772,13 +1804,13 @@ impl MultisigWallet {
         online: Online,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via blinded UTXO for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via blinded UTXO for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -1806,7 +1838,7 @@ impl MultisigWallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
@@ -1815,7 +1847,8 @@ impl MultisigWallet {
     /// endpoint string encodes an
     /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
     /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
-    /// `rpcs://example.com`).
+    /// `rpcs://example.com`). The out-of-band exchange (requested with an empty list) is not
+    /// supported for multisig wallets and results in an error.
     ///
     /// The `min_confirmations` number determines the minimum number of confirmations needed for
     /// the transaction anchoring the transfer for it to be considered final and move (while
@@ -1825,13 +1858,13 @@ impl MultisigWallet {
         online: Online,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via witness TX for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via witness TX for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -1948,6 +1981,7 @@ impl MultisigWallet {
             valid_contract,
             contract_path,
             issue_utxos,
+            link_right_outpoint: None,
         };
 
         self.import_and_save_contract(txn, &issue_data, &mut runtime)?;
@@ -1972,8 +2006,8 @@ impl MultisigWallet {
         let file = fs::File::open(&metadata_file.filepath)?;
         let reader = io::BufReader::new(file);
         let receive_metadata: ReceiveMetadata =
-            serde_json::from_reader(reader).map_err(|_| Error::MultisigUnexpectedData {
-                details: s!("invalid receive data"),
+            serde_json::from_reader(reader).map_err(|e| Error::MultisigUnexpectedData {
+                details: format!("invalid receive data: {e}"),
             })?;
         let min_confirmations = receive_metadata.min_confirmations;
         let invoice = Invoice::new(receive_metadata.invoice.clone())?;
@@ -2039,7 +2073,7 @@ impl MultisigWallet {
             recipient_id: invoice_data.recipient_id.clone(),
             endpoints,
             created_at: now().unix_timestamp(),
-            expiration_timestamp: invoice_data.expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp: receive_metadata.expiration_timestamp,
             blind_seal,
             recipient_type_full,
             script_pubkey,
@@ -2050,7 +2084,7 @@ impl MultisigWallet {
         Ok(ReceiveData {
             invoice: receive_metadata.invoice,
             recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -2091,7 +2125,10 @@ impl MultisigWallet {
 
         let op_idx = self.get_local_last_processed_operation_idx_impl(&txn)?;
         txn.commit()?;
-        let Some(op) = self.hub_client().get_operation_by_idx(op_idx + 1)? else {
+        let next_op_idx = op_idx
+            .checked_add(1)
+            .expect("operation index cannot exceed i32::MAX");
+        let Some(op) = self.hub_client().get_operation_by_idx(next_op_idx)? else {
             return Ok(None);
         };
 
@@ -2522,8 +2559,12 @@ impl MultisigWallet {
     /// the transaction anchoring the transfer for it to be considered final and move (while
     /// refreshing) to the [`TransferStatus::Settled`] status.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
-    /// transfer.
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
+    /// transfer. This should be set to the same value specified by the recipient's invoice, so
+    /// that sender and recipient enforce the same deadline; once it passes, the recipient is
+    /// allowed to fail the transfer and the sender will avoid broadcasting it even if a late ACK is
+    /// received. In case of a batch transfer, set it to the minimum (earliest) expiration across
+    /// the recipients' invoices.
     ///
     /// Returns a PSBT ready to be signed and the operation index on the hub.
     pub fn send_init(
@@ -2533,7 +2574,7 @@ impl MultisigWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
     ) -> Result<InitOperationResult, Error> {
         info!(self.logger(), "Initiate sending...");
         self.check_online(online)?;
@@ -2545,7 +2586,7 @@ impl MultisigWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             true,
             None,
         )?;
@@ -2724,6 +2765,60 @@ impl MultisigWallet {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn receive_metadata_null_expiration_names_version_mismatch() {
+        // old coordinators serialize a null expiration
+        let json = r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":null,"secret_seal":null}"#;
+        let err = serde_json::from_str::<ReceiveMetadata>(json).unwrap_err();
+        assert!(err.to_string().contains("older rgb-lib version"));
+
+        let json = r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":123,"secret_seal":null}"#;
+        let metadata = serde_json::from_str::<ReceiveMetadata>(json).unwrap();
+        assert_eq!(metadata.expiration_timestamp, 123);
+    }
+
+    // the parse error detail must survive import_receive_data, not be replaced by a generic one
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    #[test]
+    fn import_receive_data_null_expiration_names_version_mismatch() {
+        let data_dir = PathBuf::from("tests").join("tmp");
+        fs::create_dir_all(&data_dir).unwrap();
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+        let mut wallet = MultisigWallet::new(
+            WalletData {
+                data_dir: data_dir.to_string_lossy().to_string(),
+                bitcoin_network: BitcoinNetwork::Regtest,
+                database_type: DatabaseType::Sqlite,
+                max_allocations_per_utxo: 5,
+                supported_schemas: AssetSchema::VALUES.to_vec(),
+                reuse_addresses: false,
+            },
+            MultisigKeys::new(vec![Cosigner::from_keys(&keys, None)], 1, 1),
+        )
+        .unwrap();
+
+        let filepath = wallet.wallet_dir().join("receive_metadata.json");
+        fs::write(
+            &filepath,
+            r#"{"invoice":"inv","min_confirmations":1,"expiration_timestamp":null,"secret_seal":null}"#,
+        )
+        .unwrap();
+        let files = [FileResponse {
+            r#type: FileType::OperationData,
+            filepath,
+        }];
+
+        let txn = wallet.database().begin_transaction().unwrap();
+        let err = wallet
+            .import_receive_data(&txn, &files, &OperationType::BlindReceive)
+            .unwrap_err();
+        let Error::MultisigUnexpectedData { details } = err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(details.contains("older rgb-lib version"), "{details}");
+    }
 
     #[test]
     fn cosigner_display_and_parse() {

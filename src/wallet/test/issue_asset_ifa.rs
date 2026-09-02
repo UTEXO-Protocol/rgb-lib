@@ -311,6 +311,7 @@ fn fail() {
         vec![AMOUNT],
         vec![],
         None,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidTicker { details: m }) if m == EMPTY_MSG));
 
@@ -322,6 +323,7 @@ fn fail() {
         vec![AMOUNT],
         vec![],
         None,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidTicker { details: m }) if m == IDENT_TOO_LONG_MSG));
 
@@ -332,6 +334,7 @@ fn fail() {
         PRECISION,
         vec![AMOUNT],
         vec![],
+        None,
         None,
     );
     assert!(
@@ -346,6 +349,7 @@ fn fail() {
         PRECISION,
         vec![AMOUNT],
         vec![],
+        None,
         None,
     );
     assert!(
@@ -362,6 +366,7 @@ fn fail() {
         vec![AMOUNT],
         vec![],
         None,
+        None,
     );
     assert!(
         matches!(result, Err(Error::InvalidTicker { details: m }) if m == IDENT_NOT_ASCII_MSG
@@ -377,6 +382,7 @@ fn fail() {
         vec![AMOUNT],
         vec![],
         None,
+        None,
     );
     assert!(
         matches!(result, Err(Error::InvalidTicker { details: m }) if m == IDENT_NOT_START_MSG
@@ -391,6 +397,7 @@ fn fail() {
         vec![AMOUNT],
         vec![],
         None,
+        None,
     );
     assert!(matches!(result, Err(Error::InvalidName { details: m }) if m == EMPTY_MSG));
 
@@ -401,6 +408,7 @@ fn fail() {
         PRECISION,
         vec![AMOUNT],
         vec![],
+        None,
         None,
     );
     assert!(matches!(result, Err(Error::InvalidName { details: m }) if m == IDENT_TOO_LONG_MSG));
@@ -413,6 +421,7 @@ fn fail() {
         PRECISION,
         vec![AMOUNT],
         vec![],
+        None,
         None,
     );
     assert!(
@@ -427,6 +436,7 @@ fn fail() {
         19,
         vec![AMOUNT],
         vec![],
+        None,
         None,
     );
     assert!(matches!(
@@ -459,4 +469,46 @@ fn fail() {
     // insufficient allocations
     let result = empty_party.issue_asset_ifa_result(None, None, None);
     assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn legacy_mode_has_no_link_right() {
+    initialize();
+
+    let mut party = get_funded_party!();
+
+    let asset = party
+        .wallet
+        .issue_asset_ifa(
+            TICKER.to_string(),
+            NAME.to_string(),
+            PRECISION,
+            vec![AMOUNT],
+            vec![AMOUNT_INFLATION],
+            None,
+            None,
+        )
+        .expect("legacy issuance should succeed");
+
+    assert!(asset.issuance_link_right_outpoint.is_none());
+
+    let unspents = party.list_unspents(false);
+    let unspents_asset = unspents.iter().filter(|u| {
+        u.rgb_allocations
+            .iter()
+            .any(|a| a.asset_id == Some(asset.asset_id.clone()))
+    });
+    assert_eq!(unspents_asset.clone().count(), 2);
+    assert_eq!(
+        unspents_asset
+            .filter(|u| {
+                u.rgb_allocations
+                    .iter()
+                    .all(|a| a.assignment == Assignment::LinkRight)
+            })
+            .count(),
+        0
+    );
 }

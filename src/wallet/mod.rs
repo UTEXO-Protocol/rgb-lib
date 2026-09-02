@@ -33,13 +33,14 @@ pub use multisig::{
 };
 pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 pub use objects::{
-    Address, AssetBFA, AssetCFA, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection,
-    Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia, Invoice, InvoiceData, Media,
-    Metadata, Online, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo, PsbtInspection,
-    PsbtOutputInfo, ReceiveData, Recipient, RecipientInfo, RecipientType, RgbAllocation,
-    RgbInputInfo, RgbInspection, RgbOperationInfo, RgbOutputInfo, RgbTransitionInfo, Token,
-    TokenLight, Transaction, TransactionType, Transfer, TransferKind, TransferTransportEndpoint,
-    TransportEndpoint, TypeOfTransition, Unspent, Utxo, WalletData, WalletDescriptors, WitnessData,
+    Address, AssetBFA, AssetCFA, AssetFilter, AssetIFA, AssetNIA, AssetUDA, Assets,
+    AssignmentsCollection, Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia,
+    IfaIssuanceType, Invoice, InvoiceData, Media, Metadata, Online, Outpoint, PendingVanillaTx,
+    ProofOfReserves, PsbtInputInfo, PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient,
+    RecipientInfo, RecipientType, RgbAllocation, RgbInputInfo, RgbInspection, RgbOperationInfo,
+    RgbOutputInfo, RgbTransitionInfo, Token, TokenLight, Transaction, TransactionType, Transfer,
+    TransferKind, TransferTransportEndpoint, TransportEndpoint, TypeOfTransition, Unspent, Utxo,
+    WalletData, WalletDescriptors, WitnessData,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use objects::{
@@ -54,8 +55,8 @@ pub use singlesig::{SinglesigKeys, Wallet};
 
 pub(crate) use backup::WalletBackup;
 pub(crate) use core::{
-    ASSETS_DIR, MEDIA_DIR, NUM_KNOWN_SCHEMAS, WalletCore, WalletInternals, setup_bdk, setup_db,
-    setup_new_wallet, setup_rgb,
+    ASSETS_DIR, MEDIA_DIR, NUM_KNOWN_SCHEMAS, WalletCore, WalletInternals, WalletManifest,
+    setup_bdk, setup_db, setup_new_wallet, setup_rgb,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use core::{SyncKeychain, SyncOptions, SyncStrategy};
@@ -65,8 +66,8 @@ pub(crate) use indexer::Indexer;
 pub(crate) use objects::{
     AssetInfo, AssetSpend, BeginOperationData, BtcChange, FailTransfersOutcome, LocalRecipient,
     LocalRecipientData, LocalWitnessData, OnlineData, PrepareRgbPsbtResult,
-    PrepareTransferPsbtResult, ReceivedConsignmentMeta, RefreshResultTrait,
-    TryFailBatchTransferOutcome,
+    PrepareTransferPsbtResult, ReceiveMatcher, ReceiveMode, ReceivedConsignmentMeta,
+    RefreshResultTrait, TryFailBatchTransferOutcome,
 };
 pub(crate) use objects::{
     InfoAssetTransfer, InfoBatchTransfer, IssueData, IssuedAssetDetails, LocalAssetData,
@@ -102,6 +103,9 @@ pub(crate) const RGB_STATE_BRIDGE_RIGHT: &str = "bridgeRight";
 pub(crate) const RGB_GLOBAL_ISSUED_SUPPLY: &str = "issuedSupply";
 pub(crate) const RGB_GLOBAL_BRIDGED_SUPPLY: &str = "bridgedSupply";
 pub(crate) const RGB_GLOBAL_BRIDGE_LOCATION: &str = "bridgeLocation";
+pub(crate) const RGB_GLOBAL_LINKED_FROM_CONTRACT: &str = "linkedFromContract";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_GLOBAL_LINKED_TO_CONTRACT: &str = "linkedToContract";
 pub(crate) const RGB_GLOBAL_REJECT_LIST_URL: &str = "rejectListUrl";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_ALLOWED_INFLATION: &str = "allowedInflation";

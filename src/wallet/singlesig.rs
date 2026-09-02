@@ -178,6 +178,9 @@ impl Wallet {
         let (wallet_dir, logger, _logger_guard) =
             setup_new_wallet(&wallet_data, &keys.master_fingerprint)?;
 
+        // reject settings the wallet wasn't created with before any of them reaches the database
+        WalletManifest::check_settings_unchanged(&wallet_dir, &wallet_data, &keys)?;
+
         // setup the BDK wallet
         let (bdk_wallet, bdk_database) = setup_bdk(
             &wdata,
@@ -195,6 +198,9 @@ impl Wallet {
         // setup rgb-lib DB
         let database = setup_db(&wallet_dir)?;
         let reuse_address_index = database.begin_transaction()?.get_reuse_address_index()?;
+
+        // persist the settings needed to load the wallet back
+        WalletManifest::new(&wallet_data, &keys).write(&wallet_dir)?;
 
         info!(logger, "New wallet completed");
         Ok(Self {
@@ -216,6 +222,35 @@ impl Wallet {
             },
             keys,
         })
+    }
+
+    /// Load an existing RGB singlesig wallet, identified by its master fingerprint, from the
+    /// wallet directory inside `data_dir`.
+    ///
+    /// The settings are read back from the manifest that [`Wallet::new`] wrote in the wallet
+    /// directory, so they don't need to be supplied again. Pass the `mnemonic` to load a wallet
+    /// able to sign, or `None` to load it in watch-only mode.
+    ///
+    /// Wallets created before manifest support, or never opened with [`Wallet::new`] since, have
+    /// no manifest and cannot be loaded; call [`Wallet::new`] once to write one.
+    pub fn load(
+        data_dir: &str,
+        master_fingerprint: &str,
+        mnemonic: Option<String>,
+    ) -> Result<Self, Error> {
+        let data_dir_path = Path::new(data_dir);
+        if !data_dir_path.exists() {
+            return Err(Error::InexistentDataDir);
+        }
+        let wallet_dir = fs::canonicalize(data_dir_path)?.join(master_fingerprint);
+        let manifest = WalletManifest::read(&wallet_dir)?;
+        // a manifest reached via a renamed wallet directory would make `new` set up a second,
+        // unrelated wallet at the fingerprint the manifest names
+        if manifest.master_fingerprint != master_fingerprint {
+            return Err(Error::FingerprintMismatch);
+        }
+        let (wallet_data, keys) = manifest.into_parts(data_dir.to_string(), mnemonic);
+        Self::new(wallet_data, keys)
     }
 
     /// Return the bitcoin keys of the wallet.
@@ -460,6 +495,9 @@ impl Wallet {
     ///
     /// The `inflation_amounts` can be empty. If provided the sum of its elements plus the sum of
     /// `amounts` cannot exceed the maximum `u64` value.
+    ///
+    /// `issuance_type` controls whether a link-right UTXO is created and whether the genesis
+    /// contract declares a parent contract.
     pub fn issue_asset_ifa(
         &self,
         ticker: String,
@@ -468,8 +506,11 @@ impl Wallet {
         amounts: Vec<u64>,
         inflation_amounts: Vec<u64>,
         reject_list_url: Option<String>,
+        issuance_type: Option<IfaIssuanceType>,
     ) -> Result<AssetIFA, Error> {
         info!(self.logger(), "Issuing IFA...");
+        let (create_link_right, linked_from_contract_id) =
+            issuance_type.unwrap_or_default().into_ifa_link_data()?;
         let txn = self.database().begin_transaction()?;
         let issue_data = self.create_ifa_contract(
             &txn,
@@ -479,6 +520,8 @@ impl Wallet {
             amounts,
             inflation_amounts,
             reject_list_url,
+            linked_from_contract_id,
+            create_link_right,
         )?;
         let res = self.finalize_offline_issuance(&txn, &issue_data)?;
         self.update_backup_info(&txn, false)?;
@@ -535,16 +578,20 @@ impl Wallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
-    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
-    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
-    /// endpoint string encodes an
+    /// medium. The list can contain a maximum of 3 endpoints; strings specifying invalid endpoints
+    /// and duplicate ones will cause an error to be raised. A valid endpoint string encodes an
     /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
     /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
     /// `rpcs://example.com`).
+    /// Providing an empty list selects the out-of-band exchange: the invoice carries no transport
+    /// endpoints and the consignment and ACK are exchanged out-of-band (see
+    /// [`provide_out_of_band_consignment`](Wallet::provide_out_of_band_consignment) and
+    /// [`provide_out_of_band_ack`](Wallet::provide_out_of_band_ack)), without using automated
+    /// transport endpoints.
     ///
     /// The `min_confirmations` number determines the minimum number of confirmations needed for
     /// the transaction anchoring the transfer for it to be considered final and move (while
@@ -553,13 +600,13 @@ impl Wallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via blinded UTXO for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via blinded UTXO for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -568,7 +615,7 @@ impl Wallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             RecipientType::Blind,
         )?;
@@ -581,7 +628,7 @@ impl Wallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -594,16 +641,20 @@ impl Wallet {
     /// An optional amount can be specified, which will be embedded in the invoice. It will not be
     /// checked when accepting the transfer.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
     /// invoice and the transfer.
     ///
     /// Each endpoint in the provided `transport_endpoints` list will be used as RGB data exchange
-    /// medium. The list needs to contain at least 1 endpoint and a maximum of 3. Strings
-    /// specifying invalid endpoints and duplicate ones will cause an error to be raised. A valid
-    /// endpoint string encodes an
+    /// medium. The list can contain a maximum of 3 endpoints; strings specifying invalid endpoints
+    /// and duplicate ones will cause an error to be raised. A valid endpoint string encodes an
     /// [`RgbTransport`](https://docs.rs/rgb-invoicing/latest/rgbinvoice/enum.RgbTransport.html).
     /// At the moment the only supported variant is JsonRpc (e.g. `rpc://127.0.0.1` or
     /// `rpcs://example.com`).
+    /// Providing an empty list selects the out-of-band exchange: the invoice carries no transport
+    /// endpoints and the consignment and ACK are exchanged out-of-band (see
+    /// [`provide_out_of_band_consignment`](Wallet::provide_out_of_band_consignment) and
+    /// [`provide_out_of_band_ack`](Wallet::provide_out_of_band_ack)), without using automated
+    /// transport endpoints.
     ///
     /// The `min_confirmations` number determines the minimum number of confirmations needed for
     /// the transaction anchoring the transfer for it to be considered final and move (while
@@ -612,13 +663,13 @@ impl Wallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
         info!(
             self.logger(),
-            "Receiving via witness TX for asset '{:?}' with expiration '{:?}'...",
+            "Receiving via witness TX for asset '{:?}' with expiration '{}'...",
             asset_id,
             expiration_timestamp,
         );
@@ -627,7 +678,7 @@ impl Wallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             RecipientType::Witness,
         )?;
@@ -640,7 +691,7 @@ impl Wallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -867,7 +918,7 @@ impl Wallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         lock_time: Option<u32>,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending to: {:?}...", recipient_map);
@@ -880,7 +931,7 @@ impl Wallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             true,
             lock_time,
         )?;
@@ -912,8 +963,12 @@ impl Wallet {
     /// the transaction anchoring the transfer for it to be considered final and move (while
     /// refreshing) to the [`TransferStatus::Settled`] status.
     ///
-    /// An optional expiration UTC timestamp can be specified, which will set the expiration of the
-    /// transfer.
+    /// An expiration UTC timestamp must be specified, which will set the expiration of the
+    /// transfer. This should be set to the same value specified by the recipient's invoice, so
+    /// that sender and recipient enforce the same deadline; once it passes, the recipient is
+    /// allowed to fail the transfer and the sender will avoid broadcasting it even if a late ACK is
+    /// received. In case of a batch transfer, set it to the minimum (earliest) expiration across
+    /// the recipients' invoices.
     ///
     /// If `dry_run` is true, the wallet does not persist the transfer in
     /// [`TransferStatus::Initiated`]. The returned [`SendBeginResult::batch_transfer_idx`] is None
@@ -937,7 +992,7 @@ impl Wallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         dry_run: bool,
         lock_time: Option<u32>,
     ) -> Result<SendBeginResult, Error> {
@@ -950,7 +1005,7 @@ impl Wallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             dry_run,
             lock_time,
         )?;
@@ -1001,6 +1056,77 @@ impl Wallet {
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Send (end) completed");
+        Ok(res)
+    }
+
+    /// Receive an RGB transfer whose consignment was exchanged out-of-band, without using automated
+    /// transport endpoints.
+    ///
+    /// This is the out-of-band counterpart of [`refresh`](Wallet::refresh) for transfers created
+    /// with an empty transport endpoint list. The consignment at `consignment_path` (received
+    /// through any external channel) is matched against the pending incoming out-of-band transfers,
+    /// validated and if it carries an unknown asset this is imported.
+    ///
+    /// A single consignment transfers a single asset but can satisfy more than one pending invoice
+    /// of this wallet (e.g. a sender batched a send to several of them); every matched receive is
+    /// processed and the result is keyed by batch transfer idx, mirroring
+    /// [`refresh`](Wallet::refresh).
+    ///
+    /// Media of an unknown asset is taken from the files already present in the wallet media
+    /// directory, falling back to the out-of-band `media_file_paths` (matched by content hash). A
+    /// consignment defining media that is neither already present nor provided fails locally.
+    ///
+    /// On success, if a signed witness transaction is found it is broadcast and the transfer moves
+    /// to [`TransferStatus::WaitingConfirmations`], otherwise it moves to
+    /// [`TransferStatus::WaitingBroadcast`], leaving the ACK to be communicated to the sender
+    /// out-of-band. An invalid consignment fails the transfer locally, without any proxy NACK.
+    pub fn provide_out_of_band_consignment(
+        &mut self,
+        online: Online,
+        consignment_path: String,
+        media_file_paths: Vec<String>,
+    ) -> Result<RefreshResult, Error> {
+        info!(self.logger(), "Providing out-of-band consignment...");
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let res =
+            self.provide_out_of_band_consignment_impl(&txn, &consignment_path, media_file_paths)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Provide out-of-band consignment completed");
+        Ok(res)
+    }
+
+    /// Record the out-of-band ACK for an out-of-band recipient of an outgoing
+    /// [`TransferStatus::WaitingCounterparty`] batch transfer, identified by its `recipient_id`,
+    /// after the ACK has been received out-of-band.
+    ///
+    /// This is the out-of-band counterpart of the proxy ACK flow driven by [`refresh`](Wallet::refresh).
+    /// The batch is broadcast only once *every* recipient has ACKed (via this call for the
+    /// out-of-band ones and via `refresh` for the proxy ones), so a batch may freely mix out-of-band
+    /// and proxy recipients. Recipients using the JSON-RPC proxy are rejected here, keeping the
+    /// `refresh` flow authoritative for them.
+    ///
+    /// Returns the broadcast [`OperationResult`] (transfer moved to
+    /// [`TransferStatus::WaitingConfirmations`]) when this ACK completed the batch, or `None` when
+    /// the batch still has recipients waiting to ACK.
+    pub fn provide_out_of_band_ack(
+        &mut self,
+        online: Online,
+        recipient_id: String,
+    ) -> Result<Option<OperationResult>, Error> {
+        info!(
+            self.logger(),
+            "Providing out-of-band ACK for recipient {recipient_id}..."
+        );
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.provide_out_of_band_ack_impl(&txn, recipient_id)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Provide out-of-band ACK completed");
         Ok(res)
     }
 
@@ -1405,6 +1531,44 @@ impl Wallet {
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         info!(self.logger(), "Burn (end) completed");
+        Ok(res)
+    }
+
+    /// Link parent contract to child contract by consuming the parent's link-right single-use seal.
+    pub fn link_ifa(
+        &mut self,
+        online: Online,
+        parent_contract_id: String,
+        child_contract_id: String,
+        link_right_outpoint: Outpoint,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<OperationResult, Error> {
+        info!(
+            self.logger(),
+            "Linking parent IFA contract ID '{}' to child contract ID '{}' using the link-right outpoint {}...",
+            parent_contract_id,
+            child_contract_id,
+            link_right_outpoint,
+        );
+        self.check_xprv()?;
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let mut begin_op_data = self.link_ifa_begin_impl(
+            &txn,
+            parent_contract_id,
+            child_contract_id,
+            link_right_outpoint,
+            fee_rate,
+            min_confirmations,
+            true,
+        )?;
+        self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
+        let res = self.link_ifa_end_impl(&txn, &begin_op_data.psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Contract link completed");
         Ok(res)
     }
 }

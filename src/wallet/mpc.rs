@@ -154,21 +154,6 @@ impl WalletOffline for MpcWallet {
         std::iter::empty()
     }
 
-    fn get_uncolorable_btc_sum(&self) -> Result<u64, Error> {
-        #[cfg(any(feature = "electrum", feature = "esplora"))]
-        {
-            if self.online_data().is_none() {
-                return Ok(0);
-            }
-            let utxos = self.query_vanilla_utxos()?;
-            Ok(utxos.iter().map(|(_, txout, _)| txout.value.to_sat()).sum())
-        }
-        #[cfg(not(any(feature = "electrum", feature = "esplora")))]
-        {
-            Ok(0)
-        }
-    }
-
     fn get_btc_balance_impl(
         &mut self,
         txn: &DbTxn,
@@ -295,7 +280,12 @@ impl WalletOnline for MpcWallet {
                 value: BdkAmount::from_sat(*amount),
                 script_pubkey: script.clone(),
             });
-            required_output_value += amount;
+            required_output_value =
+                required_output_value.checked_add(*amount).ok_or_else(|| {
+                    Error::InvalidRecipientData {
+                        details: s!("total recipient amount exceeds u64::MAX"),
+                    }
+                })?;
         }
 
         // Calculate total from colored inputs
@@ -307,9 +297,14 @@ impl WalletOnline for MpcWallet {
         // We need vanilla inputs to cover fees + witness recipient amounts
         let num_outputs = outputs.len() + 1; // +1 for change
         let estimated_fee =
-            mpc_psbt::calculate_fee(selected_inputs.len() + 1, num_outputs, fee_rate);
-        let needed_from_vanilla =
-            (required_output_value + estimated_fee).saturating_sub(colored_total);
+            mpc_psbt::calculate_fee(selected_inputs.len() + 1, num_outputs, fee_rate)?;
+        let required_with_fee = required_output_value.checked_add(estimated_fee).ok_or(
+            Error::InsufficientBitcoins {
+                needed: u64::MAX,
+                available: colored_total,
+            },
+        )?;
+        let needed_from_vanilla = required_with_fee.saturating_sub(colored_total);
 
         if needed_from_vanilla > 0 {
             let available: Vec<(OutPoint, TxOut)> = vanilla_utxos
@@ -326,11 +321,17 @@ impl WalletOnline for MpcWallet {
             .iter()
             .map(|(_, txout)| txout.value.to_sat())
             .sum();
-        let fee = mpc_psbt::calculate_fee(selected_inputs.len(), num_outputs, fee_rate);
+        let fee = mpc_psbt::calculate_fee(selected_inputs.len(), num_outputs, fee_rate)?;
 
-        if total_input < required_output_value + fee {
+        let needed = required_output_value
+            .checked_add(fee)
+            .ok_or(Error::InsufficientBitcoins {
+                needed: u64::MAX,
+                available: total_input,
+            })?;
+        if total_input < needed {
             return Err(Error::InsufficientBitcoins {
-                needed: required_output_value + fee,
+                needed,
                 available: total_input,
             });
         }
@@ -389,11 +390,14 @@ impl WalletOnline for MpcWallet {
 
         let mut utxos_to_create = num.unwrap_or(UTXO_NUM);
         if up_to {
-            let allocatable = self.get_available_allocations(unspents, &[], None)?.len() as u8;
-            if allocatable >= utxos_to_create {
+            let allocatable = self.get_available_allocations(unspents, &[], None)?.len();
+            // compare in usize since the count of allocatable UTXOs can exceed u8::MAX
+            if allocatable >= utxos_to_create as usize {
                 return Err(Error::AllocationsAlreadyAvailable);
             }
-            utxos_to_create -= allocatable;
+            // allocatable < utxos_to_create <= u8::MAX, so the conversion cannot fail
+            utxos_to_create -=
+                u8::try_from(allocatable).expect("allocatable count cannot exceed u8::MAX");
         }
 
         let utxo_size = size.unwrap_or(UTXO_SIZE);
@@ -424,13 +428,13 @@ impl WalletOnline for MpcWallet {
                             .iter()
                             .map(|(_, txout)| txout.value.to_sat())
                             .sum();
+                        let fee = mpc_psbt::calculate_fee(
+                            available.len(),
+                            num_outputs,
+                            fee_rate_checked,
+                        )?;
                         return Err(Error::InsufficientBitcoins {
-                            needed: target
-                                + mpc_psbt::calculate_fee(
-                                    available.len(),
-                                    num_outputs,
-                                    fee_rate_checked,
-                                ),
+                            needed: target.saturating_add(fee),
                             available: total,
                         });
                     }
@@ -452,7 +456,7 @@ impl WalletOnline for MpcWallet {
         let (selected, total) =
             mpc_psbt::select_coins(&available, target, fee_rate_checked, num_outputs)?;
 
-        let fee = mpc_psbt::calculate_fee(selected.len(), num_outputs, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(selected.len(), num_outputs, fee_rate_checked)?;
         let change = total - target - fee;
 
         let mut outputs = colored_outputs;
@@ -507,7 +511,7 @@ impl WalletOnline for MpcWallet {
 
         let (selected, total) = mpc_psbt::select_coins(&available, amount, fee_rate_checked, 2)?;
 
-        let fee = mpc_psbt::calculate_fee(selected.len(), 2, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(selected.len(), 2, fee_rate_checked)?;
         let change = total - amount - fee;
 
         let mut outputs = vec![TxOut {
@@ -569,11 +573,11 @@ impl WalletOnline for MpcWallet {
             .iter()
             .map(|(_, txout)| txout.value.to_sat())
             .sum();
-        let fee = mpc_psbt::calculate_fee(all_inputs.len(), 1, fee_rate_checked);
+        let fee = mpc_psbt::calculate_fee(all_inputs.len(), 1, fee_rate_checked)?;
 
         if total <= fee {
             return Err(Error::InsufficientBitcoins {
-                needed: fee + 1,
+                needed: fee.saturating_add(1),
                 available: total,
             });
         }
@@ -765,7 +769,7 @@ impl MpcWallet {
         &mut self,
         asset_id: Option<String>,
         assignment: Assignment,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         transport_endpoints: Vec<String>,
         min_confirmations: u8,
     ) -> Result<ReceiveData, Error> {
@@ -776,7 +780,7 @@ impl MpcWallet {
             &txn,
             asset_id,
             assignment,
-            expiration_timestamp.map(|t| t as i64),
+            expiration_timestamp as i64,
             transport_endpoints,
             RecipientType::Blind,
         )?;
@@ -791,7 +795,7 @@ impl MpcWallet {
         Ok(ReceiveData {
             invoice: receive_data_internal.invoice_string,
             recipient_id: receive_data_internal.recipient_id,
-            expiration_timestamp: receive_data_internal.expiration_timestamp.map(|t| t as u64),
+            expiration_timestamp: receive_data_internal.expiration_timestamp as u64,
             batch_transfer_idx,
         })
     }
@@ -950,7 +954,7 @@ impl MpcWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
     ) -> Result<OperationResult, Error> {
         info!(self.logger(), "Sending...");
         self.check_online(online)?;
@@ -961,7 +965,7 @@ impl MpcWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             true,
             None,
         )?;
@@ -982,7 +986,7 @@ impl MpcWallet {
         donation: bool,
         fee_rate: u64,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
         dry_run: bool,
     ) -> Result<SendBeginResult, Error> {
         info!(self.logger(), "Sending (begin)...");
@@ -994,7 +998,7 @@ impl MpcWallet {
             donation,
             fee_rate,
             min_confirmations,
-            expiration_timestamp.map(|t| t as i64),
+            Some(expiration_timestamp as i64),
             dry_run,
             None,
         )?;
