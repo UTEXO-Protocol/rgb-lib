@@ -941,6 +941,130 @@ pub trait WalletOffline: WalletBackup {
         })
     }
 
+    fn create_bfa_contract(
+        &self,
+        txn: &DbTxn,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<IssueData, Error> {
+        let asset_schema = &AssetSchema::Bfa;
+
+        self.check_schema_support(asset_schema)?;
+
+        // Genesis allocates no supply: every unit comes from a later bridge
+        // transition, and each of those spends exactly one bridge right. The
+        // count is therefore the number of parallel mint lanes, not a cap.
+        if bridge_rights == 0 {
+            return Err(Error::NoBridgeRights);
+        }
+
+        let mut unspents: Vec<LocalUnspent> = txn.get_rgb_allocations(
+            txn.get_unspent_txos(txn.iter_txos()?)?,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        unspents.retain(|u| {
+            !(u.rgb_allocations
+                .iter()
+                .any(|a| !a.incoming && a.status.waiting_counterparty()))
+        });
+
+        let created_at = now().unix_timestamp();
+        let text = RicardianContract::default();
+        #[cfg(test)]
+        let terms = mock_asset_terms(self, text, None);
+        #[cfg(not(test))]
+        let terms = self.new_asset_terms(text, None);
+        #[cfg(test)]
+        let details = mock_contract_details(self);
+        #[cfg(not(test))]
+        let details = None;
+        let spec = AssetSpec {
+            ticker: self.check_ticker(ticker.clone())?,
+            name: self.check_name(name.clone())?,
+            details,
+            precision: self.check_precision(precision)?,
+        };
+
+        // The bridge contract address is baked into genesis and cannot be
+        // changed afterwards: redeploying the bridge means reissuing the asset.
+        let mut builder = ContractBuilder::with(
+            Identity::default(),
+            BridgedFungibleAsset::schema(),
+            BridgedFungibleAsset::types(),
+            BridgedFungibleAsset::scripts(),
+            self.chain_net(),
+        )
+        .add_global_state("spec", spec.clone())
+        .expect("invalid spec")
+        .add_global_state("terms", terms)
+        .expect("invalid terms")
+        .add_global_state(
+            RGB_GLOBAL_BRIDGE_LOCATION,
+            BridgeLocation::Ethereum(Confined::from_checked(contract_address)),
+        )
+        .expect("invalid bridgeLocation");
+        if let Some(reject_list_url) = &reject_list_url {
+            builder = builder
+                .add_global_state(
+                    RGB_GLOBAL_REJECT_LIST_URL,
+                    self.check_reject_list_url(reject_list_url.clone())?,
+                )
+                .expect("invalid rejectListUrl");
+        }
+
+        let mut issue_utxos: HashMap<i32, Vec<Assignment>> = HashMap::new();
+        let mut exclude_outpoints: Vec<Outpoint> = vec![];
+        for _ in 0..bridge_rights {
+            let utxo = self.get_utxo(txn, &exclude_outpoints, Some(&unspents), false, Some(0))?;
+            exclude_outpoints.push(utxo.outpoint());
+            issue_utxos
+                .entry(utxo.idx)
+                .or_default()
+                .push(Assignment::BridgeRight);
+
+            builder = builder
+                .add_rights(RGB_STATE_BRIDGE_RIGHT, self.get_builder_seal(utxo))
+                .expect("invalid global state data");
+        }
+
+        debug!(self.logger(), "Issuing: {issue_utxos:?}");
+
+        let (asset_id, _contract_path, valid_contract) = self.issue_contract(builder)?;
+
+        let asset_data = LocalAssetData {
+            asset_id: asset_id.clone(),
+            name,
+            asset_schema: *asset_schema,
+            precision,
+            ticker: Some(ticker),
+            details: spec.details().map(|d| d.to_string()),
+            media: None,
+            initial_supply: 0,
+            max_supply: None,
+            known_circulating_supply: None,
+            reject_list_url,
+            token: None,
+            timestamp: valid_contract.genesis.timestamp,
+            added_at: created_at,
+        };
+
+        Ok(IssueData {
+            asset_data,
+            valid_contract,
+            #[cfg(any(feature = "electrum", feature = "esplora"))]
+            contract_path: _contract_path,
+            issue_utxos,
+            link_right_outpoint: None,
+        })
+    }
+
     // convert from RgbTransport format to TransportEndpoint format
     fn convert_transport_endpoints(
         &self,
@@ -1760,6 +1884,35 @@ pub trait WalletOffline: WalletBackup {
                     added_at,
                 }
             }
+            AssetSchema::Bfa => {
+                let contract = runtime.contract_wrapper::<BridgedFungibleAsset>(contract_id)?;
+                let spec = contract.spec();
+                let ticker = spec.ticker().to_string();
+                let name = spec.name().to_string();
+                let details = spec.details().map(|d| d.to_string());
+                let precision = spec.precision.into();
+                let media = contract
+                    .contract_terms()
+                    .media
+                    .map(|a| Media::from_attachment(&a, media_dir));
+                let reject_list_url = contract.reject_list_url().map(|u| u.to_string());
+                LocalAssetData {
+                    asset_id: contract_id.to_string(),
+                    name,
+                    asset_schema,
+                    precision,
+                    ticker: Some(ticker),
+                    details,
+                    media,
+                    initial_supply: 0,
+                    max_supply: None,
+                    known_circulating_supply: None,
+                    reject_list_url,
+                    token: None,
+                    timestamp,
+                    added_at,
+                }
+            }
         })
     }
 
@@ -1828,6 +1981,7 @@ pub trait WalletOffline: WalletBackup {
         let mut uda = None;
         let mut cfa = None;
         let mut ifa = None;
+        let mut bfa = None;
         for schema in filter_asset_schemas {
             match schema {
                 AssetSchema::Nia => {
@@ -1927,10 +2081,37 @@ pub trait WalletOffline: WalletBackup {
                             .collect::<Result<Vec<AssetIFA>, Error>>()?,
                     );
                 }
+                AssetSchema::Bfa => {
+                    bfa = Some(
+                        assets
+                            .iter()
+                            .filter(|a| a.schema == schema)
+                            .map(|a| {
+                                AssetBFA::get_asset_details(
+                                    txn,
+                                    self,
+                                    a,
+                                    transfers.clone(),
+                                    asset_transfers.clone(),
+                                    batch_transfers.clone(),
+                                    colorings.clone(),
+                                    txos.clone(),
+                                    medias.clone(),
+                                )
+                            })
+                            .collect::<Result<Vec<AssetBFA>, Error>>()?,
+                    );
+                }
             }
         }
 
-        Ok(Assets { nia, uda, cfa, ifa })
+        Ok(Assets {
+            nia,
+            uda,
+            cfa,
+            ifa,
+            bfa,
+        })
     }
 
     fn sync_if_requested(
@@ -2618,6 +2799,9 @@ pub trait WalletOffline: WalletBackup {
                     TS_TRANSFER => TypeOfTransition::Transfer,
                     TS_INFLATION => TypeOfTransition::Inflate,
                     TS_BURN => TypeOfTransition::Burn,
+                    // A cosigner inspects the signed PSBT before acking, so without
+                    // this arm every BFA mint is refused after the enclave signed it.
+                    TS_BRIDGE => TypeOfTransition::Bridge,
                     TS_LINK => TypeOfTransition::Link,
                     _ => {
                         return Err(Error::RgbInspection {
@@ -2781,6 +2965,23 @@ pub trait WalletOffline: WalletBackup {
         asset_transfer_dir.as_ref().join(CONSIGNMENT_FILE)
     }
 
+    /// Read the payout target committed inside a BFA burn consignment.
+    ///
+    /// The 32 bytes are opaque to consensus - it neither interprets nor
+    /// validates them - but they sit inside the burn operation, so they are
+    /// covered by its OpId and signed by whoever spent the burned units. That
+    /// is what lets a bridge release funds to them without trusting whoever
+    /// submitted the consignment.
+    fn burn_recipient_from_consignment_impl(
+        &self,
+        consignment_path: String,
+    ) -> Result<Vec<u8>, Error> {
+        let consignment =
+            RgbTransfer::load_file(&consignment_path).map_err(|_| Error::InvalidConsignment)?;
+
+        terminal_burn_recipient(&consignment)
+    }
+
     fn gen_consignments(
         &self,
         fascia: &Fascia,
@@ -2789,10 +2990,28 @@ pub trait WalletOffline: WalletBackup {
     ) -> Result<(), Error> {
         let runtime = self.rgb_runtime()?;
         for (asset_id, transfer_info) in transfer_info_map {
+            // A burn pays nobody, so no seal in the bundle points at a
+            // requested output and the builder would filter every transition
+            // away, leaving an empty known_transitions that panics on confine.
+            // Name the bundle's own transitions instead - for a burn they are
+            // exactly what the consignment has to carry.
+            let opids: BTreeSet<OpId> = if transfer_info.beneficiaries_witness.is_empty()
+                && transfer_info.beneficiaries_blinded.is_empty()
+            {
+                fascia
+                    .bundles()
+                    .get(&transfer_info.asset_info.contract_id)
+                    .map(|bundle| bundle.known_transitions_opids())
+                    .unwrap_or_default()
+            } else {
+                BTreeSet::new()
+            };
+
             let consignment = runtime.transfer_from_fascia(
                 transfer_info.asset_info.contract_id,
                 transfer_info.beneficiaries_witness.clone(),
                 transfer_info.beneficiaries_blinded.clone(),
+                opids,
                 fascia,
             )?;
             let asset_transfer_dir = self.get_asset_transfer_dir(transfer_dir, asset_id);
@@ -3048,4 +3267,45 @@ pub trait RgbWalletOpsOffline: WalletOffline + WalletBackup {
         info!(self.logger(), "RGB transfer inspection completed");
         Ok(inspection)
     }
+
+    /// Return the 32-byte payout target committed inside a BFA burn.
+    ///
+    /// A redemption names its destination in the burn transition itself, so a
+    /// bridge reading it here does not have to trust whoever submitted the
+    /// consignment. Errors if the consignment carries no burn transition or the
+    /// burn carries no recipient - the latter means an IFA burn, which declares
+    /// burnedInflation instead.
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, Error> {
+        info!(self.logger(), "Reading burn recipient...");
+        let recipient = self.burn_recipient_from_consignment_impl(consignment_path)?;
+        info!(self.logger(), "Read burn recipient completed");
+        Ok(recipient)
+    }
+}
+
+/// The payout target committed inside the burn a consignment is redeeming.
+///
+/// Newest first. A consignment carries the wallet's whole history, so an older
+/// burn's transition comes earlier and taking the first match would pay out to
+/// whoever *that* burn named - a real bug, caught on the stand when a fresh
+/// burn was claimed for a previous test's recipient. The burn being redeemed is
+/// the terminal one, which is also what the enclave binds the release to
+/// (`read_last_transition_burn_recipient`); reading from either end has to give
+/// the same answer.
+pub(crate) fn terminal_burn_recipient(consignment: &RgbTransfer) -> Result<Vec<u8>, Error> {
+    for anchored_bundle in consignment.bundles.iter().rev() {
+        for known in anchored_bundle.bundle.known_transitions.iter().rev() {
+            if known.transition.transition_type != TS_BURN {
+                continue;
+            }
+            for (meta_type, meta_value) in &known.transition.metadata {
+                if *meta_type != MS_BURN_RECIPIENT {
+                    continue;
+                }
+                return Ok(meta_value.as_unconfined().as_slice().to_vec());
+            }
+        }
+    }
+
+    Err(Error::InvalidConsignment)
 }

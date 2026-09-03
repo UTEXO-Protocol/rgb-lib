@@ -4,6 +4,8 @@ namespace rgb_lib {
   [Throws=RgbLibError]
   Keys restore_keys(BitcoinNetwork bitcoin_network, string mnemonic, WitnessVersion witness_version);
 
+  string asset_schema_id(AssetSchema asset_schema);
+
   [Throws=RgbLibError]
   ValidateConsignmentResult validate_consignment(
     string file_path,
@@ -65,6 +67,7 @@ interface RgbLibError {
   InvalidAttachments(string details);
   InvalidBitcoinKeys();
   InvalidBitcoinNetwork(string network);
+  InvalidBurnRecipient(u64 len);
   InvalidColoringInfo(string details);
   InvalidConsignment();
   InvalidContractLink(string details);
@@ -107,6 +110,7 @@ interface RgbLibError {
   MultisigOperationNotFound(i32 operation_idx);
   MultisigTransferStatusMismatch();
   MultisigUnexpectedData(string details);
+  MissingBurnRecipient();
   MultisigUserNotCosigner();
   Network(string details);
   NoConsignment();
@@ -137,6 +141,9 @@ interface RgbLibError {
   UnknownTransfer(string txid);
   UnsupportedBackupVersion(string version);
   UnsupportedBurn(AssetSchema asset_schema);
+  InvalidEthRpcUrl(string details);
+  NoBridgeRights();
+  UnsupportedBridge(AssetSchema asset_schema);
   UnsupportedInflation(AssetSchema asset_schema);
   UnsupportedLayer1(string layer_1);
   UnsupportedSchema(AssetSchema asset_schema);
@@ -158,6 +165,7 @@ enum AssetSchema {
   "Uda",
   "Cfa",
   "Ifa",
+  "Bfa",
 };
 
 [Remote]
@@ -241,11 +249,27 @@ dictionary AssetIFA {
 };
 
 [Remote]
+dictionary AssetBFA {
+  string asset_id;
+  string ticker;
+  string name;
+  string? details;
+  u8 precision;
+  u64 initial_supply;
+  i64 timestamp;
+  i64 added_at;
+  Balance balance;
+  Media? media;
+  string? reject_list_url;
+};
+
+[Remote]
 dictionary Assets {
   sequence<AssetNIA>? nia;
   sequence<AssetUDA>? uda;
   sequence<AssetCFA>? cfa;
   sequence<AssetIFA>? ifa;
+  sequence<AssetBFA>? bfa;
 };
 
 [Remote]
@@ -373,6 +397,7 @@ interface Assignment {
   Fungible(u64 amount);
   NonFungible();
   InflationRight(u64 amount);
+  BridgeRight();
   LinkRight();
   Any();
 };
@@ -382,6 +407,7 @@ dictionary AssignmentsCollection {
   u64 fungible;
   boolean non_fungible;
   u64 inflation;
+  u8 bridge;
 };
 
 dictionary InvoiceData {
@@ -466,6 +492,7 @@ dictionary OnlineOptions {
   string indexer_url;
   boolean skip_consistency_check;
   u32 vanilla_sync_lookback;
+  string? eth_rpc_url;
 };
 
 [Remote]
@@ -687,6 +714,21 @@ dictionary BurnBeginResult {
 };
 
 [Remote]
+dictionary BridgeDetails {
+  string fascia_path;
+  u8 min_confirmations;
+  u64 entropy;
+  string opid;
+};
+
+[Remote]
+dictionary BridgeBeginResult {
+  string psbt;
+  i32? batch_transfer_idx;
+  BridgeDetails details;
+};
+
+[Remote]
 dictionary InflateDetails {
   string fascia_path;
   u8 min_confirmations;
@@ -733,6 +775,10 @@ interface Operation {
   InflationPending(InflateDetails details, MultisigVotingStatus status);
   InflationCompleted(string txid, InflateDetails details, MultisigVotingStatus status);
   InflationDiscarded(InflateDetails details, MultisigVotingStatus status);
+  BridgeToReview(string psbt, BridgeDetails details, MultisigVotingStatus status);
+  BridgePending(BridgeDetails details, MultisigVotingStatus status);
+  BridgeCompleted(string txid, BridgeDetails details, MultisigVotingStatus status);
+  BridgeDiscarded(BridgeDetails details, MultisigVotingStatus status);
   BurnToReview(string psbt, BurnDetails details, MultisigVotingStatus status);
   BurnPending(BurnDetails details, MultisigVotingStatus status);
   BurnCompleted(string txid, BurnDetails details, MultisigVotingStatus status);
@@ -808,6 +854,7 @@ enum TypeOfTransition {
   "Inflate",
   "Transfer",
   "Burn",
+  "Bridge",
   "Link",
 };
 
@@ -835,6 +882,13 @@ dictionary RgbInspection {
 dictionary InitOperationResult {
   string psbt;
   i32 operation_idx;
+};
+
+[Remote]
+dictionary BridgeInitResult {
+  string psbt;
+  i32 operation_idx;
+  string opid;
 };
 
 [Remote]
@@ -914,6 +968,9 @@ interface Wallet {
   [Throws=RgbLibError]
   RgbInspection inspect_rgb_transfer(
     string psbt, string fascia_path, u64 entropy);
+
+  [Throws=RgbLibError]
+  sequence<u8> get_burn_recipient(string consignment_path);
 
   [Throws=RgbLibError]
   void backup(string backup_path, string password);
@@ -996,13 +1053,13 @@ interface Wallet {
 
   [Throws=RgbLibError]
   OperationResult burn(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations);
 
   [Throws=RgbLibError]
   BurnBeginResult burn_begin(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations, boolean dry_run);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations, boolean dry_run);
 
   [Throws=RgbLibError]
   OperationResult burn_end(Online online, string signed_psbt);
@@ -1019,6 +1076,14 @@ interface Wallet {
 
   [Throws=RgbLibError]
   OperationResult inflate_end(Online online, string signed_psbt);
+
+  [Throws=RgbLibError]
+  BridgeBeginResult bridge_begin(
+    Online online, string asset_id, Recipient recipient, u64 fee_rate,
+    u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  OperationResult bridge_end(Online online, string signed_psbt);
 
   [Throws=RgbLibError]
   AssetNIA issue_asset_nia(
@@ -1038,6 +1103,11 @@ interface Wallet {
   AssetIFA issue_asset_ifa(
     string ticker, string name, u8 precision, sequence<u64> amounts,
     sequence<u64> inflation_amounts, string? reject_list_url);
+
+  [Throws=RgbLibError]
+  AssetBFA issue_asset_bfa(
+    string ticker, string name, u8 precision, u8 bridge_rights,
+    string contract_address, string? reject_list_url);
 
   [Throws=RgbLibError]
   Assets list_assets(sequence<AssetSchema> filter_asset_schemas);
@@ -1137,6 +1207,9 @@ interface MultisigWallet {
     string psbt, string fascia_path, u64 entropy);
 
   [Throws=RgbLibError]
+  sequence<u8> get_burn_recipient(string consignment_path);
+
+  [Throws=RgbLibError]
   void backup(string backup_path, string password);
 
   [Throws=RgbLibError]
@@ -1189,13 +1262,18 @@ interface MultisigWallet {
 
   [Throws=RgbLibError]
   InitOperationResult burn_init(
-    Online online, string asset_id, u64 amount, u64 fee_rate,
-    u8 min_confirmations);
+    Online online, string asset_id, u64 amount, sequence<u8>? burn_recipient,
+    u64 fee_rate, u8 min_confirmations);
 
   [Throws=RgbLibError]
   InitOperationResult inflate_init(
     Online online, string asset_id, sequence<u64> inflation_amounts,
     u64 fee_rate, u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  BridgeInitResult bridge_init(
+    Online online, string asset_id, Recipient recipient, u64 fee_rate,
+    u8 min_confirmations);
 
   [Throws=RgbLibError]
   AssetNIA issue_asset_nia(
@@ -1215,6 +1293,11 @@ interface MultisigWallet {
   AssetIFA issue_asset_ifa(
     Online online, string ticker, string name, u8 precision, sequence<u64> amounts,
     sequence<u64> inflation_amounts, string? reject_list_url);
+
+  [Throws=RgbLibError]
+  AssetBFA issue_asset_bfa(
+    Online online, string ticker, string name, u8 precision, u8 bridge_rights,
+    string contract_address, string? reject_list_url);
 
   [Throws=RgbLibError]
   Assets list_assets(sequence<AssetSchema> filter_asset_schemas);

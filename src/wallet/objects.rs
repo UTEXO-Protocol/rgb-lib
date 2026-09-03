@@ -72,6 +72,7 @@ pub struct OnlineData {
     pub(crate) indexer_url: String,
     pub(crate) indexer: Indexer,
     pub(crate) resolver: AnyResolver,
+    pub(crate) eth_rpc_url: Option<String>,
     pub(crate) hub_client: Option<MultisigHubClient>,
     pub(crate) user_role: Option<UserRole>,
     pub(crate) vanilla_sync_lookback: u32,
@@ -96,6 +97,9 @@ pub struct OnlineOptions {
     /// Number of addresses before the last used (or last revealed if none) address to sync when
     /// doing an automatic FastSync for the vanilla keychain
     pub vanilla_sync_lookback: u32,
+    /// Ethereum RPC endpoint, required by wallets supporting the BFA schema: BFA consignment
+    /// validation reads the bridge contract's FundsIn logs from it
+    pub eth_rpc_url: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────────
@@ -732,6 +736,82 @@ impl AssetIFA {
     }
 }
 
+/// A Bridged Fungible Asset.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct AssetBFA {
+    /// ID of the asset
+    pub asset_id: String,
+    /// Ticker of the asset
+    pub ticker: String,
+    /// Name of the asset
+    pub name: String,
+    /// Details of the asset
+    pub details: Option<String>,
+    /// Precision, also known as divisibility, of the asset
+    pub precision: u8,
+    /// Initial issued supply
+    pub initial_supply: u64,
+    /// Timestamp of asset genesis
+    pub timestamp: i64,
+    /// Timestamp of asset import
+    pub added_at: i64,
+    /// Current balance of the asset
+    pub balance: Balance,
+    /// Asset media attachment
+    pub media: Option<Media>,
+    /// Reject list URL
+    pub reject_list_url: Option<String>,
+}
+
+impl AssetBFA {
+    pub(crate) fn get_asset_details(
+        txn: &DbTxn,
+        wallet: &(impl WalletOffline + ?Sized),
+        asset: &DbAsset,
+        transfers: Option<Vec<DbTransfer>>,
+        asset_transfers: Option<Vec<DbAssetTransfer>>,
+        batch_transfers: Option<Vec<DbBatchTransfer>>,
+        colorings: Option<Vec<DbColoring>>,
+        txos: Option<Vec<DbTxo>>,
+        medias: Option<Vec<DbMedia>>,
+    ) -> Result<AssetBFA, Error> {
+        let media = {
+            let medias = if let Some(m) = medias {
+                m
+            } else {
+                txn.iter_media()?
+            };
+            medias
+                .iter()
+                .find(|m| Some(m.idx) == asset.media_idx)
+                .map(|m| Media::from_db_media(m, wallet.media_dir()))
+        };
+        let balance = txn.get_asset_balance(
+            asset.id.clone(),
+            transfers,
+            asset_transfers,
+            batch_transfers,
+            colorings,
+            txos,
+        )?;
+        let initial_supply = asset.initial_supply.parse::<u64>().unwrap();
+        Ok(AssetBFA {
+            asset_id: asset.id.clone(),
+            ticker: asset.ticker.clone().unwrap(),
+            name: asset.name.clone(),
+            details: asset.details.clone(),
+            precision: asset.precision,
+            initial_supply,
+            timestamp: asset.timestamp,
+            added_at: asset.added_at,
+            balance,
+            media,
+            reject_list_url: asset.reject_list_url.clone(),
+        })
+    }
+}
+
 /// List of RGB assets, grouped by asset schema.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
@@ -744,6 +824,8 @@ pub struct Assets {
     pub cfa: Option<Vec<AssetCFA>>,
     /// List of IFA assets
     pub ifa: Option<Vec<AssetIFA>>,
+    /// List of BFA assets
+    pub bfa: Option<Vec<AssetBFA>>,
 }
 
 pub(crate) trait IssuedAssetDetails: Sized {
@@ -823,6 +905,17 @@ impl IssuedAssetDetails for AssetIFA {
             })?
             .map(|contract_id| contract_id.to_string());
         Ok(asset_details)
+    }
+}
+
+impl IssuedAssetDetails for AssetBFA {
+    fn from_issuance(
+        txn: &DbTxn,
+        wallet: &(impl WalletOffline + ?Sized),
+        asset: &DbAsset,
+        _issue_data: &IssueData,
+    ) -> Result<Self, Error> {
+        Self::get_asset_details(txn, wallet, asset, None, None, None, None, None, None)
     }
 }
 
@@ -907,6 +1000,8 @@ pub struct AssignmentsCollection {
     pub non_fungible: bool,
     /// Inflation right assignments
     pub inflation: u64,
+    /// Bridge rights
+    pub bridge: u8,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -929,6 +1024,10 @@ impl AssignmentsCollection {
             .expect("total inflation amount cannot exceed u64::MAX");
     }
 
+    fn add_bridge(&mut self) {
+        self.bridge += 1;
+    }
+
     pub(crate) fn add_opout_state(&mut self, opout: &Opout, state: &AllocatedState) {
         match state {
             AllocatedState::Amount(amt) if opout.ty == OS_ASSET => {
@@ -939,6 +1038,12 @@ impl AssignmentsCollection {
             }
             AllocatedState::Data(_) => {
                 self.add_non_fungible();
+            }
+            // A bridge right is Void state at OS_BRIDGE (see enums.rs). Counting it
+            // is what lets change() see the input the caller asked for; without this
+            // change() underflows on checked_sub.
+            AllocatedState::Void if opout.ty == OS_BRIDGE => {
+                self.add_bridge();
             }
             _ => {}
         }
@@ -958,6 +1063,10 @@ impl AssignmentsCollection {
                 needed.inflation.saturating_sub(self.inflation) > 0
             }
             (AllocatedState::Data(_), _) => needed.non_fungible && !self.non_fungible,
+            // TS_BRIDGE takes OS_BRIDGE Occurrences::Once as an input, so the right
+            // has to be added as a real transition input rather than diverted to
+            // extra_state as an untouched leftover.
+            (AllocatedState::Void, OS_BRIDGE) => needed.bridge.saturating_sub(self.bridge) > 0,
             _ => false,
         }
     }
@@ -973,6 +1082,10 @@ impl AssignmentsCollection {
                 .inflation
                 .checked_sub(needed.inflation)
                 .expect("selected inputs must cover outputs"),
+            bridge: self
+                .bridge
+                .checked_sub(needed.bridge)
+                .expect("selected inputs must cover outputs"),
         }
     }
 
@@ -984,6 +1097,9 @@ impl AssignmentsCollection {
             return false;
         }
         if self.inflation < needed.inflation {
+            return false;
+        }
+        if self.bridge < needed.bridge {
             return false;
         }
         true
@@ -999,6 +1115,8 @@ pub enum TypeOfTransition {
     Transfer,
     /// Burn transition (burning existing tokens)
     Burn,
+    /// Bridge transition (minting against an EVM lock)
+    Bridge,
     /// Link transition (linking the contract to a child contract)
     Link,
 }
@@ -1010,6 +1128,7 @@ impl TypeOfTransition {
             Self::Inflate => "inflate",
             Self::Transfer => "transfer",
             Self::Burn => "burn",
+            Self::Bridge => "bridge",
             Self::Link => "link",
         }
     }
@@ -1190,6 +1309,22 @@ impl Invoice {
                         Assignment::InflationRight(v.value())
                     }
                     (None, Some(RGB_STATE_INFLATION_ALLOWANCE)) => Assignment::InflationRight(0),
+                    (Some(InvoiceState::Amount(_)), None) => Assignment::Any,
+                    (None, None) => Assignment::Any,
+                    (_, _) => {
+                        return Err(Error::InvalidInvoice {
+                            details: s!("invalid assignment"),
+                        });
+                    }
+                }
+            }
+            Some(AssetSchema::Bfa) => {
+                match (decoded.assignment_state, assignment_name.as_deref()) {
+                    (Some(InvoiceState::Amount(v)), Some(RGB_STATE_ASSET_OWNER)) => {
+                        Assignment::Fungible(v.value())
+                    }
+                    (None, Some(RGB_STATE_ASSET_OWNER)) => Assignment::Fungible(0),
+                    (None, Some(RGB_STATE_BRIDGE_RIGHT)) => Assignment::BridgeRight,
                     (Some(InvoiceState::Amount(_)), None) => Assignment::Any,
                     (None, None) => Assignment::Any,
                     (_, _) => {
@@ -1819,6 +1954,34 @@ pub struct InflateDetails {
     pub entropy: u64,
 }
 
+/// The result of a bridge (BFA mint) begin operation.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeBeginResult {
+    /// PSBT to inspect and sign
+    pub psbt: String,
+    /// Batch transfer idx
+    pub batch_transfer_idx: Option<i32>,
+    /// Operation details
+    pub details: BridgeDetails,
+}
+
+/// Details for bridge operations.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeDetails {
+    /// Path to fascia file for inspection
+    pub fascia_path: String,
+    /// Minimum confirmations for the operation
+    pub min_confirmations: u8,
+    /// Entropy used for the merkle tree construction operation
+    pub entropy: u64,
+    /// ID of the bridge transition, to be committed to the EVM lock
+    pub opid: String,
+}
+
 /// The result of a send begin operation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -2035,6 +2198,10 @@ pub struct InfoAssetTransfer {
     pub assignments_needed: AssignmentsCollection,
     pub assignments_spent: HashMap<OutPoint, Vec<Assignment>>,
     pub main_transition: TypeOfTransition,
+    /// Where a BFA burn's proceeds are owed, carried into the transition's
+    /// metadata. `None` for every other transition; the BFA schema makes it
+    /// mandatory on a burn, so a missing value is refused before the build.
+    pub burn_recipient: Option<[u8; 32]>,
     pub beneficiaries_blinded: Vec<SecretSeal>,
     pub beneficiaries_witness: Vec<ExplicitSeal<RgbTxid>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2062,6 +2229,8 @@ pub struct BeginOperationData {
     pub transfer_dir: PathBuf,
     pub info_batch_transfer: InfoBatchTransfer,
     pub batch_transfer_idx: Option<i32>,
+    /// Id of the bridge transition, set only for a BFA mint
+    pub opid: Option<String>,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -2093,6 +2262,81 @@ pub enum TryFailBatchTransferOutcome {
 pub struct FailTransfersOutcome {
     pub transfers_changed: bool,
     pub cannot_fail: bool,
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+mod assignments_collection_tests {
+    use rgbstd::{AssignmentType, OpId};
+
+    use super::*;
+
+    fn opout(ty: AssignmentType) -> Opout {
+        Opout {
+            op: OpId::from([0u8; 32]),
+            ty,
+            no: 0,
+        }
+    }
+
+    fn needing_one_right() -> AssignmentsCollection {
+        AssignmentsCollection {
+            bridge: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn counts_a_bridge_right_as_an_input() {
+        let mut collected = AssignmentsCollection::default();
+        collected.add_opout_state(&opout(OS_BRIDGE), &AllocatedState::Void);
+        assert_eq!(collected.bridge, 1);
+    }
+
+    #[test]
+    fn ignores_void_state_outside_the_bridge_slot() {
+        let mut collected = AssignmentsCollection::default();
+        collected.add_opout_state(&opout(OS_ASSET), &AllocatedState::Void);
+        assert_eq!(collected.bridge, 0);
+    }
+
+    #[test]
+    fn takes_a_bridge_right_as_a_transition_input_while_one_is_needed() {
+        let collected = AssignmentsCollection::default();
+        assert!(collected.opout_contributes(
+            &opout(OS_BRIDGE),
+            &AllocatedState::Void,
+            &needing_one_right(),
+        ));
+    }
+
+    #[test]
+    fn leaves_further_bridge_rights_alone_once_enough_are_held() {
+        let collected = AssignmentsCollection {
+            bridge: 1,
+            ..Default::default()
+        };
+        assert!(!collected.opout_contributes(
+            &opout(OS_BRIDGE),
+            &AllocatedState::Void,
+            &needing_one_right(),
+        ));
+    }
+
+    // The two halves have to agree: whatever opout_contributes takes as an input,
+    // add_opout_state must count - or change() underflows on checked_sub.
+    #[test]
+    fn what_is_taken_as_input_is_also_counted() {
+        let mut collected = AssignmentsCollection::default();
+        let needed = needing_one_right();
+        let (out, state) = (opout(OS_BRIDGE), AllocatedState::Void);
+
+        assert!(collected.opout_contributes(&out, &state, &needed));
+        collected.add_opout_state(&out, &state);
+
+        assert!(collected.enough(&needed));
+        assert_eq!(collected.change(&needed).bridge, 0);
+    }
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]

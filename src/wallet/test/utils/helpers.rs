@@ -328,12 +328,21 @@ pub(crate) fn get_proxy_client(proxy_url: Option<&str>) -> ProxyClient {
     ProxyClient::new(proxy_url.unwrap_or(PROXY_URL)).unwrap()
 }
 
+/// The tests' anvil runs with network_mode: host, so the wallet under test
+/// reaches it at the same address the in-container tooling uses.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const ANVIL_RPC_URL: &str = "http://localhost:8545";
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions {
     OnlineOptions {
         indexer_url: indexer_url.unwrap_or(DEFAULT_INDEXER_URL).to_string(),
         skip_consistency_check: true,
         vanilla_sync_lookback: INDEXER_SYNC_LOOKBACK as u32,
+        // Test wallets declare AssetSchema::VALUES, which now includes Bfa, and
+        // get_online_data refuses a Bfa-capable wallet without an endpoint - so
+        // with None here no test could bring any wallet online at all.
+        eth_rpc_url: Some(ANVIL_RPC_URL.to_string()),
     }
 }
 

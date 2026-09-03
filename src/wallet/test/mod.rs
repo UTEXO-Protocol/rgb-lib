@@ -420,6 +420,8 @@ pub fn mock_vout(vout: Option<u32>) -> Option<u32> {
 // test utilities
 #[macro_use]
 mod utils;
+#[cfg(feature = "electrum")]
+pub(crate) use utils::anvil::*;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) use utils::chain::*;
 pub(crate) use utils::{api::*, helpers::*};
@@ -431,6 +433,8 @@ mod address_reuse;
 #[cfg(feature = "electrum")]
 mod backup;
 mod blind_receive;
+#[cfg(feature = "electrum")]
+mod bridge;
 #[cfg(feature = "electrum")]
 mod burn;
 #[cfg(feature = "electrum")]
@@ -457,6 +461,8 @@ mod get_wallet_dir;
 mod go_online;
 #[cfg(feature = "electrum")]
 mod inflate;
+#[cfg(feature = "electrum")]
+mod issue_asset_bfa;
 #[cfg(feature = "electrum")]
 mod issue_asset_cfa;
 #[cfg(feature = "electrum")]

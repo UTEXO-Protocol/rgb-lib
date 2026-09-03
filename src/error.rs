@@ -281,6 +281,13 @@ pub enum Error {
     #[error("Trying to request fee estimation for an invalid block number")]
     InvalidEstimationBlocks,
 
+    /// The provided Ethereum RPC URL is invalid
+    #[error("Invalid Ethereum RPC URL: {details}")]
+    InvalidEthRpcUrl {
+        /// Error details
+        details: String,
+    },
+
     /// The provided expiration is invalid
     #[error("Invalid expiration")]
     InvalidExpiration,
@@ -644,11 +651,35 @@ pub enum Error {
         version: String,
     },
 
+    /// No bridge rights were requested for the BFA issuance
+    #[error("No bridge rights")]
+    NoBridgeRights,
+
+    /// The schema doesn't support bridge transitions
+    #[error("Bridge not supported")]
+    UnsupportedBridge {
+        /// Asset schema
+        asset_schema: AssetSchema,
+    },
+
     /// The schema doesn't support burn transitions
     #[error("Burn not supported")]
     UnsupportedBurn {
         /// Asset schema
         asset_schema: AssetSchema,
+    },
+
+    /// A BFA burn is a redemption, so the schema requires it to say where the
+    /// proceeds are owed. The field is not optional and cannot be defaulted.
+    #[error("Burn recipient is required for a BFA burn")]
+    MissingBurnRecipient,
+
+    /// The burn recipient is a fixed 32 bytes; the schema will not accept any
+    /// other width, so a mismatch is refused before the transition is built.
+    #[error("Burn recipient must be 32 bytes, got {len}")]
+    InvalidBurnRecipient {
+        /// Length actually supplied
+        len: u64,
     },
 
     /// The schema doesn't support inflate transitions

@@ -70,6 +70,40 @@ pub(crate) trait OfflineSigParty {
         transfer_data.status == expected_status
     }
 
+    /// Like check_test_transfer_status_recipient, for a wallet that paid its own invoice: the
+    /// recipient ID then names two transfers and only the incoming one is checked.
+    #[cfg(feature = "electrum")]
+    fn check_test_transfer_status_incoming(
+        &self,
+        recipient_id: &str,
+        expected_status: TransferStatus,
+    ) -> bool {
+        let db_data = self.db_data(false);
+        let transfers = self.db_transfers();
+        let mut incoming = transfers.iter().filter_map(|t| {
+            let (asset_transfer, batch_transfer) =
+                t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
+            (t.recipient_id.as_deref() == Some(recipient_id) && batch_transfer.incoming)
+                .then_some((t, asset_transfer, batch_transfer))
+        });
+        let (transfer, asset_transfer, batch_transfer) = incoming.next().unwrap();
+        assert!(incoming.next().is_none());
+        let transfer_data = self
+            .wlt()
+            .get_transfer_data(
+                transfer,
+                &asset_transfer,
+                &batch_transfer,
+                &db_data.txos,
+                &db_data.colorings,
+            )
+            .unwrap();
+        println!(
+            "incoming transfer with recipient_id {} is in status {:?}",
+            recipient_id, transfer_data.status
+        );
+        transfer_data.status == expected_status
+    }
     #[cfg(feature = "electrum")]
     fn check_test_transfer_status_sender(
         &self,
@@ -1015,6 +1049,20 @@ pub(crate) trait SinglesigWalletParty {
         reject_list_url: Option<String>,
     ) -> Result<AssetIFA, Error>;
 
+    fn issue_asset_bfa(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> AssetBFA;
+
+    fn issue_asset_bfa_result(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error>;
+
     fn issue_asset_nia(&mut self, amounts: Option<&[u64]>) -> AssetNIA;
 
     fn issue_asset_nia_result(&mut self, amounts: Option<&[u64]>) -> Result<AssetNIA, Error>;
@@ -1215,6 +1263,32 @@ impl<T: OfflineSigParty<W = Wallet>> SinglesigWalletParty for T {
         )
     }
 
+    fn issue_asset_bfa(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> AssetBFA {
+        self.issue_asset_bfa_result(bridge_rights, contract_address, reject_list_url)
+            .unwrap()
+    }
+
+    fn issue_asset_bfa_result(
+        &mut self,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error> {
+        self.wlt_mut().issue_asset_bfa(
+            TICKER.to_string(),
+            NAME.to_string(),
+            PRECISION,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
+        )
+    }
+
     fn issue_asset_nia(&mut self, amounts: Option<&[u64]>) -> AssetNIA {
         self.issue_asset_nia_result(amounts).unwrap()
     }
@@ -1282,12 +1356,12 @@ impl SinglesigParty {
 
     #[cfg(feature = "electrum")]
     pub(crate) fn burn(&mut self, asset_id: &str, amount: u64) -> OperationResult {
-        self.burn_result(asset_id, amount).unwrap()
+        self.burn_result(asset_id, amount, None).unwrap()
     }
 
     #[cfg(feature = "electrum")]
     pub(crate) fn burn_begin(&mut self, asset_id: &str, amount: u64) -> String {
-        self.burn_begin_result(asset_id, amount).unwrap().psbt
+        self.burn_begin_result(asset_id, amount, None).unwrap().psbt
     }
 
     #[cfg(feature = "electrum")]
@@ -1295,11 +1369,13 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
     ) -> Result<BurnBeginResult, Error> {
         self.wallet.burn_begin(
             self.online,
             asset_id.to_string(),
             amount,
+            burn_recipient,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             true,
@@ -1311,11 +1387,13 @@ impl SinglesigParty {
         &mut self,
         asset_id: &str,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
     ) -> Result<OperationResult, Error> {
         self.wallet.burn(
             self.online,
             asset_id.to_string(),
             amount,
+            burn_recipient,
             FEE_RATE,
             MIN_CONFIRMATIONS,
         )
@@ -1377,6 +1455,36 @@ impl SinglesigParty {
             .unwrap()
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_begin(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+    ) -> BridgeBeginResult {
+        self.bridge_begin_result(asset_id, recipient).unwrap()
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_begin_result(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+    ) -> Result<BridgeBeginResult, Error> {
+        self.wallet.bridge_begin(
+            self.online,
+            asset_id.to_string(),
+            recipient,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+        )
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn bridge_end(&mut self, signed_psbt: String) -> OperationResult {
+        self.wallet.bridge_end(self.online, signed_psbt).unwrap()
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
     #[cfg(feature = "electrum")]
     pub(crate) fn inflate_begin(&mut self, asset_id: &str, inflation_amounts: &[u64]) -> String {
         self.inflate_begin_result(asset_id, inflation_amounts)

@@ -531,6 +531,45 @@ impl Wallet {
         Ok(res)
     }
 
+    /// Issue a new RGB BFA asset with the provided `ticker`, `name`, `precision`,
+    /// `bridge_rights` and `contract_address`, then return it.
+    ///
+    /// Genesis allocates no supply: every unit is minted later by a bridge transition, each of
+    /// which spends one bridge right and rolls a fresh one forward. `bridge_rights` is therefore
+    /// the number of mints that can be in flight at once, not a supply cap, and at least 1 is
+    /// required.
+    ///
+    /// `contract_address` is the EVM bridge contract whose `FundsIn` events authorise minting. It
+    /// is committed to genesis and cannot be changed: redeploying the bridge means reissuing the
+    /// asset.
+    pub fn issue_asset_bfa(
+        &self,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, Error> {
+        info!(self.logger(), "Issuing BFA...");
+        let txn = self.database().begin_transaction()?;
+        let issue_data = self.create_bfa_contract(
+            &txn,
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
+        )?;
+        let res = self.finalize_offline_issuance(&txn, &issue_data)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Issue asset BFA completed");
+        Ok(res)
+    }
+
     /// Blind an UTXO to receive RGB assets and return the resulting [`ReceiveData`].
     ///
     /// An optional asset ID can be specified, which will be embedded in the invoice, resulting in
@@ -1310,6 +1349,72 @@ impl Wallet {
         Ok(res)
     }
 
+    /// Prepare a bridge (BFA mint) transition toward `recipient` and return the PSBT plus the
+    /// resulting OpId.
+    ///
+    /// The OpId must be committed to the matching EVM lock: RGB consensus validates the mint by
+    /// matching it against the bridge contract's `FundsIn` log. Broadcast the signed PSBT with
+    /// [`bridge_end`](Wallet::bridge_end) only once that lock is confirmed - the mint is invalid
+    /// without it.
+    pub fn bridge_begin(
+        &mut self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeBeginResult, Error> {
+        info!(self.logger(), "Bridging (begin)...");
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let begin_operation_data =
+            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Bridging (begin) completed");
+        Ok(BridgeBeginResult {
+            psbt: begin_operation_data.psbt.to_string(),
+            batch_transfer_idx: begin_operation_data.batch_transfer_idx,
+            details: BridgeDetails {
+                fascia_path: begin_operation_data
+                    .transfer_dir
+                    .join(FASCIA_FILE)
+                    .to_string_lossy()
+                    .to_string(),
+                min_confirmations,
+                entropy: begin_operation_data.info_batch_transfer.entropy,
+                opid: begin_operation_data
+                    .opid
+                    .expect("a bridge transition always yields an opid"),
+            },
+        })
+    }
+
+    /// Complete the bridge operation by broadcasting the provided PSBT and saving the transfer to
+    /// DB.
+    ///
+    /// The provided PSBT, prepared with [`bridge_begin`](Wallet::bridge_begin), needs to have
+    /// already been signed.
+    ///
+    /// This doesn't require the wallet to have private keys.
+    pub fn bridge_end(
+        &mut self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, Error> {
+        info!(self.logger(), "Bridging (end)...");
+        self.check_online(online)?;
+        let psbt = Psbt::from_str(&signed_psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.bridge_end_impl(&txn, &psbt)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Bridging (end) completed");
+        Ok(res)
+    }
+
     /// Burn RGB assets.
     ///
     /// This calls [`burn_begin`](Wallet::burn_begin), signs the resulting PSBT and finally
@@ -1321,6 +1426,7 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<OperationResult, Error> {
@@ -1328,8 +1434,15 @@ impl Wallet {
         self.check_xprv()?;
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let mut begin_op_data =
-            self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, true)?;
+        let mut begin_op_data = self.burn_begin_impl(
+            &txn,
+            asset_id,
+            amount,
+            burn_recipient,
+            fee_rate,
+            min_confirmations,
+            true,
+        )?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
         let res = self.burn_end_impl(&txn, &begin_op_data.psbt)?;
         self.update_backup_info(&txn, false)?;
@@ -1360,6 +1473,7 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
         dry_run: bool,
@@ -1367,8 +1481,15 @@ impl Wallet {
         info!(self.logger(), "Burning (begin) amount: {}...", amount);
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let begin_operation_data =
-            self.burn_begin_impl(&txn, asset_id, amount, fee_rate, min_confirmations, dry_run)?;
+        let begin_operation_data = self.burn_begin_impl(
+            &txn,
+            asset_id,
+            amount,
+            burn_recipient,
+            fee_rate,
+            min_confirmations,
+            dry_run,
+        )?;
         if !dry_run {
             self.update_backup_info(&txn, false)?;
         }

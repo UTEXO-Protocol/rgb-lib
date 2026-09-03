@@ -433,15 +433,20 @@ fn fail() {
         let wallet = get_test_wallet(true, None);
         party!(wallet, Online { id: 0 })
     };
-    let result =
-        offline_party
-            .wallet
-            .burn(Online { id: 0 }, s!(""), 0, FEE_RATE, MIN_CONFIRMATIONS);
+    let result = offline_party.wallet.burn(
+        Online { id: 0 },
+        s!(""),
+        0,
+        None,
+        FEE_RATE,
+        MIN_CONFIRMATIONS,
+    );
     assert_matches!(result, Err(Error::Offline));
     let result = offline_party.wallet.burn_begin(
         Online { id: 0 },
         s!(""),
         0,
+        None,
         FEE_RATE,
         MIN_CONFIRMATIONS,
         false,
@@ -463,7 +468,7 @@ fn fail() {
     let mut wallet_wo = get_test_wallet(false, None);
     let online_wo = wallet_wo.go_online(test_go_online_options(None)).unwrap();
     let mut party_wo = party!(wallet_wo, online_wo);
-    let result = party_wo.burn_result(&asset_ifa.asset_id, 10);
+    let result = party_wo.burn_result(&asset_ifa.asset_id, 10, None);
     assert_matches!(result, Err(Error::WatchOnly));
 
     // - wrong online
@@ -473,14 +478,14 @@ fn fail() {
     // - check online is correct
     let good_online = party.online;
     party.online = wrong_online;
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 10);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 10, None);
     party.online = good_online;
     assert_matches!(result, Err(Error::CannotChangeOnline));
     // - invalid asset_id
-    let result = party.burn_begin_result("malformed", 10);
+    let result = party.burn_begin_result("malformed", 10, None);
     assert_matches!(result, Err(Error::AssetNotFound { asset_id: _ }));
     // - check zero burn amount
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 0);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 0, None);
     assert_matches!(result, Err(Error::NoBurnAmount));
     // - check fee_rate
     //   - low
@@ -488,6 +493,7 @@ fn fail() {
         party.online,
         asset_ifa.asset_id.clone(),
         10,
+        None,
         0,
         MIN_CONFIRMATIONS,
         false,
@@ -498,6 +504,7 @@ fn fail() {
         party.online,
         asset_ifa.asset_id.clone(),
         10,
+        None,
         u64::MAX,
         MIN_CONFIRMATIONS,
         false,
@@ -506,7 +513,7 @@ fn fail() {
 
     // burn_begin errors
     // - inexistent asset
-    let result = party.burn_begin_result("rgb1nexistent", 10);
+    let result = party.burn_begin_result("rgb1nexistent", 10, None);
     assert_matches!(result, Err(Error::AssetNotFound { asset_id: _ }));
     // - schema not supported
     create_test_data_dir();
@@ -570,7 +577,7 @@ fn fail() {
         .go_online(test_go_online_options(Some(ELECTRUM_URL)))
         .unwrap();
     let mut party_nia = party!(wallet_nia, online_nia);
-    let result = party_nia.burn_begin_result(&asset_ifa.asset_id, 10);
+    let result = party_nia.burn_begin_result(&asset_ifa.asset_id, 10, None);
     assert_matches!(result, Err(Error::UnsupportedSchema { asset_schema: _ }));
     // - burn not supported
     let asset_nia = party.issue_asset_nia(None);
@@ -582,11 +589,11 @@ fn fail() {
         (asset_uda.asset_id, AssetSchema::Uda),
     ];
     for (asset_id, schema) in unsupported_asset_ids {
-        let result = party.burn_result(&asset_id, 10);
+        let result = party.burn_result(&asset_id, 10, None);
         assert_matches!(result, Err(Error::UnsupportedBurn { asset_schema }) if asset_schema == schema);
     }
     // - burn zero amount
-    let result = party.burn_begin_result(&asset_ifa.asset_id, 0);
+    let result = party.burn_begin_result(&asset_ifa.asset_id, 0, None);
     assert_matches!(result, Err(Error::NoBurnAmount));
 
     // burn_end input params
@@ -639,6 +646,7 @@ fn begin_end() {
             party.online,
             asset.asset_id.clone(),
             AMOUNT,
+            None,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             true,
@@ -658,6 +666,7 @@ fn begin_end() {
             party.online,
             asset.asset_id.clone(),
             AMOUNT,
+            None,
             FEE_RATE,
             MIN_CONFIRMATIONS,
             false,
@@ -673,4 +682,63 @@ fn begin_end() {
     party.wallet.burn_end(party.online, signed_psbt).unwrap();
     let bak_info_after = party.db_backup_info();
     assert!(bak_info_after.last_operation_timestamp > bak_info_before.last_operation_timestamp);
+}
+
+/// A real BFA consignment from the stand: one mint and two burns, each naming a
+/// different payout target. The older burn's transition comes first in history,
+/// so reading front-to-back returns the wrong one - which is exactly what the
+/// bridge did on 2026-08-31, claiming a fresh burn for a previous test's
+/// recipient. The enclave binds the release to the *terminal* burn, so the two
+/// readers have to agree.
+///
+/// Needs no chain: the reader is a pure parse over the consignment bytes.
+mod terminal_burn_recipient {
+    use crate::wallet::offline::terminal_burn_recipient;
+    use rgbstd::containers::{FileContent, Transfer as RgbTransfer};
+    use std::io::Cursor;
+
+    const FIXTURE: &[u8] = include_bytes!("../../../tests/fixtures/bfa_two_burns.rgb");
+
+    /// The burn being redeemed, 10000 BUSDT to this address.
+    const TERMINAL: &str = "000000000000000000000000436365aab93332ad6555c78b6ab000fcea95c2eb";
+    /// An earlier burn in the same wallet's history. Returning this would send
+    /// someone else's money to a stale target.
+    const EARLIER: &str = "000000000000000000000000923ff778228c0f1bc8a12f7b364f0d6eb6a0bab3";
+
+    fn fixture() -> RgbTransfer {
+        RgbTransfer::load(Cursor::new(FIXTURE)).expect("fixture must parse")
+    }
+
+    #[test]
+    fn returns_the_terminal_burn_not_the_first_in_history() {
+        let got = hex::encode(terminal_burn_recipient(&fixture()).unwrap());
+        assert_eq!(got, TERMINAL, "expected the burn being redeemed");
+        assert_ne!(got, EARLIER, "returned an older burn's recipient");
+    }
+
+    #[test]
+    fn the_recipient_is_a_left_padded_evm_address() {
+        // The bridge rejects anything else, so a reader that returned a
+        // differently shaped value would fail there instead of here.
+        let got = terminal_burn_recipient(&fixture()).unwrap();
+        assert_eq!(got.len(), 32);
+        assert_eq!(&got[..12], &[0u8; 12]);
+    }
+
+    /// The fixture must really contain more than one burn, or the test above
+    /// passes for the wrong reason.
+    #[test]
+    fn the_fixture_carries_more_than_one_burn() {
+        let transfer = fixture();
+        let burns = transfer
+            .bundles
+            .iter()
+            .flat_map(|b| b.bundle.known_transitions.iter())
+            .filter(|k| k.transition.transition_type == super::super::TS_BURN)
+            .count();
+        assert!(
+            burns >= 2,
+            "fixture has {burns} burn transitions, expected 2+"
+        );
+    }
 }
