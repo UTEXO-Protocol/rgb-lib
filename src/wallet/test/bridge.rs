@@ -114,7 +114,7 @@ fn without_evm_lock_fails() {
     // the recipient refuses the consignment, so nothing settles
     assert!(party.refresh_all());
     assert!(
-        party.check_test_transfer_status_recipient(
+        party.check_test_transfer_status_incoming(
             &receive_data.recipient_id,
             TransferStatus::Failed
         )

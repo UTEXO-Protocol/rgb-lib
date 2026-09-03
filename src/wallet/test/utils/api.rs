@@ -70,6 +70,40 @@ pub(crate) trait OfflineSigParty {
         transfer_data.status == expected_status
     }
 
+    /// Like check_test_transfer_status_recipient, for a wallet that paid its own invoice: the
+    /// recipient ID then names two transfers and only the incoming one is checked.
+    #[cfg(feature = "electrum")]
+    fn check_test_transfer_status_incoming(
+        &self,
+        recipient_id: &str,
+        expected_status: TransferStatus,
+    ) -> bool {
+        let db_data = self.db_data(false);
+        let transfers = self.db_transfers();
+        let mut incoming = transfers.iter().filter_map(|t| {
+            let (asset_transfer, batch_transfer) =
+                t.related_transfers(&db_data.asset_transfers, &db_data.batch_transfers);
+            (t.recipient_id.as_deref() == Some(recipient_id) && batch_transfer.incoming)
+                .then_some((t, asset_transfer, batch_transfer))
+        });
+        let (transfer, asset_transfer, batch_transfer) = incoming.next().unwrap();
+        assert!(incoming.next().is_none());
+        let transfer_data = self
+            .wlt()
+            .get_transfer_data(
+                transfer,
+                &asset_transfer,
+                &batch_transfer,
+                &db_data.txos,
+                &db_data.colorings,
+            )
+            .unwrap();
+        println!(
+            "incoming transfer with recipient_id {} is in status {:?}",
+            recipient_id, transfer_data.status
+        );
+        transfer_data.status == expected_status
+    }
     #[cfg(feature = "electrum")]
     fn check_test_transfer_status_sender(
         &self,
