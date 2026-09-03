@@ -172,7 +172,7 @@ jobs:
   # Create GitHub Release with all artifacts
   release:
     name: Create Release
-    needs: [build-uniffi, build-cffi, generate-header]
+    needs: [build-uniffi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
