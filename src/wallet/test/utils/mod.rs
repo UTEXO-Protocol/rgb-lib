@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "electrum")]
 pub(super) mod anvil;
 #[macro_use]
 pub(super) mod api;

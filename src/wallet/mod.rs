@@ -101,6 +101,7 @@ pub(crate) const RGB_STATE_ASSET_OWNER: &str = "assetOwner";
 pub(crate) const RGB_STATE_INFLATION_ALLOWANCE: &str = "inflationAllowance";
 pub(crate) const RGB_STATE_BRIDGE_RIGHT: &str = "bridgeRight";
 pub(crate) const RGB_GLOBAL_ISSUED_SUPPLY: &str = "issuedSupply";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_GLOBAL_BRIDGED_SUPPLY: &str = "bridgedSupply";
 pub(crate) const RGB_GLOBAL_BRIDGE_LOCATION: &str = "bridgeLocation";
 pub(crate) const RGB_GLOBAL_LINKED_FROM_CONTRACT: &str = "linkedFromContract";
@@ -114,4 +115,5 @@ pub(crate) const RGB_METADATA_BURNED_ASSET: &str = "burnedAsset";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_BURNED_INFLATION: &str = "burnedInflation";
 /// Where a BFA burn's proceeds are owed; declared only by the BFA schema.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_BURN_RECIPIENT: &str = "burnRecipient";

@@ -316,6 +316,7 @@ pub(crate) fn burn(
     Ok(serde_json::to_string(&res)?)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn burn_begin(
     wallet: &COpaqueStruct,
     online: *const c_char,

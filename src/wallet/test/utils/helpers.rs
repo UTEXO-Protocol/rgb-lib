@@ -328,6 +328,11 @@ pub(crate) fn get_proxy_client(proxy_url: Option<&str>) -> ProxyClient {
     ProxyClient::new(proxy_url.unwrap_or(PROXY_URL)).unwrap()
 }
 
+/// The tests' anvil runs with network_mode: host, so the wallet under test
+/// reaches it at the same address the in-container tooling uses.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const ANVIL_RPC_URL: &str = "http://localhost:8545";
+
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions {
     OnlineOptions {

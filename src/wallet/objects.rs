@@ -1955,6 +1955,7 @@ pub struct InflateDetails {
 }
 
 /// The result of a bridge (BFA mint) begin operation.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct BridgeBeginResult {
@@ -1967,6 +1968,7 @@ pub struct BridgeBeginResult {
 }
 
 /// Details for bridge operations.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
 pub struct BridgeDetails {
@@ -2263,6 +2265,7 @@ pub struct FailTransfersOutcome {
 }
 
 #[cfg(test)]
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 mod assignments_collection_tests {
     use rgbstd::{AssignmentType, OpId};
 
