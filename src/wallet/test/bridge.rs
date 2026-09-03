@@ -44,6 +44,10 @@ fn success() {
     let result = party.bridge_end(signed_psbt);
     assert!(!result.txid.is_empty());
 
+    // the mint pays our own blinded invoice, so like any receive it reaches the balance only
+    // once refresh has fetched and validated the consignment
+    assert!(party.refresh_asset(&asset.asset_id));
+
     // before mining the supply is only pending
     assert_eq!(
         party.get_asset_balance(&asset.asset_id),
