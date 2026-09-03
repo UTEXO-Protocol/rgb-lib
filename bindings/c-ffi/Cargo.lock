@@ -3237,8 +3237,7 @@ dependencies = [
 [[package]]
 name = "rgb-consensus"
 version = "0.11.1-rc.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cee44070883ac31a112814ee635623b0bde44a2afab71ff3c591700a878a76d9"
+source = "git+https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa?rev=2faf6118b2f5fe30dd90dd5244d5a7dc32bcd757#2faf6118b2f5fe30dd90dd5244d5a7dc32bcd757"
 dependencies = [
  "amplify",
  "baid64",
@@ -3264,8 +3263,7 @@ dependencies = [
 [[package]]
 name = "rgb-invoicing"
 version = "0.11.1-rc.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b44153a2411b2d1ddc859a011061f95ec07acf32e70c414193838244207e232e"
+source = "git+https://github.com/UTEXO-Protocol/rgb-ops-s-bfa?rev=773766b5ca7a9e705ec68c2f9ed0917f505cd6e3#773766b5ca7a9e705ec68c2f9ed0917f505cd6e3"
 dependencies = [
  "amplify",
  "baid64",
@@ -3326,6 +3324,7 @@ name = "rgb-lib-c-ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "hex",
  "rgb-lib",
  "serde",
  "serde_json",
@@ -3344,8 +3343,7 @@ dependencies = [
 [[package]]
 name = "rgb-ops"
 version = "0.11.1-rc.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e454f98d8ab2ef78a2e0ba924e2a5c67b5ed55ba1664f4a6ee269d2f271353bc"
+source = "git+https://github.com/UTEXO-Protocol/rgb-ops-s-bfa?rev=773766b5ca7a9e705ec68c2f9ed0917f505cd6e3#773766b5ca7a9e705ec68c2f9ed0917f505cd6e3"
 dependencies = [
  "amplify",
  "baid64",
@@ -3383,8 +3381,7 @@ dependencies = [
 [[package]]
 name = "rgb-schemas"
 version = "0.11.1-rc.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fa6cd396adb8e48b558c12750d8c8837aefe230ad905f1be5424b1d57b4f55b"
+source = "git+https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa?rev=238dfe7a89db998107fd87d919bf2757a2746d7f#238dfe7a89db998107fd87d919bf2757a2746d7f"
 dependencies = [
  "amplify",
  "rgb-aluvm",

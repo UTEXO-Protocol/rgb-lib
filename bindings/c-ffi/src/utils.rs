@@ -8,6 +8,9 @@ pub(crate) enum Error {
     #[error("Error converting string into number")]
     StringToNumberConversion,
 
+    #[error("Error converting hex string into bytes")]
+    HexConversion,
+
     #[error("Unexpected null pointer for a mandatory parameter")]
     NullPointer,
 
@@ -150,6 +153,18 @@ fn convert_optional_string(ptr: *const c_char) -> Option<String> {
     }
 }
 
+/// NULL means absent; otherwise the string is hex, with or without a 0x prefix.
+fn convert_optional_hex(ptr: *const c_char) -> Result<Option<Vec<u8>>, Error> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    let text = ptr_to_string(ptr);
+    let hex_str = text.strip_prefix("0x").unwrap_or(&text);
+    hex::decode(hex_str)
+        .map(Some)
+        .map_err(|_| Error::HexConversion)
+}
+
 fn ptr_to_num<T: FromStr>(ptr: *const c_char) -> Result<T, Error> {
     if ptr.is_null() {
         return Err(Error::NullPointer);
@@ -279,6 +294,7 @@ pub(crate) fn burn(
     online: *const c_char,
     asset_id: *const c_char,
     amount: *const c_char,
+    burn_recipient: *const c_char,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
 ) -> Result<String, Error> {
@@ -286,9 +302,17 @@ pub(crate) fn burn(
     let online = convert_online(online)?;
     let asset_id = ptr_to_string(asset_id);
     let amount = ptr_to_num(amount)?;
+    let burn_recipient = convert_optional_hex(burn_recipient)?;
     let fee_rate = ptr_to_num(fee_rate)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
-    let res = wallet.burn(online, asset_id, amount, fee_rate, min_confirmations)?;
+    let res = wallet.burn(
+        online,
+        asset_id,
+        amount,
+        burn_recipient,
+        fee_rate,
+        min_confirmations,
+    )?;
     Ok(serde_json::to_string(&res)?)
 }
 
@@ -297,6 +321,7 @@ pub(crate) fn burn_begin(
     online: *const c_char,
     asset_id: *const c_char,
     amount: *const c_char,
+    burn_recipient: *const c_char,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
     dry_run: bool,
@@ -305,12 +330,14 @@ pub(crate) fn burn_begin(
     let online = convert_online(online)?;
     let asset_id = ptr_to_string(asset_id);
     let amount = ptr_to_num(amount)?;
+    let burn_recipient = convert_optional_hex(burn_recipient)?;
     let fee_rate = ptr_to_num(fee_rate)?;
     let min_confirmations = ptr_to_num(min_confirmations)?;
     let res = wallet.burn_begin(
         online,
         asset_id,
         amount,
+        burn_recipient,
         fee_rate,
         min_confirmations,
         dry_run,
