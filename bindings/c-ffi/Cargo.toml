@@ -33,10 +33,10 @@ cbindgen = "0.29"
 # Mirrors the root Cargo.toml patch - this crate is its own workspace, so it
 # does not inherit it. Keep the two in step.
 [patch.crates-io]
-rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "66819e80df9adb3b5ad100467f3a7179e38ca5a4" }
-rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
-rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "3bcc7d98d759a8b71bf94ad4a36371dcb7bf392b" }
-rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "09d5d494706e75593f71c3f5f06cd89a8dcb807e" }
+rgb-consensus = { git = "https://github.com/UTEXO-Protocol/rgb-consensus-s-bfa", rev = "2faf6118b2f5fe30dd90dd5244d5a7dc32bcd757" }
+rgb-ops = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "773766b5ca7a9e705ec68c2f9ed0917f505cd6e3" }
+rgb-invoicing = { git = "https://github.com/UTEXO-Protocol/rgb-ops-s-bfa", rev = "773766b5ca7a9e705ec68c2f9ed0917f505cd6e3" }
+rgb-schemas = { git = "https://github.com/UTEXO-Protocol/rgb-schemas-s-bfa", rev = "238dfe7a89db998107fd87d919bf2757a2746d7f" }
 
 [features]
 default = []
