@@ -45,8 +45,9 @@ fn success() {
     assert!(!result.txid.is_empty());
 
     // the mint pays our own blinded invoice, so like any receive it reaches the balance only
-    // once refresh has fetched and validated the consignment
-    assert!(party.refresh_asset(&asset.asset_id));
+    // once refresh has fetched and validated the consignment; the receive carries no asset
+    // until then, so an asset-filtered refresh would skip it
+    party.wait_for_refresh(None);
 
     // before mining the supply is only pending
     assert_eq!(
@@ -111,7 +112,13 @@ fn without_evm_lock_fails() {
     mine(false);
 
     // the recipient refuses the consignment, so nothing settles
-    party.refresh_asset(&asset.asset_id);
+    assert!(party.refresh_all());
+    assert!(
+        party.check_test_transfer_status_recipient(
+            &receive_data.recipient_id,
+            TransferStatus::Failed
+        )
+    );
     assert_eq!(
         party.get_asset_balance(&asset.asset_id).settled,
         0,
