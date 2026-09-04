@@ -180,9 +180,9 @@ fn mainnet_esplora_success() {
     );
 
     check_wallet(&party, bitcoin_network, None);
-    // UTEXO Mainnet Esplora (Hetzner)
-    let indexer_url = "https://esplora-mainnet.utexo.com";
-    party.go_online(false, Some(indexer_url));
+    let indexer_url = std::env::var("RGB_LIB_TEST_MAINNET_ESPLORA_URL")
+        .unwrap_or_else(|_| s!("https://blockstream.info/api"));
+    party.go_online(false, Some(&indexer_url));
     assert!(!party.wallet.watch_only());
     assert_eq!(party.get_wallet_data().bitcoin_network, bitcoin_network);
 }
@@ -213,38 +213,6 @@ fn mainnet_success_electrum() {
 
     check_wallet(&party, bitcoin_network, None);
     let indexer_url = "ssl://electrum.iriswallet.com:50003";
-    party.go_online(false, Some(indexer_url));
-    assert!(!party.wallet.watch_only());
-    assert_eq!(party.get_wallet_data().bitcoin_network, bitcoin_network);
-}
-
-#[cfg(feature = "esplora")]
-#[test]
-#[ignore = "frequently fails due to timeout"]
-#[parallel]
-fn mainnet_success_esplora() {
-    create_test_data_dir();
-
-    let bitcoin_network = BitcoinNetwork::Mainnet;
-    let keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
-    let mut party = offline_party!(
-        Wallet::new(
-            WalletData {
-                data_dir: get_test_data_dir_string(),
-                bitcoin_network,
-                database_type: DatabaseType::Sqlite,
-                max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-                // IFA not supported on mainnet
-                supported_schemas: vec![AssetSchema::Cfa, AssetSchema::Nia, AssetSchema::Uda],
-                reuse_addresses: false,
-            },
-            SinglesigKeys::from_keys(&keys, None),
-        )
-        .unwrap()
-    );
-
-    check_wallet(&party, bitcoin_network, None);
-    let indexer_url = "https://blockstream.info/api";
     party.go_online(false, Some(indexer_url));
     assert!(!party.wallet.watch_only());
     assert_eq!(party.get_wallet_data().bitcoin_network, bitcoin_network);

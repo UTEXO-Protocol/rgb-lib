@@ -132,18 +132,49 @@ fn success() {
         .unwrap()
         .save_file(&consignment_path)
         .unwrap();
-
-    // accept transfer
-    recv_party
+    // recover and accept from the exact persisted consignment without another proxy fetch
+    let consignment_bytes = std::fs::read(&consignment_path).unwrap();
+    assert!(
+        !recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id.clone(), txid.clone())
+            .unwrap()
+    );
+    let prepared = recv_party
         .wallet
-        .accept_transfer_consignment(
-            recv_party.online,
-            consignment_path,
+        .prepare_accept_transfer_from_consignment(
+            txid.clone(),
             txid.clone(),
             vout,
+            consignment_bytes,
             blinding,
         )
         .unwrap();
+    assert_eq!(
+        prepared.consignment().contract_id().to_string(),
+        asset.asset_id
+    );
+    assert!(prepared.media_digests().is_empty());
+    let pending = recv_party.wallet.pending_rgb_acceptance().unwrap().unwrap();
+    assert_eq!(pending.operation_id(), txid);
+    assert!(!pending.promoted());
+    prepared.promote().unwrap();
+    assert_matches!(
+        recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id.clone(), txid.clone()),
+        Err(Error::RgbOperationInProgress { operation_id }) if operation_id == txid
+    );
+    recv_party
+        .wallet
+        .resolve_pending_rgb_acceptance(&txid, RgbAcceptanceResolution::Finalize)
+        .unwrap();
+    assert!(
+        recv_party
+            .wallet
+            .has_accepted_transfer(asset.asset_id, txid)
+            .unwrap()
+    );
 
     // consume fascia
     party_send.wallet.consume_fascia(fascia, None).unwrap();
@@ -1064,6 +1095,106 @@ fn send_end_db_update_only_success() {
     assert!(
         party
             .check_test_transfer_status_sender(&result.txid, TransferStatus::WaitingConfirmations,)
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn send_end_db_update_only_for_operation_success() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let asset = party.issue_asset_nia(None);
+    let receive_data = rcv_party.blind_receive_asset_expiry(None, None);
+    let recipient_map = HashMap::from([(
+        asset.asset_id,
+        vec![Recipient {
+            assignment: Assignment::Fungible(10),
+            recipient_id: receive_data.recipient_id,
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let begin = party
+        .wallet
+        .send_begin(
+            party.online,
+            recipient_map,
+            true,
+            FEE_RATE,
+            MIN_CONFIRMATIONS,
+            default_send_expiration(),
+            false,
+            None,
+        )
+        .unwrap();
+    let signed_psbt = party.wallet.sign_psbt(begin.psbt.clone(), None).unwrap();
+    party.wallet.create_consignments(begin.psbt).unwrap();
+    let operation_id = Psbt::from_str(&signed_psbt)
+        .unwrap()
+        .unsigned_tx
+        .compute_txid()
+        .to_string();
+    let fascia: Fascia =
+        serde_json::from_str(&fs::read_to_string(&begin.details.fascia_path).unwrap()).unwrap();
+    party
+        .wallet
+        .prepare_consume_fascia(operation_id.clone(), fascia, None)
+        .unwrap()
+        .promote()
+        .unwrap();
+    let witness_id = RgbTxid::from_str(&operation_id).unwrap();
+
+    assert_matches!(
+        party
+            .wallet
+            .send_end_db_update_only(party.online, signed_psbt.clone()),
+        Err(Error::RgbOperationInProgress { operation_id: owner }) if owner == operation_id
+    );
+    assert_matches!(
+        party
+            .wallet
+            .upsert_witness(witness_id, WitnessOrd::Tentative),
+        Err(Error::RgbOperationInProgress { operation_id: owner }) if owner == operation_id
+    );
+    assert_matches!(
+        party.wallet.upsert_witness_for_operation(
+            "different-operation",
+            witness_id,
+            WitnessOrd::Tentative,
+        ),
+        Err(Error::RgbOperationInProgress { operation_id: owner }) if owner == operation_id
+    );
+    party
+        .wallet
+        .upsert_witness_for_operation(&operation_id, witness_id, WitnessOrd::Tentative)
+        .unwrap();
+    assert_matches!(
+        party.wallet.send_end_db_update_only_for_operation(
+            party.online,
+            "different-operation",
+            signed_psbt.clone(),
+        ),
+        Err(Error::Internal { details })
+            if details == "RGB protocol operation ID does not match the send transaction"
+    );
+
+    let result = party
+        .wallet
+        .send_end_db_update_only_for_operation(party.online, &operation_id, signed_psbt)
+        .unwrap();
+    assert_eq!(result.txid, operation_id);
+    assert_eq!(result.batch_transfer_idx, begin.batch_transfer_idx.unwrap());
+    party
+        .wallet
+        .resolve_pending_rgb_acceptance(&operation_id, RgbAcceptanceResolution::Finalize)
+        .unwrap();
+    assert!(
+        party
+            .check_test_transfer_status_sender(&operation_id, TransferStatus::WaitingConfirmations,)
     );
 }
 
