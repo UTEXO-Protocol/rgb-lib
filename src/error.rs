@@ -76,10 +76,6 @@ pub enum Error {
     #[error("The given PSBT cannot be finalized")]
     CannotFinalizePsbt,
 
-    /// Cannot use IFA schema on mainnet
-    #[error("Cannot use IFA schema on mainnet")]
-    CannotUseIfaOnMainnet,
-
     /// A database error has been encountered
     #[error("Database error: {details}")]
     Database {

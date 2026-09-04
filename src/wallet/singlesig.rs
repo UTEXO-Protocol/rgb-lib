@@ -193,7 +193,7 @@ impl Wallet {
         )?;
 
         // setup RGB
-        setup_rgb(&wallet_dir, wdata.supported_schemas, wdata.bitcoin_network)?;
+        setup_rgb(&wallet_dir, wdata.supported_schemas)?;
 
         // setup rgb-lib DB
         let database = setup_db(&wallet_dir)?;

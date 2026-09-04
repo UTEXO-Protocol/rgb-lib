@@ -235,14 +235,12 @@ pub struct WalletInternals {
 pub(crate) fn setup_rgb<P: AsRef<Path>>(
     wallet_dir: P,
     supported_schemas: Vec<AssetSchema>,
-    bitcoin_network: BitcoinNetwork,
 ) -> Result<(), Error> {
     if supported_schemas.is_empty() {
         return Err(Error::NoSupportedSchemas);
     }
-    if bitcoin_network == BitcoinNetwork::Mainnet && supported_schemas.contains(&AssetSchema::Ifa) {
-        return Err(Error::CannotUseIfaOnMainnet);
-    }
+    // IFA is allowed on all networks (including mainnet) but is not production-ready —
+    // enable and use it carefully.
     let mut runtime = load_rgb_runtime(wallet_dir)?;
     let known_schemas = runtime.schemata()?;
     if known_schemas.len() < NUM_KNOWN_SCHEMAS {

@@ -44,7 +44,6 @@ interface RgbLibError {
   CannotEstimateFees();
   CannotFailBatchTransfer();
   CannotFinalizePsbt();
-  CannotUseIfaOnMainnet();
   Database(string details);
   EmptyFile(string file_path);
   FailedBdkSync(string details);
@@ -164,6 +163,7 @@ enum AssetSchema {
   "Nia",
   "Uda",
   "Cfa",
+  // IFA is not production-ready yet — use with caution.
   "Ifa",
   "Bfa",
 };
