@@ -6,6 +6,7 @@ use super::*;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::utils::{recipient_id_from_script_buf, script_buf_from_recipient_id};
 use bdk_wallet::bitcoin::Transaction;
+use bdk_wallet::bitcoin::hashes::{Hash, sha256};
 use rgbstd::Operation as _;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use serde::{Deserialize, Serialize};
@@ -22,6 +23,8 @@ const HTLC_ESCROW_FILE: &str = "escrow.json";
 const HTLC_COLORED_PSBT_FILE: &str = "colored.psbt";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const HTLC_CONSIGNMENTS_DIR: &str = "consignments";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+const HTLC_CONSIGNMENT_FILE: &str = CONSIGNMENT_FILE;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const STASH_CONSUMED_FILE: &str = "stash_consumed";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -61,12 +64,44 @@ fn persist_durable_replace(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
     fs::rename(&tmp, path)?;
     fsync_parent_dir(path)
 }
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn persist_durable_create_dir(path: &Path) -> Result<(), Error> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        fs::File::open(path)?.sync_all()?;
+    }
+    fsync_parent_dir(path)
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
+    sha256::Hash::hash(bytes.as_ref()).to_string()
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+const HTLC_META_SCHEMA_VERSION: u32 = 1;
+
+/// Windows-safe path: `consignments/{sha256(asset_id)}/consignment_out` (`:` is invalid on Windows).
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) fn htlc_consignment_path(op_dir: &Path, asset_id: &str) -> PathBuf {
+    let digest = sha256::Hash::hash(asset_id.as_bytes());
+    op_dir
+        .join(HTLC_CONSIGNMENTS_DIR)
+        .join(digest.to_string())
+        .join(HTLC_CONSIGNMENT_FILE)
+}
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const HTLC_OPERATION_ID_LEN: usize = 32;
 
 #[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
 thread_local! {
     pub(crate) static MOCK_FAIL_AFTER_STASH_CONSUME: std::cell::RefCell<bool> =
+        const { std::cell::RefCell::new(false) };
+    pub(crate) static MOCK_FAIL_AFTER_STOCK_PERSIST: std::cell::RefCell<bool> =
+        const { std::cell::RefCell::new(false) };
+    pub(crate) static MOCK_FAIL_AFTER_HTLC_FAIL_JOURNAL: std::cell::RefCell<bool> =
         const { std::cell::RefCell::new(false) };
 }
 
@@ -129,6 +164,22 @@ pub enum HtlcOperationStatus {
     Settled,
 }
 
+/// Caller-reported / indexer-observed broadcast lifecycle for an HTLC operation.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HtlcBroadcastState {
+    /// Caller has not reported a broadcast attempt.
+    #[default]
+    NotAttempted,
+    /// Caller reported a broadcast attempt; indexer has not confirmed the tx.
+    Attempted,
+    /// Indexer has seen the witness tx.
+    Observed,
+    /// Broadcast was attempted and the indexer currently does not see the tx.
+    Ambiguous,
+}
+
 /// Result of [`Wallet::htlc_prepare`].
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone)]
@@ -139,6 +190,24 @@ pub struct HtlcPrepareResult {
     pub colored_psbt: String,
     /// Wallet-relative directory containing file-backed payloads.
     pub operation_dir: String,
+}
+
+/// Recovered HTLC operation (lookup after a lost `htlc_prepare` response).
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone)]
+pub struct HtlcOperation {
+    /// Opaque operation ID (directory name under `htlc_ops/`).
+    pub operation_id: String,
+    /// Colored unsigned PSBT.
+    pub colored_psbt: String,
+    /// Wallet-relative directory containing file-backed payloads.
+    pub operation_dir: String,
+    /// High-level operation status.
+    pub status: HtlcOperationStatus,
+    /// Broadcast lifecycle.
+    pub broadcast: HtlcBroadcastState,
+    /// Witness txid committed at prepare.
+    pub txid: String,
 }
 
 /// Caller intent for HTLC / special accept paths.
@@ -154,13 +223,55 @@ pub struct ExpectedTransfer {
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct HtlcPayloadHashes {
+    fascia: String,
+    colored_psbt: String,
+    escrow: String,
+    consignments: BTreeMap<String, String>,
+    txid: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    batch_transfer_idx: Option<String>,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl HtlcPayloadHashes {
+    fn new(
+        fascia: &[u8],
+        colored_psbt: &[u8],
+        escrow: &[u8],
+        consignments: BTreeMap<String, String>,
+        txid: &str,
+        batch_transfer_idx: Option<i32>,
+    ) -> Self {
+        Self {
+            fascia: sha256_hex(fascia),
+            colored_psbt: sha256_hex(colored_psbt),
+            escrow: sha256_hex(escrow),
+            consignments,
+            txid: sha256_hex(txid.as_bytes()),
+            batch_transfer_idx: batch_transfer_idx.map(htlc_batch_identity_hash),
+        }
+    }
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+fn htlc_batch_identity_hash(batch_transfer_idx: i32) -> String {
+    sha256_hex(batch_transfer_idx.to_string().as_bytes())
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct HtlcOpMeta {
+    schema_version: u32,
     operation_id: String,
     status: HtlcOperationStatus,
     txid: String,
     created_at: i64,
     batch_transfer_idx: Option<i32>,
+    #[serde(default)]
+    broadcast: HtlcBroadcastState,
+    hashes: HtlcPayloadHashes,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1210,15 +1321,20 @@ impl Wallet {
         let fascia_str = fs::read_to_string(transfer_dir.join(FASCIA_FILE))?;
         let fascia: Fascia = serde_json::from_str(&fascia_str).map_err(InternalError::from)?;
         let psbt_path = transfer_dir.join(UNSIGNED_PSBT_FILE);
-        let psbt = if psbt_path.exists() {
-            Some(Psbt::from_str(&fs::read_to_string(&psbt_path)?)?)
-        } else {
-            warn!(
-                self.logger(),
-                "No unsigned PSBT for batch {batch_transfer_idx}, cannot mark its inputs spent"
-            );
-            None
-        };
+        if !psbt_path.exists() {
+            return Err(Error::Inconsistency {
+                details: format!(
+                    "unsigned PSBT missing for batch {batch_transfer_idx}; treating as operation corruption"
+                ),
+            });
+        }
+        let psbt = Psbt::from_str(&fs::read_to_string(&psbt_path)?).map_err(|e| {
+            Error::Inconsistency {
+                details: format!(
+                    "unsigned PSBT unreadable for batch {batch_transfer_idx}: {e}"
+                ),
+            }
+        })?;
         let stash_marker = transfer_dir.join(STASH_CONSUMED_FILE);
         if !stash_marker.exists() {
             if self.indexer().get_tx_confirmations(txid)?.is_none() {
@@ -1228,8 +1344,7 @@ impl Wallet {
                     ),
                 });
             }
-            self.rgb_runtime()?.consume_fascia(fascia, None)?;
-            persist_stash_consumed_marker(&stash_marker)?;
+            self.consume_fascia_persist_then_mark(fascia, &[&stash_marker])?;
             #[cfg(test)]
             if MOCK_FAIL_AFTER_STASH_CONSUME.with(|f| f.replace(false)) {
                 return Err(Error::Internal {
@@ -1238,9 +1353,7 @@ impl Wallet {
             }
         }
         self.update_db_colored_txos_from_bdk(&txn, false)?;
-        if let Some(psbt) = psbt {
-            self.mark_psbt_inputs_spent(&txn, &psbt)?;
-        }
+        self.mark_psbt_inputs_spent(&txn, &psbt)?;
         let mut updated: DbBatchTransferActMod = batch_transfer.into();
         updated.status = ActiveValue::Set(TransferStatus::WaitingConfirmations);
         txn.update_batch_transfer(&mut updated)?;
@@ -1297,6 +1410,14 @@ impl Wallet {
                 ),
             });
         }
+        if meta.schema_version != HTLC_META_SCHEMA_VERSION {
+            return Err(Error::Inconsistency {
+                details: format!(
+                    "HTLC operation {operation_id} has unsupported schema version {}",
+                    meta.schema_version
+                ),
+            });
+        }
         Ok(meta)
     }
 
@@ -1317,39 +1438,213 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_resolve_batch_idx(&self, meta: &HtlcOpMeta) -> Result<Option<i32>, Error> {
-        if meta.batch_transfer_idx.is_some() {
-            return Ok(meta.batch_transfer_idx);
+    fn htlc_set_batch_identity(meta: &mut HtlcOpMeta, batch_transfer_idx: i32) -> Result<(), Error> {
+        let expected = htlc_batch_identity_hash(batch_transfer_idx);
+        match &meta.hashes.batch_transfer_idx {
+            Some(hash) if hash == &expected => {}
+            Some(_) => {
+                return Err(Error::Inconsistency {
+                    details: format!(
+                        "HTLC operation {} batch identity does not match the manifest",
+                        meta.operation_id
+                    ),
+                });
+            }
+            None => meta.hashes.batch_transfer_idx = Some(expected),
         }
-        let txn = self.database().begin_transaction()?;
-        Ok(txn
-            .iter_batch_transfers()?
-            .into_iter()
-            .find(|b| {
-                b.status == TransferStatus::Initiated
-                    && b.txid.as_deref() == Some(meta.txid.as_str())
-            })
-            .map(|b| b.idx))
+        meta.batch_transfer_idx = Some(batch_transfer_idx);
+        Ok(())
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_resolve_batch_idx_for_apply(&self, meta: &HtlcOpMeta) -> Result<Option<i32>, Error> {
-        if meta.batch_transfer_idx.is_some() {
-            return Ok(meta.batch_transfer_idx);
+    fn htlc_bind_batch_identity(
+        &self,
+        operation_id: &str,
+        meta: &mut HtlcOpMeta,
+        batch_transfer_idx: i32,
+    ) -> Result<(), Error> {
+        let already_bound = meta.batch_transfer_idx == Some(batch_transfer_idx)
+            && meta.hashes.batch_transfer_idx.is_some();
+        Self::htlc_set_batch_identity(meta, batch_transfer_idx)?;
+        if already_bound {
+            return Ok(());
+        }
+        self.htlc_write_meta(operation_id, meta)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_require_file_hash(
+        operation_id: &str,
+        label: &str,
+        path: &Path,
+        expected: &str,
+    ) -> Result<Vec<u8>, Error> {
+        let bytes = fs::read(path).map_err(|e| Error::Inconsistency {
+            details: format!(
+                "HTLC operation {operation_id} missing required {label}: {e}"
+            ),
+        })?;
+        let actual = sha256_hex(&bytes);
+        if actual != expected {
+            return Err(Error::Inconsistency {
+                details: format!("HTLC operation {operation_id} {label} hash mismatch"),
+            });
+        }
+        Ok(bytes)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_verify_committed_payloads(
+        &self,
+        meta: &HtlcOpMeta,
+    ) -> Result<(Psbt, Fascia), Error> {
+        let operation_id = &meta.operation_id;
+        if sha256_hex(meta.txid.as_bytes()) != meta.hashes.txid {
+            return Err(Error::Inconsistency {
+                details: format!("HTLC operation {operation_id} txid is not bound by the manifest"),
+            });
+        }
+        if let Some(idx) = meta.batch_transfer_idx {
+            match &meta.hashes.batch_transfer_idx {
+                Some(hash) if hash == &htlc_batch_identity_hash(idx) => {}
+                _ => {
+                    return Err(Error::Inconsistency {
+                        details: format!(
+                            "HTLC operation {operation_id} batch identity is not bound by the manifest"
+                        ),
+                    });
+                }
+            }
+        }
+
+        let op_dir = self.htlc_op_dir(operation_id)?;
+        let fascia_bytes = Self::htlc_require_file_hash(
+            operation_id,
+            "fascia",
+            &op_dir.join(FASCIA_FILE),
+            &meta.hashes.fascia,
+        )?;
+        let psbt_bytes = Self::htlc_require_file_hash(
+            operation_id,
+            "colored PSBT",
+            &op_dir.join(HTLC_COLORED_PSBT_FILE),
+            &meta.hashes.colored_psbt,
+        )?;
+        Self::htlc_require_file_hash(
+            operation_id,
+            "escrow",
+            &op_dir.join(HTLC_ESCROW_FILE),
+            &meta.hashes.escrow,
+        )?;
+        for (asset_id, expected) in &meta.hashes.consignments {
+            Self::htlc_require_file_hash(
+                operation_id,
+                &format!("consignment {asset_id}"),
+                &htlc_consignment_path(&op_dir, asset_id),
+                expected,
+            )?;
+        }
+
+        let colored_psbt = String::from_utf8(psbt_bytes).map_err(|_| Error::Inconsistency {
+            details: format!("HTLC operation {operation_id} colored PSBT is not valid UTF-8"),
+        })?;
+        let psbt = Psbt::from_str(&colored_psbt)?;
+        let psbt_txid = psbt.unsigned_tx.compute_txid().to_string();
+        if psbt_txid != meta.txid {
+            return Err(Error::Inconsistency {
+                details: format!(
+                    "HTLC operation {operation_id} colored PSBT txid {psbt_txid} does not match manifest {}",
+                    meta.txid
+                ),
+            });
+        }
+        let fascia_str = String::from_utf8(fascia_bytes).map_err(|_| Error::Inconsistency {
+            details: format!("HTLC operation {operation_id} fascia is not valid UTF-8"),
+        })?;
+        let fascia: Fascia = serde_json::from_str(&fascia_str).map_err(InternalError::from)?;
+        Ok((psbt, fascia))
+    }
+
+    /// Consume fascia, persist stock while the runtime lock is held, then fsync the marker.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn consume_fascia_persist_then_mark(
+        &self,
+        fascia: Fascia,
+        markers: &[&Path],
+    ) -> Result<(), Error> {
+        let mut runtime = self.rgb_runtime()?;
+        runtime.require_explicit_persistence();
+        if !runtime.stash_contains_fascia_witness(&fascia) {
+            runtime.consume_fascia(fascia, None)?;
+        }
+        runtime.persist()?;
+        #[cfg(test)]
+        if MOCK_FAIL_AFTER_STOCK_PERSIST.with(|f| f.replace(false)) {
+            return Err(Error::Internal {
+                details: s!("mock failure after stock persist before marker"),
+            });
+        }
+        for marker in markers {
+            persist_stash_consumed_marker(marker)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_scan_ops(&self) -> Result<Vec<HtlcOpMeta>, Error> {
+        let root = self.htlc_ops_root();
+        if !root.exists() {
+            return Ok(vec![]);
+        }
+        let mut ops = vec![];
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if Self::validate_htlc_operation_id(&name).is_err() {
+                continue;
+            }
+            if let Ok(meta) = self.htlc_read_meta(&name) {
+                ops.push(meta);
+            }
+        }
+        Ok(ops)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_operation_from_meta(&self, meta: &HtlcOpMeta) -> Result<HtlcOperation, Error> {
+        let (psbt, _) = self.htlc_verify_committed_payloads(meta)?;
+        let operation_dir = PathBuf::from(HTLC_OPS_DIR)
+            .join(&meta.operation_id)
+            .to_string_lossy()
+            .into_owned();
+        Ok(HtlcOperation {
+            operation_id: meta.operation_id.clone(),
+            colored_psbt: psbt.to_string(),
+            operation_dir,
+            status: meta.status,
+            broadcast: meta.broadcast,
+            txid: meta.txid.clone(),
+        })
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_resolve_batch_idx(&self, meta: &HtlcOpMeta) -> Result<Option<i32>, Error> {
+        if let Some(idx) = meta.batch_transfer_idx {
+            return Ok(Some(idx));
         }
         let txn = self.database().begin_transaction()?;
-        Ok(txn
+        let mut matches: Vec<_> = txn
             .iter_batch_transfers()?
             .into_iter()
-            .find(|b| {
-                matches!(
-                    b.status,
-                    TransferStatus::Initiated
-                        | TransferStatus::WaitingConfirmations
-                        | TransferStatus::Settled
-                ) && b.txid.as_deref() == Some(meta.txid.as_str())
-            })
-            .map(|b| b.idx))
+            .filter(|b| b.txid.as_deref() == Some(meta.txid.as_str()))
+            .collect();
+        match matches.len() {
+            1 => Ok(Some(matches.remove(0).idx)),
+            _ => Ok(None),
+        }
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -1432,31 +1727,47 @@ impl Wallet {
 
         let operation_id = Self::new_htlc_operation_id();
         let op_dir = self.htlc_op_dir(&operation_id)?;
-        fs::create_dir_all(op_dir.join(HTLC_CONSIGNMENTS_DIR))?;
+        persist_durable_create_dir(&op_dir.join(HTLC_CONSIGNMENTS_DIR))?;
 
-        let fascia_path = op_dir.join(FASCIA_FILE);
         let serialized_fascia = serde_json::to_string(&fascia).map_err(InternalError::from)?;
-        fs::write(&fascia_path, serialized_fascia)?;
-        fs::write(op_dir.join(HTLC_COLORED_PSBT_FILE), psbt.to_string())?;
-
-        for transfer in &transfers {
-            let asset_id = transfer.contract_id().to_string();
-            let path = op_dir
-                .join(HTLC_CONSIGNMENTS_DIR)
-                .join(format!("{asset_id}.rgb"));
-            transfer.save_file(&path)?;
-        }
-
+        let colored_psbt = psbt.to_string();
         let escrow_raw = serde_json::to_string_pretty(&HtlcEscrowFile { entries: escrow })
             .map_err(InternalError::from)?;
-        fs::write(op_dir.join(HTLC_ESCROW_FILE), escrow_raw)?;
+
+        persist_durable_replace(&op_dir.join(FASCIA_FILE), &serialized_fascia)?;
+        persist_durable_replace(&op_dir.join(HTLC_COLORED_PSBT_FILE), &colored_psbt)?;
+
+        let mut consignment_hashes = BTreeMap::new();
+        for transfer in &transfers {
+            let asset_id = transfer.contract_id().to_string();
+            let path = htlc_consignment_path(&op_dir, &asset_id);
+            if let Some(parent) = path.parent() {
+                persist_durable_create_dir(parent)?;
+            }
+            let mut consignment_bytes = Vec::new();
+            transfer.save(&mut consignment_bytes)?;
+            persist_durable_replace(&path, &consignment_bytes)?;
+            consignment_hashes.insert(asset_id, sha256_hex(&consignment_bytes));
+        }
+
+        persist_durable_replace(&op_dir.join(HTLC_ESCROW_FILE), &escrow_raw)?;
 
         let mut meta = HtlcOpMeta {
+            schema_version: HTLC_META_SCHEMA_VERSION,
             operation_id: operation_id.clone(),
             status: HtlcOperationStatus::Prepared,
             txid: txid.clone(),
             created_at: now().unix_timestamp(),
             batch_transfer_idx: None,
+            broadcast: HtlcBroadcastState::NotAttempted,
+            hashes: HtlcPayloadHashes::new(
+                serialized_fascia.as_bytes(),
+                colored_psbt.as_bytes(),
+                escrow_raw.as_bytes(),
+                consignment_hashes,
+                &txid,
+                None,
+            ),
         };
         self.htlc_write_meta(&operation_id, &meta)?;
 
@@ -1480,8 +1791,7 @@ impl Wallet {
         };
         drop(runtime);
 
-        meta.batch_transfer_idx = Some(batch_transfer_idx);
-        self.htlc_write_meta(&operation_id, &meta)?;
+        self.htlc_bind_batch_identity(&operation_id, &mut meta, batch_transfer_idx)?;
         self.trigger_auto_backup();
 
         let operation_dir = PathBuf::from(HTLC_OPS_DIR)
@@ -1539,13 +1849,15 @@ impl Wallet {
             });
         }
 
-        let batch_transfer_idx = self.htlc_resolve_batch_idx_for_apply(&meta)?.ok_or_else(|| {
+        let batch_transfer_idx = self.htlc_resolve_batch_idx(&meta)?.ok_or_else(|| {
             Error::Internal {
                 details: format!(
                     "HTLC operation {operation_id} has no linked Initiated/WaitingConfirmations batch"
                 ),
             }
         })?;
+        self.htlc_bind_batch_identity(operation_id, &mut meta, batch_transfer_idx)?;
+        let (psbt, fascia) = self.htlc_verify_committed_payloads(&meta)?;
 
         let op_dir = self.htlc_op_dir(operation_id)?;
         let stash_marker = op_dir.join(STASH_CONSUMED_FILE);
@@ -1586,8 +1898,6 @@ impl Wallet {
             }
         }
 
-        let psbt = Psbt::from_str(&fs::read_to_string(op_dir.join(HTLC_COLORED_PSBT_FILE))?)?;
-
         if !stash_consumed {
             if self.indexer().get_tx_confirmations(&meta.txid)?.is_none() {
                 return Err(Error::InvalidHtlcOperationStatus {
@@ -1597,13 +1907,12 @@ impl Wallet {
                     ),
                 });
             }
-            let fascia_str = fs::read_to_string(op_dir.join(FASCIA_FILE))?;
-            let fascia: Fascia = serde_json::from_str(&fascia_str).map_err(InternalError::from)?;
-            self.rgb_runtime()?.consume_fascia(fascia, None)?;
-            persist_stash_consumed_marker(&stash_marker)?;
-            persist_stash_consumed_marker(
-                &self.get_transfer_dir(&meta.txid).join(STASH_CONSUMED_FILE),
-            )?;
+            if meta.broadcast != HtlcBroadcastState::Observed {
+                meta.broadcast = HtlcBroadcastState::Observed;
+                self.htlc_write_meta(operation_id, &meta)?;
+            }
+            let transfer_marker = self.get_transfer_dir(&meta.txid).join(STASH_CONSUMED_FILE);
+            self.consume_fascia_persist_then_mark(fascia, &[&stash_marker, &transfer_marker])?;
             #[cfg(test)]
             if MOCK_FAIL_AFTER_STASH_CONSUME.with(|f| f.replace(false)) {
                 return Err(Error::Internal {
@@ -1646,14 +1955,23 @@ impl Wallet {
         Ok(())
     }
 
-    /// Abort a prepared HTLC operation before apply (tx never broadcast).
+    /// Abort a prepared HTLC operation that was never broadcast.
+    ///
+    /// Refuses rollback unless broadcast is [`HtlcBroadcastState::NotAttempted`].
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn htlc_abort(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
         info!(self.logger(), "Aborting HTLC operation {operation_id}...");
+        self.check_online(online)?;
         let mut meta = self.htlc_read_meta(operation_id)?;
+        if meta.status == HtlcOperationStatus::Failed {
+            self.htlc_fail_linked_batch(online, &meta)?;
+            self.htlc_backup_after_coherent_failure()?;
+            info!(self.logger(), "HTLC abort completed");
+            return Ok(());
+        }
         if meta.status != HtlcOperationStatus::Prepared {
             return Err(Error::InvalidHtlcOperationStatus {
                 details: format!(
@@ -1674,19 +1992,189 @@ impl Wallet {
                 ),
             });
         }
+        match meta.broadcast {
+            HtlcBroadcastState::NotAttempted => {}
+            HtlcBroadcastState::Attempted => {
+                if self.indexer().get_tx_confirmations(&meta.txid)?.is_some() {
+                    meta.broadcast = HtlcBroadcastState::Observed;
+                    self.htlc_write_meta(operation_id, &meta)?;
+                } else {
+                    meta.broadcast = HtlcBroadcastState::Ambiguous;
+                    self.htlc_write_meta(operation_id, &meta)?;
+                }
+                return Err(Error::InvalidHtlcOperationStatus {
+                    details: format!(
+                        "operation {operation_id} broadcast is {:?}; automatic rollback is refused",
+                        meta.broadcast
+                    ),
+                });
+            }
+            HtlcBroadcastState::Observed | HtlcBroadcastState::Ambiguous => {
+                return Err(Error::InvalidHtlcOperationStatus {
+                    details: format!(
+                        "operation {operation_id} broadcast is {:?}; automatic rollback is refused",
+                        meta.broadcast
+                    ),
+                });
+            }
+        }
+        if self.indexer().get_tx_confirmations(&meta.txid)?.is_some() {
+            meta.broadcast = HtlcBroadcastState::Observed;
+            self.htlc_write_meta(operation_id, &meta)?;
+            return Err(Error::InvalidHtlcOperationStatus {
+                details: format!(
+                    "witness tx {} is known to the indexer; refuse abort",
+                    meta.txid
+                ),
+            });
+        }
+
         let batch_transfer_idx = self.htlc_resolve_batch_idx(&meta)?;
-        if let Some(batch_transfer_idx) = batch_transfer_idx {
-            self.fail_transfers(online, Some(batch_transfer_idx), false, true)?;
+        if let Some(idx) = batch_transfer_idx {
+            match self.htlc_batch_status(idx)? {
+                Some(TransferStatus::Failed) => {
+                    self.htlc_journal_failed(&mut meta, Some(idx))?;
+                    self.htlc_backup_after_coherent_failure()?;
+                    info!(self.logger(), "HTLC abort completed");
+                    return Ok(());
+                }
+                Some(TransferStatus::Initiated) | None => {}
+                Some(other) => {
+                    return Err(Error::InvalidHtlcOperationStatus {
+                        details: format!(
+                            "HTLC batch transfer {idx} is {other:?}, expected Initiated or Failed"
+                        ),
+                    });
+                }
+            }
+        }
+
+        self.htlc_journal_failed(&mut meta, batch_transfer_idx)?;
+        #[cfg(test)]
+        if MOCK_FAIL_AFTER_HTLC_FAIL_JOURNAL.with(|f| f.replace(false)) {
+            return Err(Error::Internal {
+                details: s!("mock failure after HTLC fail journal"),
+            });
+        }
+        self.htlc_fail_linked_batch(online, &meta)?;
+        self.htlc_backup_after_coherent_failure()?;
+        info!(self.logger(), "HTLC abort completed");
+        Ok(())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_journal_failed(
+        &self,
+        meta: &mut HtlcOpMeta,
+        batch_transfer_idx: Option<i32>,
+    ) -> Result<bool, Error> {
+        if meta.status == HtlcOperationStatus::Failed
+            && meta.batch_transfer_idx == batch_transfer_idx
+        {
+            return Ok(false);
+        }
+        if let Some(idx) = batch_transfer_idx {
+            Self::htlc_set_batch_identity(meta, idx)?;
         }
         meta.status = HtlcOperationStatus::Failed;
-        meta.batch_transfer_idx = batch_transfer_idx;
-        self.htlc_write_meta(operation_id, &meta)?;
+        self.htlc_write_meta(&meta.operation_id, meta)?;
+        Ok(true)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_batch_status(&self, batch_transfer_idx: i32) -> Result<Option<TransferStatus>, Error> {
+        let txn = self.database().begin_transaction()?;
+        Ok(txn
+            .iter_batch_transfers()?
+            .into_iter()
+            .find(|b| b.idx == batch_transfer_idx)
+            .map(|b| b.status))
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn htlc_heal_failed_ops(&self) -> Result<bool, Error> {
+        let mut healed = false;
+        for mut meta in self.htlc_scan_ops()? {
+            if meta.status != HtlcOperationStatus::Prepared {
+                continue;
+            }
+            let Some(idx) = self.htlc_resolve_batch_idx(&meta)? else {
+                continue;
+            };
+            if self.htlc_batch_status(idx)? == Some(TransferStatus::Failed) {
+                healed |= self.htlc_journal_failed(&mut meta, Some(idx))?;
+            }
+        }
+        Ok(healed)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_backup_after_coherent_failure(&self) -> Result<(), Error> {
         let txn = self.database().begin_transaction()?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();
-        info!(self.logger(), "HTLC abort completed");
         Ok(())
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn htlc_fail_linked_batch(&mut self, online: Online, meta: &HtlcOpMeta) -> Result<(), Error> {
+        let Some(batch_transfer_idx) = self.htlc_resolve_batch_idx(meta)? else {
+            return Ok(());
+        };
+        self.fail_transfers_commit(online, Some(batch_transfer_idx), false, true)?;
+        Ok(())
+    }
+
+    /// Record that the caller attempted to broadcast the prepared witness tx.
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn htlc_mark_broadcast(&self, operation_id: &str) -> Result<(), Error> {
+        let mut meta = self.htlc_read_meta(operation_id)?;
+        if meta.status != HtlcOperationStatus::Prepared {
+            return Err(Error::InvalidHtlcOperationStatus {
+                details: format!(
+                    "operation {operation_id} is {:?}, expected Prepared",
+                    meta.status
+                ),
+            });
+        }
+        match meta.broadcast {
+            HtlcBroadcastState::NotAttempted => {
+                meta.broadcast = HtlcBroadcastState::Attempted;
+                self.htlc_write_meta(operation_id, &meta)
+            }
+            HtlcBroadcastState::Attempted => Ok(()),
+            other => Err(Error::InvalidHtlcOperationStatus {
+                details: format!(
+                    "operation {operation_id} broadcast is {other:?}, expected NotAttempted or Attempted"
+                ),
+            }),
+        }
+    }
+
+    /// Find a committed HTLC operation by witness txid (lost `operation_id` / retry).
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn htlc_get_by_txid(&self, txid: &str) -> Result<HtlcOperation, Error> {
+        let matches: Vec<HtlcOpMeta> = self
+            .htlc_scan_ops()?
+            .into_iter()
+            .filter(|meta| meta.txid == txid)
+            .collect();
+        match matches.as_slice() {
+            [] => Err(Error::HtlcOperationNotFound {
+                operation_id: txid.to_string(),
+            }),
+            [meta] => self.htlc_operation_from_meta(meta),
+            _ => Err(Error::Internal {
+                details: format!("multiple HTLC operations share txid {txid}"),
+            }),
+        }
     }
 
     /// Read HTLC operation status; marks Settled when a linked batch has settled.
@@ -1696,19 +2184,24 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn htlc_reconcile(&self, operation_id: &str) -> Result<HtlcOperationStatus, Error> {
         let mut meta = self.htlc_read_meta(operation_id)?;
-        if meta.status == HtlcOperationStatus::Applied
-            && let Some(batch_transfer_idx) = meta.batch_transfer_idx
-        {
+        if let Some(batch_transfer_idx) = self.htlc_resolve_batch_idx(&meta)? {
             let txn = self.database().begin_transaction()?;
             let db_data = txn.get_db_data(false)?;
             if let Some(batch) = db_data
                 .batch_transfers
                 .iter()
                 .find(|b| b.idx == batch_transfer_idx)
-                && batch.status == TransferStatus::Settled
             {
-                meta.status = HtlcOperationStatus::Settled;
-                self.htlc_write_meta(operation_id, &meta)?;
+                if meta.status == HtlcOperationStatus::Prepared
+                    && batch.status == TransferStatus::Failed
+                {
+                    self.htlc_journal_failed(&mut meta, Some(batch_transfer_idx))?;
+                } else if meta.status == HtlcOperationStatus::Applied
+                    && batch.status == TransferStatus::Settled
+                {
+                    meta.status = HtlcOperationStatus::Settled;
+                    self.htlc_write_meta(operation_id, &meta)?;
+                }
             }
         }
         Ok(meta.status)
@@ -1912,10 +2405,7 @@ impl Wallet {
                         Self::assignment_for_coloring_output(asset_schema, amount);
                     let owned_by_witness_receive =
                         incoming_witness_scripts.contains(&txout.script_pubkey.to_hex_string());
-                    // A wallet-owned script is Change only when no open witness_receive
-                    // owns it. Otherwise Receive processing is the sole allocation owner:
-                    // projecting Change here would upsert the TXO as pending_witness=false
-                    // and later sum with a Receive coloring on the same outpoint.
+                    // Skip Change when an open witness_receive already owns this script.
                     if self.bdk_wallet().is_mine(txout.script_pubkey.clone())
                         && !owned_by_witness_receive
                     {
@@ -2733,5 +3223,25 @@ mod tests {
     fn display_indexer_protocol() {
         assert_eq!(IndexerProtocol::Electrum.to_string(), "Electrum");
         assert_eq!(IndexerProtocol::Esplora.to_string(), "Esplora");
+    }
+
+    #[test]
+    fn htlc_payload_hashes_bind_files_txid_and_batch() {
+        let consignments = BTreeMap::from([(s!("rgb:asset"), sha256_hex(b"consignment"))]);
+        let hashes = HtlcPayloadHashes::new(
+            b"fascia",
+            b"psbt",
+            b"escrow",
+            consignments,
+            "txid-1",
+            Some(7),
+        );
+        assert_eq!(hashes.fascia, sha256_hex(b"fascia"));
+        assert_eq!(hashes.colored_psbt, sha256_hex(b"psbt"));
+        assert_eq!(hashes.escrow, sha256_hex(b"escrow"));
+        assert_eq!(hashes.txid, sha256_hex(b"txid-1"));
+        assert_eq!(hashes.batch_transfer_idx, Some(htlc_batch_identity_hash(7)));
+        assert_ne!(hashes.fascia, hashes.colored_psbt);
+        assert_ne!(hashes.txid, htlc_batch_identity_hash(7));
     }
 }

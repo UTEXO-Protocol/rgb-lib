@@ -354,21 +354,11 @@ impl RgbWalletOpsOnline for MultisigWallet {
             self.logger(),
             "Failing batch transfer with idx {:?}...", batch_transfer_idx
         );
-        let txn = self.database().begin_transaction()?;
         let outcome =
-            self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
-        if outcome.transfers_changed {
-            self.update_backup_info(&txn, false)?;
-        }
-        txn.commit()?;
-        if outcome.transfers_changed {
-            self.trigger_auto_backup();
-        }
+            self.fail_transfers_commit(online, batch_transfer_idx, no_asset_only, skip_sync)?;
+        let changed = self.fail_transfers_finish(outcome)?;
         info!(self.logger(), "Fail transfers completed");
-        if outcome.cannot_fail {
-            return Err(Error::CannotFailBatchTransfer);
-        }
-        Ok(outcome.transfers_changed)
+        Ok(changed)
     }
 }
 

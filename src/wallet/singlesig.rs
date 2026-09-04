@@ -115,6 +115,10 @@ impl WalletOffline for Wallet {}
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 impl WalletOnline for Wallet {
+    fn heal_htlc_ops_after_failed_transfers(&self) -> Result<bool, Error> {
+        self.htlc_heal_failed_ops()
+    }
+
     fn wallet_specific_consistency_checks(&mut self, txn: &DbTxn) -> Result<(), Error> {
         self.sync_wallet(
             txn,

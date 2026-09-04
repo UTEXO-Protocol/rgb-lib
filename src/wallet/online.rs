@@ -510,6 +510,42 @@ pub trait WalletOnline: WalletOffline {
         }
     }
 
+    /// Persist SQL Failed rows without triggering VSS backup. Caller heals HTLC
+    /// metadata (if any) and backs up only after SQL and files are coherent.
+    fn fail_transfers_commit(
+        &mut self,
+        online: Online,
+        batch_transfer_idx: Option<i32>,
+        no_asset_only: bool,
+        skip_sync: bool,
+    ) -> Result<FailTransfersOutcome, Error> {
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let outcome =
+            self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
+        if outcome.transfers_changed {
+            self.update_backup_info(&txn, false)?;
+        }
+        txn.commit()?;
+        Ok(outcome)
+    }
+
+    /// Align file-backed HTLC operations with SQL Failed batches. Default: no HTLC ops.
+    fn heal_htlc_ops_after_failed_transfers(&self) -> Result<bool, Error> {
+        Ok(false)
+    }
+
+    fn fail_transfers_finish(&self, outcome: FailTransfersOutcome) -> Result<bool, Error> {
+        let healed = self.heal_htlc_ops_after_failed_transfers()?;
+        if outcome.transfers_changed || healed {
+            self.trigger_auto_backup();
+        }
+        if outcome.cannot_fail {
+            return Err(Error::CannotFailBatchTransfer);
+        }
+        Ok(outcome.transfers_changed)
+    }
+
     fn fail_transfers_impl(
         &mut self,
         txn: &DbTxn,
@@ -4789,22 +4825,11 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
             self.logger(),
             "Failing batch transfer with idx {:?}...", batch_transfer_idx
         );
-        self.check_online(online)?;
-        let txn = self.database().begin_transaction()?;
         let outcome =
-            self.fail_transfers_impl(&txn, batch_transfer_idx, no_asset_only, skip_sync)?;
-        if outcome.transfers_changed {
-            self.update_backup_info(&txn, false)?;
-        }
-        txn.commit()?;
-        if outcome.transfers_changed {
-            self.trigger_auto_backup();
-        }
+            self.fail_transfers_commit(online, batch_transfer_idx, no_asset_only, skip_sync)?;
+        let changed = self.fail_transfers_finish(outcome)?;
         info!(self.logger(), "Fail transfers completed");
-        if outcome.cannot_fail {
-            return Err(Error::CannotFailBatchTransfer);
-        }
-        Ok(outcome.transfers_changed)
+        Ok(changed)
     }
 
     /// Sync the wallet and save new colored UTXOs to the DB.

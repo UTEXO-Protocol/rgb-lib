@@ -804,6 +804,14 @@ impl RgbRuntime {
             .map_err(InternalError::from)
     }
 
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub(crate) fn stash_contains_fascia_witness(&self, fascia: &Fascia) -> bool {
+        self.stock
+            .as_stash_provider()
+            .witness(fascia.witness_id())
+            .is_ok()
+    }
+
     pub(crate) fn consume_fascia(
         &mut self,
         fascia: Fascia,

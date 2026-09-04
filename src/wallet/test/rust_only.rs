@@ -2316,7 +2316,23 @@ fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
 
     let meta_raw = std::fs::read_to_string(op_dir.join("meta.json")).unwrap();
     let meta: serde_json::Value = serde_json::from_str(&meta_raw).unwrap();
+    assert_eq!(meta["schema_version"], 1);
     assert!(meta["batch_transfer_idx"].as_i64().is_some());
+    let hashes = meta["hashes"].as_object().expect("manifest hashes");
+    for key in [
+        "fascia",
+        "colored_psbt",
+        "escrow",
+        "txid",
+        "batch_transfer_idx",
+    ] {
+        assert_eq!(
+            hashes[key].as_str().unwrap().len(),
+            64,
+            "sha256 hex for {key}"
+        );
+    }
+    assert_eq!(hashes["consignments"].as_object().unwrap().len(), 1);
 
     let transfers = party_send.list_transfers(Some(&asset.asset_id));
     let initiated = transfers
@@ -2826,12 +2842,10 @@ fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
     );
     mine(false);
 
-    let consignment_path = party
-        .wallet
-        .get_wallet_dir()
-        .join(&operation_dir)
-        .join("consignments")
-        .join(format!("{}.rgb", asset.asset_id));
+    let consignment_path = crate::wallet::rust_only::htlc_consignment_path(
+        &party.wallet.get_wallet_dir().join(&operation_dir),
+        &asset.asset_id,
+    );
     party
         .wallet
         .post_consignment_to_proxy(
@@ -3072,10 +3086,18 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
         )
         .unwrap();
 
-    // Tamper meta.operation_id to a traversal value while keeping the file under the real dir.
     let meta_path = wallet_dir.join(&operation_dir).join("meta.json");
     let mut meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
+    meta["schema_version"] = serde_json::json!(99);
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    assert!(matches!(
+        party_send.wallet.htlc_reconcile(&operation_id),
+        Err(Error::Inconsistency { details })
+            if details.contains("unsupported schema version")
+    ));
+
+    meta["schema_version"] = serde_json::json!(1);
     meta["operation_id"] = serde_json::json!("../../sentinel_outside_htlc_ops.txt");
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 
@@ -3181,6 +3203,87 @@ fn htlc_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
         HtlcOperationStatus::Applied
     );
     assert!(!op_dir.join("stash_consumed").exists());
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn htlc_apply_recovers_after_crash_between_stock_persist_and_marker() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let HtlcPrepareResult {
+        operation_id,
+        operation_dir,
+        ..
+    } = party_send
+        .wallet
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+
+    let signed_psbt = party_send.wallet.sign_psbt(psbt.to_string(), None).unwrap();
+    let finalized_psbt = party_send.wallet.finalize_psbt(signed_psbt, None).unwrap();
+    let tx = Psbt::from_str(&finalized_psbt)
+        .unwrap()
+        .extract_tx()
+        .expect("valid tx");
+    party_send.wallet.broadcast_tx(tx).unwrap();
+
+    crate::wallet::rust_only::MOCK_FAIL_AFTER_STOCK_PERSIST.with(|f| *f.borrow_mut() = true);
+    assert!(matches!(
+        party_send.wallet.htlc_apply(party_send.party_online(), &operation_id),
+        Err(Error::Internal { details }) if details.contains("stock persist before marker")
+    ));
+
+    let op_dir = party_send.wallet.get_wallet_dir().join(&operation_dir);
+    assert!(
+        !op_dir.join("stash_consumed").exists(),
+        "marker must not exist if we crashed after stock persist"
+    );
+
+    party_send
+        .wallet
+        .htlc_apply(party_send.party_online(), &operation_id)
+        .unwrap();
+    assert_eq!(
+        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
+        HtlcOperationStatus::Applied
+    );
 }
 
 /// The accept paths reach the indexer/resolver, which unwrap the online data, so they have to
@@ -3771,6 +3874,327 @@ fn htlc_abort_from_prepared_marks_failed() {
         .contract_assignments_for_outpoints(contract_id, vec![input.into()])
         .unwrap();
     assert!(!rows[0].1.is_empty());
+
+    party_send
+        .wallet
+        .htlc_abort(party_send.party_online(), &operation_id)
+        .unwrap();
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn htlc_abort_recovers_after_crash_between_fail_journal_and_sql() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let HtlcPrepareResult {
+        operation_id,
+        operation_dir,
+        ..
+    } = party_send
+        .wallet
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+
+    crate::wallet::rust_only::MOCK_FAIL_AFTER_HTLC_FAIL_JOURNAL.with(|f| *f.borrow_mut() = true);
+    assert!(matches!(
+        party_send.wallet.htlc_abort(party_send.party_online(), &operation_id),
+        Err(Error::Internal { details }) if details.contains("fail journal")
+    ));
+    let meta: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            party_send
+                .wallet
+                .get_wallet_dir()
+                .join(&operation_dir)
+                .join("meta.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta["status"], "failed");
+    assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Initiated));
+
+    party_send
+        .wallet
+        .htlc_abort(party_send.party_online(), &operation_id)
+        .unwrap();
+    assert_eq!(
+        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
+        HtlcOperationStatus::Failed
+    );
+    assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn htlc_fail_transfers_expiration_heals_meta() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+    let expiration_secs: u64 = 1;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let HtlcPrepareResult { operation_id, .. } = party_send
+        .wallet
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            Some((now().unix_timestamp() + expiration_secs as i64) as u64),
+        )
+        .unwrap();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+
+    std::thread::sleep(std::time::Duration::from_millis(
+        expiration_secs * 1000 + 2000,
+    ));
+    assert!(party_send.fail_transfers_all());
+    assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
+    assert_eq!(
+        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
+        HtlcOperationStatus::Failed
+    );
+
+    party_send
+        .wallet
+        .htlc_abort(party_send.party_online(), &operation_id)
+        .unwrap();
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn htlc_abort_refused_after_broadcast_attempt() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let HtlcPrepareResult { operation_id, .. } = party_send
+        .wallet
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+
+    party_send
+        .wallet
+        .htlc_mark_broadcast(&operation_id)
+        .unwrap();
+    let abort = party_send
+        .wallet
+        .htlc_abort(party_send.party_online(), &operation_id);
+    assert!(
+        matches!(
+            abort,
+            Err(Error::InvalidHtlcOperationStatus { ref details })
+                if details.contains("automatic rollback is refused")
+        ),
+        "got {abort:?}"
+    );
+    assert_eq!(
+        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
+        HtlcOperationStatus::Prepared
+    );
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[test]
+fn htlc_consignment_path_is_windows_safe_and_creatable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let asset_id = "rgb:lJFja2kw-h_azlEd-7CNPxwf-UsvIDhH-UD0Y1f9-8f26jLk";
+    let path = crate::wallet::rust_only::htlc_consignment_path(tmp.path(), asset_id);
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy();
+        assert!(
+            !name.contains(':'),
+            "path component must not contain ':': {name}"
+        );
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"consignment").unwrap();
+    assert!(path.is_file());
+}
+
+/// apply / get_by_txid must refuse a payload that no longer matches the manifest hashes.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn htlc_apply_rejects_tampered_fascia() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let HtlcPrepareResult {
+        operation_id,
+        operation_dir,
+        ..
+    } = party_send
+        .wallet
+        .htlc_prepare(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+
+    let fascia_path = party_send
+        .wallet
+        .get_wallet_dir()
+        .join(&operation_dir)
+        .join("fascia");
+    let mut fascia = std::fs::read(&fascia_path).unwrap();
+    fascia.push(b'x');
+    std::fs::write(&fascia_path, fascia).unwrap();
+
+    let apply = party_send
+        .wallet
+        .htlc_apply(party_send.party_online(), &operation_id);
+    assert!(
+        matches!(
+            apply,
+            Err(Error::Inconsistency { ref details }) if details.contains("fascia hash mismatch")
+        ),
+        "got {apply:?}"
+    );
+    let adopted = party_send
+        .wallet
+        .htlc_get_by_txid(&psbt.unsigned_tx.compute_txid().to_string());
+    assert!(
+        matches!(
+            adopted,
+            Err(Error::Inconsistency { ref details }) if details.contains("fascia hash mismatch")
+        ),
+        "got {adopted:?}"
+    );
 }
 
 /// A second live batch for the same txid would reserve the same inputs twice and leave the
@@ -3815,7 +4239,7 @@ fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
     // Preparing leaves the stash untouched and the coloring uses a static blinding, so the same
     // PSBT prepared twice commits to the same witness txid.
     let mut retried_psbt = psbt.clone();
-    party_send
+    let HtlcPrepareResult { operation_id, .. } = party_send
         .wallet
         .htlc_prepare(
             &mut psbt,
@@ -3827,18 +4251,25 @@ fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
         .unwrap();
     let txid = psbt.unsigned_tx.compute_txid().to_string();
 
-    let result = party_send.wallet.htlc_prepare(
+    let adopted = party_send.wallet.htlc_get_by_txid(&txid).unwrap();
+    assert_eq!(adopted.operation_id, operation_id);
+    assert_eq!(adopted.txid, txid);
+    assert_eq!(adopted.status, HtlcOperationStatus::Prepared);
+    assert_eq!(adopted.colored_psbt, psbt.to_string());
+    let retried = party_send.wallet.htlc_prepare(
         &mut retried_psbt,
-        coloring_info,
+        coloring_info.clone(),
         vec![input],
         MIN_CONFIRMATIONS,
         None,
     );
-    assert_eq!(retried_psbt.unsigned_tx.compute_txid().to_string(), txid);
     assert_matches!(
-        result,
+        retried,
         Err(Error::BatchTransferAlreadyExists { txid: ref t, .. }) if *t == txid
     );
+    let adopted_again = party_send.wallet.htlc_get_by_txid(&txid).unwrap();
+    assert_eq!(adopted_again.operation_id, operation_id);
+    assert_eq!(retried_psbt.unsigned_tx.compute_txid().to_string(), txid);
 }
 
 /// `htlc_apply` must not consume RGB state until the indexer can see the witness TX, otherwise
@@ -3969,6 +4400,71 @@ fn consume_transfer_fascia_refused_before_broadcast() {
     assert!(party_send.fail_transfers_single(batch_transfer_idx));
 }
 
+/// Missing or unreadable unsigned PSBT is operation corruption: consume must not advance stock or SQL.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn consume_transfer_fascia_rejects_missing_unsigned_psbt() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let ColorPrepareResult {
+        batch_transfer_idx, ..
+    } = party_send
+        .wallet
+        .color_psbt_and_prepare_consume(&mut psbt, coloring_info, MIN_CONFIRMATIONS, None)
+        .unwrap();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+    let transfer_dir = party_send.wallet.get_transfer_dir(&txid);
+    let psbt_path = transfer_dir.join("unsigned.psbt");
+    std::fs::write(&psbt_path, b"not-a-psbt").unwrap();
+    assert!(matches!(
+        party_send
+            .wallet
+            .consume_transfer_fascia(party_send.party_online(), batch_transfer_idx),
+        Err(Error::Inconsistency { details })
+            if details.contains("unsigned PSBT unreadable")
+    ));
+    std::fs::remove_file(&psbt_path).unwrap();
+    assert!(matches!(
+        party_send
+            .wallet
+            .consume_transfer_fascia(party_send.party_online(), batch_transfer_idx),
+        Err(Error::Inconsistency { details })
+            if details.contains("unsigned PSBT missing")
+    ));
+    assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Initiated));
+    assert!(!transfer_dir.join("stash_consumed").exists());
+    assert!(party_send.fail_transfers_single(batch_transfer_idx));
+}
+
 /// `consume_transfer_fascia` is only for batches created by `color_psbt_*_and_prepare_consume`.
 /// A `send_begin` batch writes fascia to the same transfer dir but must still go through `send_end`.
 #[cfg(feature = "electrum")]
@@ -4056,12 +4552,7 @@ fn htlc_prepare_apply_round_trip() {
         .unwrap();
 
     let op_dir = party_send.wallet.get_wallet_dir().join(&operation_dir);
-    let consignment_path = std::fs::read_dir(op_dir.join("consignments"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+    let consignment_path = crate::wallet::rust_only::htlc_consignment_path(&op_dir, &asset.asset_id);
     let txid = psbt.unsigned_tx.compute_txid().to_string();
     party_send
         .wallet
