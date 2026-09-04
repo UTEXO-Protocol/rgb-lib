@@ -327,11 +327,28 @@ interface PsbtOperationStatus {
   Settled();
 };
 
+[Enum]
+interface PsbtBroadcastState {
+  NotAttempted();
+  Attempted();
+  Observed();
+  Ambiguous();
+};
+
 dictionary PsbtOpPrepareResult {
   string operation_id;
   string colored_psbt;
-  // Wallet-relative directory with fascia.json, consignments/, foreign_inputs.json, meta.json
+  // Wallet-relative directory with fascia, colored.psbt, consignments/, foreign_inputs.json, meta.json
   string operation_dir;
+};
+
+dictionary PsbtOperation {
+  string operation_id;
+  string colored_psbt;
+  string operation_dir;
+  PsbtOperationStatus status;
+  PsbtBroadcastState broadcast;
+  string txid;
 };
 
 dictionary OutpointAssignments {
@@ -994,6 +1011,8 @@ interface Wallet {
   // High-level HTLC color lifecycle (final vout output_map only).
   // prepare → sign/broadcast → apply. abort if never broadcast. reconcile for status.
   // Payloads are file-backed under operation_dir (not raw consignment bytes).
+  // psbt_op_mark_broadcast before broadcasting: abort/fail_transfers then wait for
+  // expiration_timestamp (null = 24h) before the indexer may release the batch.
   [Throws=RgbLibError]
   PsbtOpPrepareResult psbt_op_prepare(
     string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints,
@@ -1007,6 +1026,12 @@ interface Wallet {
 
   [Throws=RgbLibError]
   PsbtOperationStatus psbt_op_reconcile(string operation_id);
+
+  [Throws=RgbLibError]
+  void psbt_op_mark_broadcast(string operation_id);
+
+  [Throws=RgbLibError]
+  PsbtOperation psbt_op_by_txid(string txid);
 
   [Throws=RgbLibError]
   sequence<OutpointAssignments> contract_assignments_for_outpoints(
