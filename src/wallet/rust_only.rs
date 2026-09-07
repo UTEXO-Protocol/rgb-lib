@@ -62,6 +62,8 @@ fn persist_durable_replace(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
     fsync_parent_dir(path)
 }
 #[cfg(any(feature = "electrum", feature = "esplora"))]
+/// Expiration applied by `psbt_op_prepare` when the caller gives none.
+pub const PSBT_OP_DEFAULT_EXPIRATION_SECS: u64 = 24 * 60 * 60;
 const PSBT_OP_ID_LEN: usize = 32;
 
 #[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
@@ -1376,6 +1378,10 @@ impl Wallet {
         expiration_timestamp: Option<u64>,
     ) -> Result<PsbtOpPrepareResult, Error> {
         info!(self.logger(), "Preparing HTLC color operation...");
+        let expiration_timestamp =
+            Some(expiration_timestamp.unwrap_or_else(|| {
+                now().unix_timestamp() as u64 + PSBT_OP_DEFAULT_EXPIRATION_SECS
+            }));
         let (runtime, override_set) =
             self.prepare_color_psbt_for_outpoints(psbt, &coloring_info, input_outpoints)?;
         let (fascia, asset_beneficiaries) = self.color_psbt_with_prevouts_runtime(

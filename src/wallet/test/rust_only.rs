@@ -2296,6 +2296,13 @@ fn psbt_op_prepare_writes_op_dir_for_wallet_owned_input() {
     assert!(!operation_id.is_empty());
     assert_eq!(colored_psbt, psbt.to_string());
     assert!(operation_dir.starts_with("psbt_ops/"));
+    let witness_txid = psbt.unsigned_tx.compute_txid().to_string();
+    let expiration = party_send.db_batch_transfers_filtered(&witness_txid)[0]
+        .expiration
+        .unwrap();
+    let default_expiration =
+        now().unix_timestamp() + crate::wallet::rust_only::PSBT_OP_DEFAULT_EXPIRATION_SECS as i64;
+    assert!((default_expiration - expiration).abs() < 60);
     // External recipient: no new wallet TXO for the RGB destination.
     assert_eq!(party_send.db_txos().len(), txo_count_before);
 
