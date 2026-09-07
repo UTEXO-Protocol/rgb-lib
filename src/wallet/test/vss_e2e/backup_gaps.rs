@@ -168,11 +168,11 @@ fn inconsistent_restored_backup_returns_dedicated_error() {
     cleanup.disarm();
 }
 
-/// Color-consume Initiated accounting + `htlc_ops/` must round-trip through VSS backup/restore.
+/// Color-consume Initiated accounting + `psbt_ops/` must round-trip through VSS backup/restore.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn color_consume_and_htlc_ops_survive_vss_restore() {
+fn color_consume_and_psbt_ops_survive_vss_restore() {
     initialize();
 
     let rt = tokio_runtime();
@@ -222,13 +222,13 @@ fn color_consume_and_htlc_ops_survive_vss_restore() {
         nonce: None,
     };
 
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -248,12 +248,12 @@ fn color_consume_and_htlc_ops_survive_vss_restore() {
     assert!(op_dir_before.join("fascia").exists());
 
     let (signing_key, store_id) =
-        generate_signing_key_and_store_id("qa_htlc_color_consume_restore");
+        generate_signing_key_and_store_id("qa_psbt_op_color_consume_restore");
     let config = VssBackupConfig::new(vss_server_url(), store_id, signing_key);
     let mut cleanup = VssBackupDeleteGuard::new(config.clone());
     let client = VssBackupClient::new(config.clone()).expect("VssBackupClient new");
     rt.block_on(party_send.wallet.vss_backup(&client))
-        .expect("vss_backup after htlc_prepare");
+        .expect("vss_backup after psbt_op_prepare");
 
     let restore_tmp = tempfile::tempdir().expect("tempdir");
     let restored_dir = rt
@@ -287,15 +287,15 @@ fn color_consume_and_htlc_ops_survive_vss_restore() {
     let restored_op = restored_dir.join(&operation_dir);
     assert!(
         restored_op.join("meta.json").exists(),
-        "htlc_ops meta must be in VSS backup"
+        "psbt_ops meta must be in VSS backup"
     );
     assert!(
         restored_op.join("fascia").exists(),
-        "htlc_ops fascia must be in VSS backup"
+        "psbt_ops fascia must be in VSS backup"
     );
     assert_eq!(
-        wallet_r.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Prepared
+        wallet_r.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Prepared
     );
 
     rt.block_on(client.delete_backup()).expect("delete_backup");

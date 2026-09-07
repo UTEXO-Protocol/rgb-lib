@@ -613,13 +613,13 @@ fn color_psbt_uda() {
     assert_eq!(seal.vout.into_u32(), 0);
 }
 
-/// UniFFI `htlc_prepare` shares `color_psbt_with_prevouts_runtime`. A known UDA whose selected
+/// UniFFI `psbt_op_prepare` shares `color_psbt_with_prevouts_runtime`. A known UDA whose selected
 /// inputs do not carry the token used to panic on `uda_state.unwrap()` before the insufficient
 /// allocation check.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_prepare_uda_missing_input_assignment_returns_coloring_error() {
+fn psbt_op_prepare_uda_missing_input_assignment_returns_coloring_error() {
     initialize();
 
     let amt_sat = 500;
@@ -660,7 +660,7 @@ fn htlc_prepare_uda_missing_input_assignment_returns_coloring_error() {
         .0 as u32;
     let coloring_info = coloring_info_for(&asset.asset_id, HashMap::from([(vout, 1)]), blinding);
 
-    let result = party_send.wallet.htlc_prepare(
+    let result = party_send.wallet.psbt_op_prepare(
         &mut psbt,
         coloring_info,
         vec![vanilla],
@@ -674,7 +674,7 @@ fn htlc_prepare_uda_missing_input_assignment_returns_coloring_error() {
                 if details.contains("greater than available")
                     || details.contains("no token assignment")
         ),
-        "htlc_prepare must return a coloring error, not panic; got {result:?}"
+        "psbt_op_prepare must return a coloring error, not panic; got {result:?}"
     );
 }
 
@@ -2243,7 +2243,7 @@ fn color_psbt_and_prepare_consume_bulk_fail_transfers_spares_broadcast_expired_b
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
+fn psbt_op_prepare_writes_op_dir_for_wallet_owned_input() {
     initialize();
 
     let amt_sat = 500;
@@ -2278,13 +2278,13 @@ fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
 
     let txo_count_before = party_send.db_txos().len();
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         colored_psbt,
         operation_dir,
     } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -2295,7 +2295,7 @@ fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
 
     assert!(!operation_id.is_empty());
     assert_eq!(colored_psbt, psbt.to_string());
-    assert!(operation_dir.starts_with("htlc_ops/"));
+    assert!(operation_dir.starts_with("psbt_ops/"));
     // External recipient: no new wallet TXO for the RGB destination.
     assert_eq!(party_send.db_txos().len(), txo_count_before);
 
@@ -2303,14 +2303,14 @@ fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
     assert!(op_dir.join("meta.json").exists());
     assert!(op_dir.join("fascia").exists());
     assert!(op_dir.join("colored.psbt").exists());
-    assert!(op_dir.join("escrow.json").exists());
+    assert!(op_dir.join("foreign_inputs.json").exists());
     let consignment_count = std::fs::read_dir(op_dir.join("consignments"))
         .unwrap()
         .count();
     assert_eq!(consignment_count, 1);
 
     // Wallet-owned RGB input → empty escrow log (see foreign-escrow test for non-empty entries).
-    let escrow_raw = std::fs::read_to_string(op_dir.join("escrow.json")).unwrap();
+    let escrow_raw = std::fs::read_to_string(op_dir.join("foreign_inputs.json")).unwrap();
     let escrow: serde_json::Value = serde_json::from_str(&escrow_raw).unwrap();
     assert_eq!(escrow["entries"].as_array().unwrap().len(), 0);
 
@@ -2332,19 +2332,19 @@ fn htlc_prepare_writes_op_dir_for_wallet_owned_input() {
     assert!(!colorings.iter().any(|c| c.r#type == ColoringType::Change));
 
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Prepared
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Prepared
     );
 }
 
 /// Central HTLC path: spend RGB sitting on a foreign escrow outpoint (not a wallet TXO),
 /// claim onto a plain wallet-owned script (no `witness_receive`), and assert SQL accounting +
-/// escrow.json. The issue #90 claim destination is covered by
-/// `htlc_foreign_escrow_witness_receive_apply_refresh_balance`.
+/// foreign_inputs.json. The issue #90 claim destination is covered by
+/// `psbt_op_foreign_escrow_witness_receive_apply_refresh_balance`.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_prepare_foreign_escrow_input_persists_claim_change() {
+fn psbt_op_prepare_foreign_escrow_input_persists_claim_change() {
     initialize();
 
     let amt_sat = 500;
@@ -2492,13 +2492,13 @@ fn htlc_prepare_foreign_escrow_input_persists_claim_change() {
     );
 
     let txo_count_before = party.db_txos().len();
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut claim_psbt,
             claim_coloring,
             vec![escrow_outpoint],
@@ -2508,13 +2508,13 @@ fn htlc_prepare_foreign_escrow_input_persists_claim_change() {
         .unwrap();
 
     let op_dir = party.wallet.get_wallet_dir().join(&operation_dir);
-    let escrow_raw = std::fs::read_to_string(op_dir.join("escrow.json")).unwrap();
+    let escrow_raw = std::fs::read_to_string(op_dir.join("foreign_inputs.json")).unwrap();
     let escrow: serde_json::Value = serde_json::from_str(&escrow_raw).unwrap();
     let entries = escrow["entries"].as_array().unwrap();
     assert_eq!(
         entries.len(),
         1,
-        "foreign input must be logged in escrow.json"
+        "foreign input must be logged in foreign_inputs.json"
     );
     assert_eq!(entries[0]["asset_id"], asset.asset_id);
     assert_eq!(entries[0]["outpoint"]["txid"], escrow_txid.to_string());
@@ -2551,15 +2551,17 @@ fn htlc_prepare_foreign_escrow_input_persists_claim_change() {
     assert_eq!(change.assignment, Assignment::Fungible(AMOUNT));
 
     // the claim tx is not broadcast: apply must refuse so RGB state stays abortable
-    let apply = party.wallet.htlc_apply(party.party_online(), &operation_id);
+    let apply = party
+        .wallet
+        .psbt_op_apply(party.party_online(), &operation_id);
     assert!(matches!(
         apply,
-        Err(Error::InvalidHtlcOperationStatus { details })
+        Err(Error::InvalidPsbtOperationStatus { details })
             if details.contains("not known to the indexer")
     ));
     assert_eq!(
-        party.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Prepared
+        party.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Prepared
     );
 
     // The claim batch is WaitingConfirmations, so its Change lands in `future` only. Asserting the
@@ -2581,7 +2583,7 @@ fn htlc_prepare_foreign_escrow_input_persists_claim_change() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
+fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
     initialize();
 
     let amt_sat = 500;
@@ -2738,13 +2740,13 @@ fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
         blinding_claim,
     );
 
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut claim_psbt,
             claim_coloring,
             vec![escrow_outpoint],
@@ -2818,11 +2820,11 @@ fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
     party.wallet.broadcast_tx(tx).unwrap();
     party
         .wallet
-        .htlc_apply(party.party_online(), &operation_id)
+        .psbt_op_apply(party.party_online(), &operation_id)
         .unwrap();
     assert_eq!(
-        party.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Applied
+        party.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Applied
     );
     mine(false);
 
@@ -2845,7 +2847,7 @@ fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
 
     // Open `witness_receive` has no asset_id yet; `refresh(Some(asset_id))` would skip it.
     // Drive the invoice like `send_to_oneself` (refresh, not `fetch_and_accept`: that API
-    // only writes the stash, which `htlc_apply` already did).
+    // only writes the stash, which `psbt_op_apply` already did).
     party.wait_for_refresh_raw(None, Some(&[receive_data.batch_transfer_idx]));
     mine(false);
     party.wait_for_refresh(None);
@@ -2895,7 +2897,7 @@ fn htlc_foreign_escrow_witness_receive_apply_refresh_balance() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_status_errors_for_unknown_and_invalid_transition() {
+fn psbt_op_status_errors_for_unknown_and_invalid_transition() {
     initialize();
 
     let amt_sat = 500;
@@ -2909,22 +2911,22 @@ fn htlc_status_errors_for_unknown_and_invalid_transition() {
 
     // Too short / not 32 hex → rejected before path join.
     assert!(matches!(
-        party_send.wallet.htlc_reconcile("deadbeefdeadbeef"),
-        Err(Error::HtlcOperationNotFound { .. })
+        party_send.wallet.psbt_op_reconcile("deadbeefdeadbeef"),
+        Err(Error::PsbtOperationNotFound { .. })
     ));
     assert!(matches!(
         party_send
             .wallet
-            .htlc_apply(party_send.party_online(), "../escape"),
-        Err(Error::HtlcOperationNotFound { .. })
+            .psbt_op_apply(party_send.party_online(), "../escape"),
+        Err(Error::PsbtOperationNotFound { .. })
     ));
     // Valid format, unknown id.
     assert!(matches!(
-        party_send.wallet.htlc_apply(
+        party_send.wallet.psbt_op_apply(
             party_send.party_online(),
             "0123456789abcdef0123456789abcdef",
         ),
-        Err(Error::HtlcOperationNotFound { .. })
+        Err(Error::PsbtOperationNotFound { .. })
     ));
 
     let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
@@ -2948,9 +2950,9 @@ fn htlc_status_errors_for_unknown_and_invalid_transition() {
         .0 as u32;
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
-    let HtlcPrepareResult { operation_id, .. } = party_send
+    let PsbtOpPrepareResult { operation_id, .. } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -2969,20 +2971,20 @@ fn htlc_status_errors_for_unknown_and_invalid_transition() {
     party_send.wallet.broadcast_tx(tx).unwrap();
     party_send
         .wallet
-        .htlc_apply(party_send.party_online(), &operation_id)
+        .psbt_op_apply(party_send.party_online(), &operation_id)
         .unwrap();
     assert!(matches!(
         party_send
             .wallet
-            .htlc_apply(party_send.party_online(), &operation_id),
-        Err(Error::InvalidHtlcOperationStatus { .. })
+            .psbt_op_apply(party_send.party_online(), &operation_id),
+        Err(Error::InvalidPsbtOperationStatus { .. })
     ));
 }
 
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
+fn psbt_op_rejects_path_traversal_operation_id_and_tampered_meta() {
     initialize();
 
     let amt_sat = 500;
@@ -2995,12 +2997,12 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
     let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
 
     let wallet_dir = party_send.wallet.get_wallet_dir();
-    let sentinel = wallet_dir.join("sentinel_outside_htlc_ops.txt");
+    let sentinel = wallet_dir.join("sentinel_outside_psbt_ops.txt");
     std::fs::write(&sentinel, b"untouched").unwrap();
 
     let online = party_send.party_online();
     for bad_id in [
-        "../sentinel_outside_htlc_ops.txt",
+        "../sentinel_outside_psbt_ops.txt",
         "..",
         "abc",
         "0123456789ABCDEF0123456789abcdef", // uppercase rejected
@@ -3010,22 +3012,22 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
             matches!(
                 party_send
                     .wallet
-                    .htlc_apply(party_send.party_online(), bad_id),
-                Err(Error::HtlcOperationNotFound { .. })
+                    .psbt_op_apply(party_send.party_online(), bad_id),
+                Err(Error::PsbtOperationNotFound { .. })
             ),
             "expected rejection for {bad_id:?}"
         );
         assert!(
             matches!(
-                party_send.wallet.htlc_reconcile(bad_id),
-                Err(Error::HtlcOperationNotFound { .. })
+                party_send.wallet.psbt_op_reconcile(bad_id),
+                Err(Error::PsbtOperationNotFound { .. })
             ),
             "expected reconcile rejection for {bad_id:?}"
         );
         assert!(
             matches!(
-                party_send.wallet.htlc_abort(online, bad_id),
-                Err(Error::HtlcOperationNotFound { .. })
+                party_send.wallet.psbt_op_abort(online, bad_id),
+                Err(Error::PsbtOperationNotFound { .. })
             ),
             "expected abort rejection for {bad_id:?}"
         );
@@ -3033,7 +3035,7 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
     assert_eq!(
         std::fs::read(&sentinel).unwrap(),
         b"untouched",
-        "traversal must not touch files outside htlc_ops"
+        "traversal must not touch files outside psbt_ops"
     );
 
     let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
@@ -3057,13 +3059,13 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
         .0 as u32;
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -3076,13 +3078,13 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
     let meta_path = wallet_dir.join(&operation_dir).join("meta.json");
     let mut meta: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&meta_path).unwrap()).unwrap();
-    meta["operation_id"] = serde_json::json!("../../sentinel_outside_htlc_ops.txt");
+    meta["operation_id"] = serde_json::json!("../../sentinel_outside_psbt_ops.txt");
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap()).unwrap();
 
     assert!(matches!(
         party_send
             .wallet
-            .htlc_apply(party_send.party_online(), &operation_id),
+            .psbt_op_apply(party_send.party_online(), &operation_id),
         Err(Error::Internal { .. })
     ));
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"untouched");
@@ -3091,7 +3093,7 @@ fn htlc_rejects_path_traversal_operation_id_and_tampered_meta() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
+fn psbt_op_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
     initialize();
 
     let amt_sat = 500;
@@ -3124,13 +3126,13 @@ fn htlc_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
         .0 as u32;
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -3149,7 +3151,7 @@ fn htlc_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
 
     crate::wallet::rust_only::MOCK_FAIL_AFTER_STASH_CONSUME.with(|f| *f.borrow_mut() = true);
     assert!(matches!(
-        party_send.wallet.htlc_apply(party_send.party_online(),&operation_id),
+        party_send.wallet.psbt_op_apply(party_send.party_online(),&operation_id),
         Err(Error::Internal { details }) if details.contains("mock failure after HTLC stash consume")
     ));
 
@@ -3166,19 +3168,19 @@ fn htlc_apply_recovers_after_crash_between_stash_consume_and_db_commit() {
     let txid = psbt.unsigned_tx.compute_txid().to_string();
     let online = party_send.party_online();
     assert!(matches!(
-        party_send.wallet.htlc_abort(online, &operation_id),
-        Err(Error::InvalidHtlcOperationStatus { details }) if details.contains("already consumed")
+        party_send.wallet.psbt_op_abort(online, &operation_id),
+        Err(Error::InvalidPsbtOperationStatus { details }) if details.contains("already consumed")
     ));
     assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Initiated));
 
     // Retry finishes without re-consuming.
     party_send
         .wallet
-        .htlc_apply(party_send.party_online(), &operation_id)
+        .psbt_op_apply(party_send.party_online(), &operation_id)
         .unwrap();
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Applied
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Applied
     );
     assert!(!op_dir.join("stash_consumed").exists());
 }
@@ -3708,7 +3710,7 @@ fn color_psbt_persist_updates_backup_info() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_abort_from_prepared_marks_failed() {
+fn psbt_op_abort_from_prepared_marks_failed() {
     initialize();
 
     let amt_sat = 500;
@@ -3743,9 +3745,9 @@ fn htlc_abort_from_prepared_marks_failed() {
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
 
-    let HtlcPrepareResult { operation_id, .. } = party_send
+    let PsbtOpPrepareResult { operation_id, .. } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -3758,11 +3760,14 @@ fn htlc_abort_from_prepared_marks_failed() {
     assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Initiated));
 
     let online = party_send.party_online();
-    party_send.wallet.htlc_abort(online, &operation_id).unwrap();
+    party_send
+        .wallet
+        .psbt_op_abort(online, &operation_id)
+        .unwrap();
 
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Failed
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Failed
     );
     assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
 
@@ -3778,7 +3783,7 @@ fn htlc_abort_from_prepared_marks_failed() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
+fn psbt_op_prepare_rejects_second_live_batch_for_same_txid() {
     initialize();
 
     let amt_sat = 500;
@@ -3817,7 +3822,7 @@ fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
     let mut retried_psbt = psbt.clone();
     party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info.clone(),
             vec![input],
@@ -3827,7 +3832,7 @@ fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
         .unwrap();
     let txid = psbt.unsigned_tx.compute_txid().to_string();
 
-    let result = party_send.wallet.htlc_prepare(
+    let result = party_send.wallet.psbt_op_prepare(
         &mut retried_psbt,
         coloring_info,
         vec![input],
@@ -3841,12 +3846,12 @@ fn htlc_prepare_rejects_second_live_batch_for_same_txid() {
     );
 }
 
-/// `htlc_apply` must not consume RGB state until the indexer can see the witness TX, otherwise
+/// `psbt_op_apply` must not consume RGB state until the indexer can see the witness TX, otherwise
 /// there is no safe abort path.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_apply_refused_before_broadcast() {
+fn psbt_op_apply_refused_before_broadcast() {
     initialize();
 
     let amt_sat = 500;
@@ -3879,9 +3884,9 @@ fn htlc_apply_refused_before_broadcast() {
         .0 as u32;
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
-    let HtlcPrepareResult { operation_id, .. } = party_send
+    let PsbtOpPrepareResult { operation_id, .. } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -3892,23 +3897,23 @@ fn htlc_apply_refused_before_broadcast() {
 
     let online = party_send.party_online();
     assert!(matches!(
-        party_send.wallet.htlc_apply(online, &operation_id),
-        Err(Error::InvalidHtlcOperationStatus { details })
+        party_send.wallet.psbt_op_apply(online, &operation_id),
+        Err(Error::InvalidPsbtOperationStatus { details })
             if details.contains("not known to the indexer")
     ));
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Prepared
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Prepared
     );
 
     // abort is still the way out: the stash was never consumed
     party_send
         .wallet
-        .htlc_abort(party_send.party_online(), &operation_id)
+        .psbt_op_abort(party_send.party_online(), &operation_id)
         .unwrap();
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Failed
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Failed
     );
 }
 
@@ -4006,7 +4011,7 @@ fn consume_transfer_fascia_rejects_send_begin_batch() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn htlc_prepare_apply_round_trip() {
+fn psbt_op_prepare_apply_round_trip() {
     initialize();
 
     let amt_sat = 500;
@@ -4040,13 +4045,13 @@ fn htlc_prepare_apply_round_trip() {
     let coloring_info =
         coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
 
-    let HtlcPrepareResult {
+    let PsbtOpPrepareResult {
         operation_id,
         operation_dir,
         ..
     } = party_send
         .wallet
-        .htlc_prepare(
+        .psbt_op_prepare(
             &mut psbt,
             coloring_info,
             vec![input],
@@ -4084,11 +4089,11 @@ fn htlc_prepare_apply_round_trip() {
 
     party_send
         .wallet
-        .htlc_apply(party_send.party_online(), &operation_id)
+        .psbt_op_apply(party_send.party_online(), &operation_id)
         .unwrap();
     assert_eq!(
-        party_send.wallet.htlc_reconcile(&operation_id).unwrap(),
-        HtlcOperationStatus::Applied
+        party_send.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Applied
     );
 
     let recv_online = recv_party.party_online();

@@ -56,7 +56,7 @@ interface RgbLibError {
   FailedIssuance(string details);
   FileAlreadyExists(string path);
   FingerprintMismatch();
-  HtlcOperationNotFound(string operation_id);
+  PsbtOperationNotFound(string operation_id);
   IO(string details);
   Inconsistency(string details);
   Indexer(string details);
@@ -84,7 +84,7 @@ interface RgbLibError {
   InvalidFeeRate(string details);
   InvalidFilePath(string file_path);
   InvalidFingerprint();
-  InvalidHtlcOperationStatus(string details);
+  InvalidPsbtOperationStatus(string details);
   InvalidIndexer(string details);
   InvalidInvoice(string details);
   InvalidMnemonic(string details);
@@ -320,17 +320,17 @@ dictionary ColoringInfo {
 };
 
 [Enum]
-interface HtlcOperationStatus {
+interface PsbtOperationStatus {
   Prepared();
   Applied();
   Failed();
   Settled();
 };
 
-dictionary HtlcPrepareResult {
+dictionary PsbtOpPrepareResult {
   string operation_id;
   string colored_psbt;
-  // Wallet-relative directory with fascia.json, consignments/, escrow.json, meta.json
+  // Wallet-relative directory with fascia.json, consignments/, foreign_inputs.json, meta.json
   string operation_dir;
 };
 
@@ -995,18 +995,18 @@ interface Wallet {
   // prepare → sign/broadcast → apply. abort if never broadcast. reconcile for status.
   // Payloads are file-backed under operation_dir (not raw consignment bytes).
   [Throws=RgbLibError]
-  HtlcPrepareResult htlc_prepare(
+  PsbtOpPrepareResult psbt_op_prepare(
     string psbt, ColoringInfo coloring_info, sequence<Outpoint> input_outpoints,
     u8 min_confirmations, u64? expiration_timestamp);
 
   [Throws=RgbLibError]
-  void htlc_apply(Online online, string operation_id);
+  void psbt_op_apply(Online online, string operation_id);
 
   [Throws=RgbLibError]
-  void htlc_abort(Online online, string operation_id);
+  void psbt_op_abort(Online online, string operation_id);
 
   [Throws=RgbLibError]
-  HtlcOperationStatus htlc_reconcile(string operation_id);
+  PsbtOperationStatus psbt_op_reconcile(string operation_id);
 
   [Throws=RgbLibError]
   sequence<OutpointAssignments> contract_assignments_for_outpoints(

@@ -170,7 +170,7 @@ pub struct AssetColoringInfo {
     pub static_blinding: Option<u64>,
 }
 
-/// FFI coloring info for `htlc_prepare` (final PSBT vout indices).
+/// FFI coloring info for `psbt_op_prepare` (final PSBT vout indices).
 pub struct ColoringInfo {
     pub assets: Vec<AssetColoringInfo>,
     pub static_blinding: Option<u64>,
@@ -178,26 +178,26 @@ pub struct ColoringInfo {
 }
 
 /// Status of a file-backed HTLC coloring operation.
-pub enum HtlcOperationStatus {
+pub enum PsbtOperationStatus {
     Prepared,
     Applied,
     Failed,
     Settled,
 }
 
-impl From<rgb_lib::wallet::rust_only::HtlcOperationStatus> for HtlcOperationStatus {
-    fn from(s: rgb_lib::wallet::rust_only::HtlcOperationStatus) -> Self {
+impl From<rgb_lib::wallet::rust_only::PsbtOperationStatus> for PsbtOperationStatus {
+    fn from(s: rgb_lib::wallet::rust_only::PsbtOperationStatus) -> Self {
         match s {
-            rgb_lib::wallet::rust_only::HtlcOperationStatus::Prepared => Self::Prepared,
-            rgb_lib::wallet::rust_only::HtlcOperationStatus::Applied => Self::Applied,
-            rgb_lib::wallet::rust_only::HtlcOperationStatus::Failed => Self::Failed,
-            rgb_lib::wallet::rust_only::HtlcOperationStatus::Settled => Self::Settled,
+            rgb_lib::wallet::rust_only::PsbtOperationStatus::Prepared => Self::Prepared,
+            rgb_lib::wallet::rust_only::PsbtOperationStatus::Applied => Self::Applied,
+            rgb_lib::wallet::rust_only::PsbtOperationStatus::Failed => Self::Failed,
+            rgb_lib::wallet::rust_only::PsbtOperationStatus::Settled => Self::Settled,
         }
     }
 }
 
-/// Result of `htlc_prepare`: opaque operation ID + colored PSBT + file-backed payload dir.
-pub struct HtlcPrepareResult {
+/// Result of `psbt_op_prepare`: opaque operation ID + colored PSBT + file-backed payload dir.
+pub struct PsbtOpPrepareResult {
     pub operation_id: String,
     pub colored_psbt: String,
     pub operation_dir: String,
@@ -1253,41 +1253,41 @@ impl Wallet {
         )
     }
 
-    fn htlc_prepare(
+    fn psbt_op_prepare(
         &self,
         psbt: String,
         coloring_info: ColoringInfo,
         input_outpoints: Vec<Outpoint>,
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
-    ) -> Result<HtlcPrepareResult, RgbLibError> {
+    ) -> Result<PsbtOpPrepareResult, RgbLibError> {
         let mut psbt = Psbt::from_str(&psbt)?;
         let coloring = to_rgb_coloring_info(coloring_info)?;
         let input_outpoints = to_bitcoin_outpoints(input_outpoints)?;
-        let result = self._get_wallet().htlc_prepare(
+        let result = self._get_wallet().psbt_op_prepare(
             &mut psbt,
             coloring,
             input_outpoints,
             min_confirmations,
             expiration_timestamp,
         )?;
-        Ok(HtlcPrepareResult {
+        Ok(PsbtOpPrepareResult {
             operation_id: result.operation_id,
             colored_psbt: result.colored_psbt,
             operation_dir: result.operation_dir,
         })
     }
 
-    fn htlc_apply(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
-        self._get_wallet().htlc_apply(online, &operation_id)
+    fn psbt_op_apply(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().psbt_op_apply(online, &operation_id)
     }
 
-    fn htlc_abort(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
-        self._get_wallet().htlc_abort(online, &operation_id)
+    fn psbt_op_abort(&self, online: Online, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().psbt_op_abort(online, &operation_id)
     }
 
-    fn htlc_reconcile(&self, operation_id: String) -> Result<HtlcOperationStatus, RgbLibError> {
-        Ok(self._get_wallet().htlc_reconcile(&operation_id)?.into())
+    fn psbt_op_reconcile(&self, operation_id: String) -> Result<PsbtOperationStatus, RgbLibError> {
+        Ok(self._get_wallet().psbt_op_reconcile(&operation_id)?.into())
     }
 
     fn contract_assignments_for_outpoints(

@@ -13,15 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_OPS_DIR: &str = "htlc_ops";
+const PSBT_OPS_DIR: &str = "psbt_ops";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_META_FILE: &str = "meta.json";
+const PSBT_OP_META_FILE: &str = "meta.json";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_ESCROW_FILE: &str = "escrow.json";
+const PSBT_OP_FOREIGN_INPUTS_FILE: &str = "foreign_inputs.json";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_COLORED_PSBT_FILE: &str = "colored.psbt";
+const PSBT_OP_COLORED_PSBT_FILE: &str = "colored.psbt";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_CONSIGNMENTS_DIR: &str = "consignments";
+const PSBT_OP_CONSIGNMENTS_DIR: &str = "consignments";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const STASH_CONSUMED_FILE: &str = "stash_consumed";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -62,7 +62,7 @@ fn persist_durable_replace(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
     fsync_parent_dir(path)
 }
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const HTLC_OPERATION_ID_LEN: usize = 32;
+const PSBT_OP_ID_LEN: usize = 32;
 
 #[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
 thread_local! {
@@ -118,7 +118,7 @@ pub struct ColorPrepareResult {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HtlcOperationStatus {
+pub enum PsbtOperationStatus {
     /// Colored PSBT + payloads on disk; RGB stash not updated.
     Prepared,
     /// Fascia consumed into the RGB stash after broadcast.
@@ -129,11 +129,11 @@ pub enum HtlcOperationStatus {
     Settled,
 }
 
-/// Result of [`Wallet::htlc_prepare`].
+/// Result of [`Wallet::psbt_op_prepare`].
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone)]
-pub struct HtlcPrepareResult {
-    /// Opaque operation ID (directory name under `htlc_ops/`).
+pub struct PsbtOpPrepareResult {
+    /// Opaque operation ID (directory name under `psbt_ops/`).
     pub operation_id: String,
     /// Colored unsigned PSBT (caller signs and broadcasts).
     pub colored_psbt: String,
@@ -155,9 +155,9 @@ pub struct ExpectedTransfer {
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct HtlcOpMeta {
+struct PsbtOpMeta {
     operation_id: String,
-    status: HtlcOperationStatus,
+    status: PsbtOperationStatus,
     txid: String,
     created_at: i64,
     batch_transfer_idx: Option<i32>,
@@ -165,19 +165,19 @@ struct HtlcOpMeta {
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct HtlcEscrowEntry {
+struct ForeignInputEntry {
     asset_id: String,
     outpoint: Outpoint,
     assignments: Vec<Assignment>,
 }
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-type HtlcSpentByContract = HashMap<ContractId, HashMap<OutPoint, Vec<Assignment>>>;
+type SpentByContract = HashMap<ContractId, HashMap<OutPoint, Vec<Assignment>>>;
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct HtlcEscrowFile {
-    entries: Vec<HtlcEscrowEntry>,
+struct ForeignInputsFile {
+    entries: Vec<ForeignInputEntry>,
 }
 
 fn psbt_has_input_signatures(psbt: &Psbt) -> bool {
@@ -1253,18 +1253,18 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_ops_root(&self) -> PathBuf {
-        self.wallet_dir().join(HTLC_OPS_DIR)
+    fn psbt_ops_root(&self) -> PathBuf {
+        self.wallet_dir().join(PSBT_OPS_DIR)
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn validate_htlc_operation_id(operation_id: &str) -> Result<(), Error> {
-        let valid = operation_id.len() == HTLC_OPERATION_ID_LEN
+    fn validate_psbt_op_id(operation_id: &str) -> Result<(), Error> {
+        let valid = operation_id.len() == PSBT_OP_ID_LEN
             && operation_id
                 .bytes()
                 .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
         if !valid {
-            return Err(Error::HtlcOperationNotFound {
+            return Err(Error::PsbtOperationNotFound {
                 operation_id: operation_id.to_string(),
             });
         }
@@ -1272,21 +1272,21 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_op_dir(&self, operation_id: &str) -> Result<PathBuf, Error> {
-        Self::validate_htlc_operation_id(operation_id)?;
-        Ok(self.htlc_ops_root().join(operation_id))
+    fn psbt_op_dir(&self, operation_id: &str) -> Result<PathBuf, Error> {
+        Self::validate_psbt_op_id(operation_id)?;
+        Ok(self.psbt_ops_root().join(operation_id))
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_read_meta(&self, operation_id: &str) -> Result<HtlcOpMeta, Error> {
-        let path = self.htlc_op_dir(operation_id)?.join(HTLC_META_FILE);
+    fn psbt_op_read_meta(&self, operation_id: &str) -> Result<PsbtOpMeta, Error> {
+        let path = self.psbt_op_dir(operation_id)?.join(PSBT_OP_META_FILE);
         if !path.exists() {
-            return Err(Error::HtlcOperationNotFound {
+            return Err(Error::PsbtOperationNotFound {
                 operation_id: operation_id.to_string(),
             });
         }
         let raw = fs::read_to_string(&path)?;
-        let meta: HtlcOpMeta = serde_json::from_str(&raw).map_err(|e| Error::Internal {
+        let meta: PsbtOpMeta = serde_json::from_str(&raw).map_err(|e| Error::Internal {
             details: format!("invalid HTLC operation meta: {e}"),
         })?;
         if meta.operation_id != operation_id {
@@ -1301,8 +1301,8 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_write_meta(&self, operation_id: &str, meta: &HtlcOpMeta) -> Result<(), Error> {
-        Self::validate_htlc_operation_id(operation_id)?;
+    fn psbt_op_write_meta(&self, operation_id: &str, meta: &PsbtOpMeta) -> Result<(), Error> {
+        Self::validate_psbt_op_id(operation_id)?;
         if meta.operation_id != operation_id {
             return Err(Error::Internal {
                 details: format!(
@@ -1311,13 +1311,13 @@ impl Wallet {
                 ),
             });
         }
-        let path = self.htlc_op_dir(operation_id)?.join(HTLC_META_FILE);
+        let path = self.psbt_op_dir(operation_id)?.join(PSBT_OP_META_FILE);
         let raw = serde_json::to_string_pretty(meta).map_err(InternalError::from)?;
         persist_durable_replace(&path, raw)
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_resolve_batch_idx(&self, meta: &HtlcOpMeta) -> Result<Option<i32>, Error> {
+    fn psbt_op_resolve_batch_idx(&self, meta: &PsbtOpMeta) -> Result<Option<i32>, Error> {
         if meta.batch_transfer_idx.is_some() {
             return Ok(meta.batch_transfer_idx);
         }
@@ -1333,7 +1333,7 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn htlc_resolve_batch_idx_for_apply(&self, meta: &HtlcOpMeta) -> Result<Option<i32>, Error> {
+    fn psbt_op_resolve_batch_idx_for_apply(&self, meta: &PsbtOpMeta) -> Result<Option<i32>, Error> {
         if meta.batch_transfer_idx.is_some() {
             return Ok(meta.batch_transfer_idx);
         }
@@ -1353,7 +1353,7 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn new_htlc_operation_id() -> String {
+    fn new_psbt_op_id() -> String {
         format!(
             "{:016x}{:016x}",
             rand::rng().random::<u64>(),
@@ -1362,19 +1362,19 @@ impl Wallet {
     }
 
     /// Color an HTLC (or other external) PSBT for explicit input outpoints, write file-backed
-    /// payloads under `htlc_ops/{operation_id}/`, and persist SQL accounting for colored contracts.
+    /// payloads under `psbt_ops/{operation_id}/`, and persist SQL accounting for colored contracts.
     ///
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn htlc_prepare(
+    pub fn psbt_op_prepare(
         &self,
         psbt: &mut Psbt,
         coloring_info: ColoringInfo,
         input_outpoints: Vec<OutPoint>,
         min_confirmations: u8,
         expiration_timestamp: Option<u64>,
-    ) -> Result<HtlcPrepareResult, Error> {
+    ) -> Result<PsbtOpPrepareResult, Error> {
         info!(self.logger(), "Preparing HTLC color operation...");
         let (runtime, override_set) =
             self.prepare_color_psbt_for_outpoints(psbt, &coloring_info, input_outpoints)?;
@@ -1428,37 +1428,37 @@ impl Wallet {
         }
 
         let txid = psbt.unsigned_tx.compute_txid().to_string();
-        let escrow = self.collect_htlc_escrow_entries(&spent)?;
+        let escrow = self.collect_foreign_input_entries(&spent)?;
 
-        let operation_id = Self::new_htlc_operation_id();
-        let op_dir = self.htlc_op_dir(&operation_id)?;
-        fs::create_dir_all(op_dir.join(HTLC_CONSIGNMENTS_DIR))?;
+        let operation_id = Self::new_psbt_op_id();
+        let op_dir = self.psbt_op_dir(&operation_id)?;
+        fs::create_dir_all(op_dir.join(PSBT_OP_CONSIGNMENTS_DIR))?;
 
         let fascia_path = op_dir.join(FASCIA_FILE);
         let serialized_fascia = serde_json::to_string(&fascia).map_err(InternalError::from)?;
         fs::write(&fascia_path, serialized_fascia)?;
-        fs::write(op_dir.join(HTLC_COLORED_PSBT_FILE), psbt.to_string())?;
+        fs::write(op_dir.join(PSBT_OP_COLORED_PSBT_FILE), psbt.to_string())?;
 
         for transfer in &transfers {
             let asset_id = transfer.contract_id().to_string();
             let path = op_dir
-                .join(HTLC_CONSIGNMENTS_DIR)
+                .join(PSBT_OP_CONSIGNMENTS_DIR)
                 .join(format!("{asset_id}.rgb"));
             transfer.save_file(&path)?;
         }
 
-        let escrow_raw = serde_json::to_string_pretty(&HtlcEscrowFile { entries: escrow })
+        let escrow_raw = serde_json::to_string_pretty(&ForeignInputsFile { entries: escrow })
             .map_err(InternalError::from)?;
-        fs::write(op_dir.join(HTLC_ESCROW_FILE), escrow_raw)?;
+        fs::write(op_dir.join(PSBT_OP_FOREIGN_INPUTS_FILE), escrow_raw)?;
 
-        let mut meta = HtlcOpMeta {
+        let mut meta = PsbtOpMeta {
             operation_id: operation_id.clone(),
-            status: HtlcOperationStatus::Prepared,
+            status: PsbtOperationStatus::Prepared,
             txid: txid.clone(),
             created_at: now().unix_timestamp(),
             batch_transfer_idx: None,
         };
-        self.htlc_write_meta(&operation_id, &meta)?;
+        self.psbt_op_write_meta(&operation_id, &meta)?;
 
         let batch_transfer_idx = match self.persist_color_prepare_batch(
             psbt,
@@ -1481,10 +1481,10 @@ impl Wallet {
         drop(runtime);
 
         meta.batch_transfer_idx = Some(batch_transfer_idx);
-        self.htlc_write_meta(&operation_id, &meta)?;
+        self.psbt_op_write_meta(&operation_id, &meta)?;
         self.trigger_auto_backup();
 
-        let operation_dir = PathBuf::from(HTLC_OPS_DIR)
+        let operation_dir = PathBuf::from(PSBT_OPS_DIR)
             .join(&operation_id)
             .to_string_lossy()
             .into_owned();
@@ -1492,7 +1492,7 @@ impl Wallet {
             self.logger(),
             "HTLC prepare completed (operation_id={operation_id})"
         );
-        Ok(HtlcPrepareResult {
+        Ok(PsbtOpPrepareResult {
             operation_id,
             colored_psbt: psbt.to_string(),
             operation_dir,
@@ -1500,17 +1500,17 @@ impl Wallet {
     }
 
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn collect_htlc_escrow_entries(
+    fn collect_foreign_input_entries(
         &self,
-        spent: &HtlcSpentByContract,
-    ) -> Result<Vec<HtlcEscrowEntry>, Error> {
+        spent: &SpentByContract,
+    ) -> Result<Vec<ForeignInputEntry>, Error> {
         let txn = self.database().begin_transaction()?;
         let mut escrow = Vec::new();
         for (contract_id, by_outpoint) in spent {
             for (outpoint, assignments) in by_outpoint {
                 let outpoint_obj: Outpoint = (*outpoint).into();
                 if txn.get_txo(&outpoint_obj)?.is_none() {
-                    escrow.push(HtlcEscrowEntry {
+                    escrow.push(ForeignInputEntry {
                         asset_id: contract_id.to_string(),
                         outpoint: outpoint_obj,
                         assignments: assignments.clone(),
@@ -1526,12 +1526,12 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn htlc_apply(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
+    pub fn psbt_op_apply(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
         info!(self.logger(), "Applying HTLC operation {operation_id}...");
         self.check_online(online)?;
-        let mut meta = self.htlc_read_meta(operation_id)?;
-        if meta.status != HtlcOperationStatus::Prepared {
-            return Err(Error::InvalidHtlcOperationStatus {
+        let mut meta = self.psbt_op_read_meta(operation_id)?;
+        if meta.status != PsbtOperationStatus::Prepared {
+            return Err(Error::InvalidPsbtOperationStatus {
                 details: format!(
                     "operation {operation_id} is {:?}, expected Prepared",
                     meta.status
@@ -1539,7 +1539,7 @@ impl Wallet {
             });
         }
 
-        let batch_transfer_idx = self.htlc_resolve_batch_idx_for_apply(&meta)?.ok_or_else(|| {
+        let batch_transfer_idx = self.psbt_op_resolve_batch_idx_for_apply(&meta)?.ok_or_else(|| {
             Error::Internal {
                 details: format!(
                     "HTLC operation {operation_id} has no linked Initiated/WaitingConfirmations batch"
@@ -1547,7 +1547,7 @@ impl Wallet {
             }
         })?;
 
-        let op_dir = self.htlc_op_dir(operation_id)?;
+        let op_dir = self.psbt_op_dir(operation_id)?;
         let stash_marker = op_dir.join(STASH_CONSUMED_FILE);
         let stash_consumed = stash_marker.exists();
 
@@ -1561,9 +1561,9 @@ impl Wallet {
                     if stash_consumed =>
                 {
                     drop(txn);
-                    meta.status = HtlcOperationStatus::Applied;
+                    meta.status = PsbtOperationStatus::Applied;
                     meta.batch_transfer_idx = Some(batch_transfer_idx);
-                    self.htlc_write_meta(operation_id, &meta)?;
+                    self.psbt_op_write_meta(operation_id, &meta)?;
                     let _ = fs::remove_file(&stash_marker);
                     let _ = fs::remove_file(
                         self.get_transfer_dir(&meta.txid).join(STASH_CONSUMED_FILE),
@@ -1577,7 +1577,7 @@ impl Wallet {
                 }
                 TransferStatus::Initiated => {}
                 other => {
-                    return Err(Error::InvalidHtlcOperationStatus {
+                    return Err(Error::InvalidPsbtOperationStatus {
                         details: format!(
                             "HTLC batch transfer {batch_transfer_idx} is {other:?}, expected Initiated"
                         ),
@@ -1586,13 +1586,13 @@ impl Wallet {
             }
         }
 
-        let psbt = Psbt::from_str(&fs::read_to_string(op_dir.join(HTLC_COLORED_PSBT_FILE))?)?;
+        let psbt = Psbt::from_str(&fs::read_to_string(op_dir.join(PSBT_OP_COLORED_PSBT_FILE))?)?;
 
         if !stash_consumed {
             if self.indexer().get_tx_confirmations(&meta.txid)?.is_none() {
-                return Err(Error::InvalidHtlcOperationStatus {
+                return Err(Error::InvalidPsbtOperationStatus {
                     details: format!(
-                        "witness tx {} is not known to the indexer; broadcast it before htlc_apply",
+                        "witness tx {} is not known to the indexer; broadcast it before psbt_op_apply",
                         meta.txid
                     ),
                 });
@@ -1624,7 +1624,7 @@ impl Wallet {
             }
             TransferStatus::WaitingConfirmations | TransferStatus::Settled => {}
             other => {
-                return Err(Error::InvalidHtlcOperationStatus {
+                return Err(Error::InvalidPsbtOperationStatus {
                     details: format!(
                         "HTLC batch transfer {batch_transfer_idx} is {other:?}, expected Initiated"
                     ),
@@ -1636,9 +1636,9 @@ impl Wallet {
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
 
-        meta.status = HtlcOperationStatus::Applied;
+        meta.status = PsbtOperationStatus::Applied;
         meta.batch_transfer_idx = Some(batch_transfer_idx);
-        self.htlc_write_meta(operation_id, &meta)?;
+        self.psbt_op_write_meta(operation_id, &meta)?;
         let _ = fs::remove_file(&stash_marker);
         let _ = fs::remove_file(self.get_transfer_dir(&meta.txid).join(STASH_CONSUMED_FILE));
         self.trigger_auto_backup();
@@ -1651,11 +1651,11 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn htlc_abort(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
+    pub fn psbt_op_abort(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
         info!(self.logger(), "Aborting HTLC operation {operation_id}...");
-        let mut meta = self.htlc_read_meta(operation_id)?;
-        if meta.status != HtlcOperationStatus::Prepared {
-            return Err(Error::InvalidHtlcOperationStatus {
+        let mut meta = self.psbt_op_read_meta(operation_id)?;
+        if meta.status != PsbtOperationStatus::Prepared {
+            return Err(Error::InvalidPsbtOperationStatus {
                 details: format!(
                     "operation {operation_id} is {:?}, expected Prepared",
                     meta.status
@@ -1663,24 +1663,24 @@ impl Wallet {
             });
         }
         if self
-            .htlc_op_dir(operation_id)?
+            .psbt_op_dir(operation_id)?
             .join(STASH_CONSUMED_FILE)
             .exists()
         {
-            return Err(Error::InvalidHtlcOperationStatus {
+            return Err(Error::InvalidPsbtOperationStatus {
                 details: format!(
                     "operation {operation_id} already consumed its fascia into the RGB stash, \
-                     it can only be completed with htlc_apply"
+                     it can only be completed with psbt_op_apply"
                 ),
             });
         }
-        let batch_transfer_idx = self.htlc_resolve_batch_idx(&meta)?;
+        let batch_transfer_idx = self.psbt_op_resolve_batch_idx(&meta)?;
         if let Some(batch_transfer_idx) = batch_transfer_idx {
             self.fail_transfers(online, Some(batch_transfer_idx), false, true)?;
         }
-        meta.status = HtlcOperationStatus::Failed;
+        meta.status = PsbtOperationStatus::Failed;
         meta.batch_transfer_idx = batch_transfer_idx;
-        self.htlc_write_meta(operation_id, &meta)?;
+        self.psbt_op_write_meta(operation_id, &meta)?;
         let txn = self.database().begin_transaction()?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
@@ -1694,9 +1694,9 @@ impl Wallet {
     /// <div class="warning">This method is meant for special usage and is normally not needed, use
     /// it only if you know what you're doing</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn htlc_reconcile(&self, operation_id: &str) -> Result<HtlcOperationStatus, Error> {
-        let mut meta = self.htlc_read_meta(operation_id)?;
-        if meta.status == HtlcOperationStatus::Applied
+    pub fn psbt_op_reconcile(&self, operation_id: &str) -> Result<PsbtOperationStatus, Error> {
+        let mut meta = self.psbt_op_read_meta(operation_id)?;
+        if meta.status == PsbtOperationStatus::Applied
             && let Some(batch_transfer_idx) = meta.batch_transfer_idx
         {
             let txn = self.database().begin_transaction()?;
@@ -1707,8 +1707,8 @@ impl Wallet {
                 .find(|b| b.idx == batch_transfer_idx)
                 && batch.status == TransferStatus::Settled
             {
-                meta.status = HtlcOperationStatus::Settled;
-                self.htlc_write_meta(operation_id, &meta)?;
+                meta.status = PsbtOperationStatus::Settled;
+                self.psbt_op_write_meta(operation_id, &meta)?;
             }
         }
         Ok(meta.status)
