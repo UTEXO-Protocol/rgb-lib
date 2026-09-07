@@ -21,6 +21,13 @@ fn success() {
 
     let asset = party.issue_asset_bfa(1, bridge_contract.address.clone(), None);
     assert_eq!(asset.initial_supply, 0);
+    // nothing has been bridged in yet
+    assert_eq!(
+        party
+            .get_asset_metadata(&asset.asset_id)
+            .known_circulating_supply,
+        0
+    );
 
     // mint to ourselves through a blinded invoice
     party.create_utxos_default();
@@ -49,6 +56,13 @@ fn success() {
     let signed_psbt = party.wallet.sign_psbt(begin.psbt, None).unwrap();
     let result = party.bridge_end(signed_psbt);
     assert!(!result.txid.is_empty());
+    // the minting wallet learns the bridged supply from its own transition
+    assert_eq!(
+        party
+            .get_asset_metadata(&asset.asset_id)
+            .known_circulating_supply,
+        AMOUNT
+    );
 
     // the mint pays our own blinded invoice, so like any receive it reaches the balance only
     // once refresh has fetched and validated the consignment; the receive carries no asset
@@ -75,6 +89,14 @@ fn success() {
             future: AMOUNT,
             spendable: AMOUNT,
         }
+    );
+
+    // and the receiving side reads the same supply out of the consignment
+    assert_eq!(
+        party
+            .get_asset_metadata(&asset.asset_id)
+            .known_circulating_supply,
+        AMOUNT
     );
 
     // the mint spent one bridge right and rolled a fresh one forward, so the wallet can mint again

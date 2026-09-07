@@ -262,13 +262,14 @@ use rgbstd::{
     validation::{OpoutsDagData, Validity, Warning},
     vm::ether_extension::BurnRecipient,
 };
-#[cfg(any(feature = "electrum", feature = "esplora"))]
-use schemata::{BfaWrapper, CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
-    BridgedFungibleAsset, CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset,
-    MS_BURN_RECIPIENT, NonInflatableAsset, OS_ASSET, OS_BRIDGE, OS_INFLATION, OS_LINK, TS_BRIDGE,
-    TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
+    BfaWrapper, BridgedFungibleAsset, CollectibleFungibleAsset, IfaWrapper,
+    InflatableFungibleAsset, MS_BURN_RECIPIENT, NonInflatableAsset, OS_ASSET, OS_BRIDGE,
+    OS_INFLATION, OS_LINK, TS_BRIDGE, TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER,
+    UniqueDigitalAsset,
 };
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
 use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
     ActiveValue, ColumnTrait, ConnectOptions, Database, DatabaseConnection, DatabaseTransaction,
