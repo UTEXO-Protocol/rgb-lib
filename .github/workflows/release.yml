@@ -65,9 +65,19 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
-          # A dylib otherwise records the runner's absolute path as its install name,
-          # and every consumer linked with -rpath fails to load it.
-          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUSTFLAGS: ${{ matrix.target == 'aarch64-apple-darwin' && '-C link-arg=-Wl,-install_name,@rpath/librgblibuniffi.dylib' || '' }}
+
+      # A dylib records the runner's absolute path as its install name, and every
+      # consumer linked with -rpath then fails to load it. Passing the flag through
+      # RUSTFLAGS did not stick (beta.36 still shipped the runner path), so rewrite
+      # the id after the build and fail loudly if it is not what we expect.
+      - name: Give the darwin dylib an @rpath install name
+        if: matrix.target == 'aarch64-apple-darwin'
+        working-directory: bindings/uniffi
+        run: |
+          DYLIB=target/${{ matrix.target }}/release/${{ matrix.lib_name }}
+          install_name_tool -id @rpath/${{ matrix.lib_name }} "$DYLIB"
+          codesign -s - -f "$DYLIB"
+          otool -l "$DYLIB" | grep -A2 LC_ID_DYLIB | grep -q "@rpath/${{ matrix.lib_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
