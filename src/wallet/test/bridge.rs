@@ -35,6 +35,12 @@ fn success() {
     let begin = party.bridge_begin(&asset.asset_id, recipient);
     // The OpId binds the two domains: it is what the EVM lock must commit to.
     assert_eq!(begin.details.opid.len(), 64);
+    // nothing reaches the proxy before the mint is broadcast: a failure between
+    // here and bridge_end must leave the invoice reusable
+    assert!(
+        !party.refresh_all(),
+        "the consignment was posted before the mint was broadcast"
+    );
 
     // lock the ERC-20 under that OpId, then complete the mint
     erc20_approve(&eth_contract.address, &bridge_contract.address, AMOUNT);

@@ -4606,19 +4606,11 @@ pub trait WalletOnline: WalletOffline {
         drop(runtime);
 
         // Compose the consignment now: the caller needs the OpId before the EVM lock exists.
-        let (txid, transfer_dir, info_contents, fascia) =
+        // It stays local until `bridge_end_impl` broadcasts: posted to the proxy any
+        // earlier it would consume the invoice even when the mint never happens.
+        let (_txid, transfer_dir, info_contents, fascia) =
             self.get_transfer_end_data(&begin_operation_data.psbt)?;
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
-
-        let mut post_recipients = transfer_info.recipients.clone();
-        post_recipients.pop().unwrap();
-        let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, &asset_id);
-        self.post_transfer_data(
-            &mut post_recipients,
-            asset_transfer_dir,
-            txid,
-            self.get_asset_medias(txn, asset.media_idx, None)?,
-        )?;
 
         Ok(begin_operation_data)
     }
@@ -4628,8 +4620,21 @@ pub trait WalletOnline: WalletOffline {
         txn: &DbTxn,
         signed_psbt: &Psbt,
     ) -> Result<OperationResult, Error> {
-        let (txid, _transfer_dir, info_contents, fascia) =
+        let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(signed_psbt)?;
+
+        // the consignments were composed at begin; post them only now that the mint
+        // is being broadcast
+        for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
+            let asset = txn.get_asset(asset_id.clone())?.unwrap();
+            let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
+            self.post_transfer_data(
+                &mut info_contents_asset.recipients,
+                asset_transfer_dir,
+                txid.clone(),
+                self.get_asset_medias(txn, asset.media_idx, None)?,
+            )?;
+        }
 
         let batch_transfer_idx = self.finalize_transfer_end(
             txn,
