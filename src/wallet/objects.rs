@@ -75,6 +75,8 @@ pub struct OnlineData {
     pub(crate) eth_rpc_url: Option<String>,
     pub(crate) hub_client: Option<MultisigHubClient>,
     pub(crate) user_role: Option<UserRole>,
+    // the account xpub the hub authenticated us as; None for watch-only
+    pub(crate) cosigner_xpub: Option<String>,
     pub(crate) vanilla_sync_lookback: u32,
 }
 

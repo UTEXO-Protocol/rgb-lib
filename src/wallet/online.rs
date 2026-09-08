@@ -690,6 +690,7 @@ pub trait WalletOnline: WalletOffline {
             eth_rpc_url: online_options.eth_rpc_url.clone(),
             hub_client: None,
             user_role: None,
+            cosigner_xpub: None,
             vanilla_sync_lookback: online_options.vanilla_sync_lookback,
         };
 
@@ -4608,21 +4609,25 @@ pub trait WalletOnline: WalletOffline {
         &mut self,
         txn: &DbTxn,
         signed_psbt: &Psbt,
+        post_consignment: bool,
     ) -> Result<OperationResult, Error> {
         let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(signed_psbt)?;
 
         // the consignments were composed at begin; post them only now that the mint
-        // is being broadcast
-        for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
-            let asset = txn.get_asset(asset_id.clone())?.unwrap();
-            let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
-            self.post_transfer_data(
-                &mut info_contents_asset.recipients,
-                asset_transfer_dir,
-                txid.clone(),
-                self.get_asset_medias(txn, asset.media_idx, None)?,
-            )?;
+        // is being broadcast, and only from the initiator: every cosigner runs this
+        // at approval too, and a second post fails once the receiver has acked
+        if post_consignment {
+            for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
+                let asset = txn.get_asset(asset_id.clone())?.unwrap();
+                let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
+                self.post_transfer_data(
+                    &mut info_contents_asset.recipients,
+                    asset_transfer_dir,
+                    txid.clone(),
+                    self.get_asset_medias(txn, asset.media_idx, None)?,
+                )?;
+            }
         }
 
         let batch_transfer_idx = self.finalize_transfer_end(

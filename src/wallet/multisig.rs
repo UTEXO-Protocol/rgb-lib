@@ -739,6 +739,7 @@ pub(crate) trait OperationHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        initiated_by_me: bool,
     ) -> Result<String, Error>;
 
     fn reconstruct_transfer_directory(
@@ -781,6 +782,7 @@ impl OperationHandler for CreateUtxosHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
         wallet.create_utxos_end_impl(txn, combined_psbt)?;
         Ok(combined_psbt.unsigned_tx.compute_txid().to_string())
@@ -818,6 +820,7 @@ impl OperationHandler for SendBtcHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
         wallet.send_btc_end_impl(txn, combined_psbt)?;
         Ok(combined_psbt.unsigned_tx.compute_txid().to_string())
@@ -870,6 +873,7 @@ impl OperationHandler for SendRgbHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
         let res = wallet.send_end_impl(txn, combined_psbt)?;
         Ok(res.txid)
@@ -937,6 +941,7 @@ impl OperationHandler for InflateHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
         let res = wallet.inflate_end_impl(txn, combined_psbt)?;
         Ok(res.txid)
@@ -1005,8 +1010,9 @@ impl OperationHandler for BridgeHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        initiated_by_me: bool,
     ) -> Result<String, Error> {
-        let res = wallet.bridge_end_impl(txn, combined_psbt)?;
+        let res = wallet.bridge_end_impl(txn, combined_psbt, initiated_by_me)?;
         Ok(res.txid)
     }
 
@@ -1072,6 +1078,7 @@ impl OperationHandler for BurnHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
         let res = wallet.burn_end_impl(txn, combined_psbt)?;
         Ok(res.txid)
@@ -1459,7 +1466,12 @@ impl MultisigWallet {
 
         // set multisig-specific OnlineData fields
         self.online_data_mut().as_mut().unwrap().hub_client = Some(hub_client);
+        let cosigner_xpub = match &info.user_role {
+            UserRoleResponse::Cosigner(xpub) => Some(xpub.clone()),
+            UserRoleResponse::WatchOnly => None,
+        };
         self.online_data_mut().as_mut().unwrap().user_role = Some(info.user_role.into());
+        self.online_data_mut().as_mut().unwrap().cosigner_xpub = cosigner_xpub;
 
         info!(self.logger(), "Go online completed");
         Ok(online)
@@ -2282,8 +2294,13 @@ impl MultisigWallet {
                 }
                 let txid = tx.to_string();
                 H::reconstruct_transfer_directory(self, &txid, files)?;
+                let initiated_by_me = self
+                    .online_data()
+                    .as_ref()
+                    .and_then(|d| d.cosigner_xpub.as_deref())
+                    == Some(op.initiator_xpub.as_str());
                 let txn = self.database().begin_transaction()?;
-                let txid = H::finalize_and_execute(&txn, self, &combined_psbt)?;
+                let txid = H::finalize_and_execute(&txn, self, &combined_psbt, initiated_by_me)?;
                 self.update_backup_info(&txn, false)?;
                 self.mark_operation_as_processed(&txn, op.operation_idx)?;
                 txn.commit()?;
