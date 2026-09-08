@@ -492,7 +492,7 @@ pub(super) trait MultisigOps: OfflineSigParty {
     fn burn_init_res(&mut self, asset_id: &str, amount: u64) -> Result<InitOperationResult, Error> {
         let online = self.online();
         self.multisig_mut()
-            .burn_init(online, asset_id.to_string(), amount, FEE_RATE, 1)
+            .burn_init(online, asset_id.to_string(), amount, None, FEE_RATE, 1)
     }
 
     fn issue_asset_cfa(&mut self, amounts: Option<&[u64]>, file_path: Option<String>) -> AssetCFA {
@@ -846,6 +846,9 @@ pub(super) fn issue_asset(
                 .sum::<u64>();
             (IssuedAsset::Ifa(asset), supply, Some(inflation_supply))
         }
+        AssetSchema::Bfa => unimplemented!(
+            "BFA issuance needs bridge rights and a contract address; this helper does not carry them"
+        ),
     };
 
     check_issuance(initiator, others, asset.asset_id(), schema);
@@ -1042,6 +1045,7 @@ fn check_asset_metadata<P: OfflineSigParty<W = MultisigWallet>>(
             AssetSchema::Nia | AssetSchema::Ifa => {
                 assert_eq!(meta.token, None);
             }
+            AssetSchema::Bfa => {}
         }
     }
 }
@@ -1135,6 +1139,13 @@ fn check_issuance(
                 .collect(),
             AssetSchema::Ifa => assets
                 .ifa
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|a| a.asset_id.as_str())
+                .collect(),
+            AssetSchema::Bfa => assets
+                .bfa
                 .as_deref()
                 .unwrap_or_default()
                 .iter()

@@ -27,10 +27,11 @@ use rgb_lib::{
     keys::{Keys, WitnessVersion},
     utils::BitcoinNetwork,
     wallet::{
-        Address as RgbLibAddress, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA, AssetNIA,
-        AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BtcBalance, BurnBeginResult,
-        BurnDetails, Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo,
-        InflateBeginResult, InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
+        Address as RgbLibAddress, AssetBFA, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA,
+        AssetNIA, AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BridgeBeginResult,
+        BridgeDetails, BridgeInitResult, BtcBalance, BurnBeginResult, BurnDetails,
+        Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
+        InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
@@ -114,6 +115,7 @@ pub enum Assignment {
     Fungible { amount: u64 },
     NonFungible,
     InflationRight { amount: u64 },
+    BridgeRight,
     LinkRight,
     Any,
 }
@@ -123,6 +125,7 @@ impl From<RgbLibAssignment> for Assignment {
             RgbLibAssignment::Fungible(amount) => Assignment::Fungible { amount },
             RgbLibAssignment::NonFungible => Assignment::NonFungible,
             RgbLibAssignment::InflationRight(amount) => Assignment::InflationRight { amount },
+            RgbLibAssignment::BridgeRight => Assignment::BridgeRight,
             RgbLibAssignment::LinkRight => Assignment::LinkRight,
             RgbLibAssignment::Any => Assignment::Any,
         }
@@ -134,6 +137,7 @@ impl From<Assignment> for RgbLibAssignment {
             Assignment::Fungible { amount } => RgbLibAssignment::Fungible(amount),
             Assignment::NonFungible => RgbLibAssignment::NonFungible,
             Assignment::InflationRight { amount } => RgbLibAssignment::InflationRight(amount),
+            Assignment::BridgeRight => RgbLibAssignment::BridgeRight,
             Assignment::LinkRight => RgbLibAssignment::LinkRight,
             Assignment::Any => RgbLibAssignment::Any,
         }
@@ -629,6 +633,24 @@ pub enum Operation {
         details: InflateDetails,
         status: MultisigVotingStatus,
     },
+    BridgeToReview {
+        psbt: String,
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgePending {
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgeCompleted {
+        txid: String,
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
+    BridgeDiscarded {
+        details: BridgeDetails,
+        status: MultisigVotingStatus,
+    },
     BurnToReview {
         psbt: String,
         details: BurnDetails,
@@ -774,6 +796,32 @@ impl From<RgbLibOperation> for Operation {
                     status: status.into(),
                 }
             }
+            RgbLibOperation::BridgeToReview {
+                psbt,
+                details,
+                status,
+            } => Operation::BridgeToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgePending { status, details } => Operation::BridgePending {
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgeCompleted {
+                txid,
+                details,
+                status,
+            } => Operation::BridgeCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            RgbLibOperation::BridgeDiscarded { details, status } => Operation::BridgeDiscarded {
+                details,
+                status: status.into(),
+            },
             RgbLibOperation::BurnToReview {
                 psbt,
                 details,
@@ -901,6 +949,32 @@ impl From<Operation> for RgbLibOperation {
                     status: status.into(),
                 }
             }
+            Operation::BridgeToReview {
+                psbt,
+                details,
+                status,
+            } => RgbLibOperation::BridgeToReview {
+                psbt,
+                details,
+                status: status.into(),
+            },
+            Operation::BridgePending { details, status } => RgbLibOperation::BridgePending {
+                details,
+                status: status.into(),
+            },
+            Operation::BridgeCompleted {
+                txid,
+                details,
+                status,
+            } => RgbLibOperation::BridgeCompleted {
+                txid,
+                details,
+                status: status.into(),
+            },
+            Operation::BridgeDiscarded { details, status } => RgbLibOperation::BridgeDiscarded {
+                details,
+                status: status.into(),
+            },
             Operation::BurnToReview {
                 psbt,
                 details,
@@ -1001,6 +1075,14 @@ pub struct ValidateConsignmentResult {
     pub warnings: Option<Vec<String>>,
     pub error: Option<String>,
     pub details: Option<String>,
+}
+
+/// The pinned schema id for an asset schema, as a consignment's genesis
+/// carries it. Exposed so a caller can tell what a consignment is without
+/// hardcoding the id: the listener has to know a BFA consignment cannot be
+/// validated without the enclave's EVM events.
+fn asset_schema_id(asset_schema: AssetSchema) -> String {
+    asset_schema.schema_id()
 }
 
 fn validate_consignment(
@@ -1259,7 +1341,7 @@ impl Wallet {
         coloring_info: ColoringInfo,
         input_outpoints: Vec<Outpoint>,
         min_confirmations: u8,
-        expiration_timestamp: Option<u64>,
+        expiration_timestamp: u64,
     ) -> Result<PsbtOpPrepareResult, RgbLibError> {
         let mut psbt = Psbt::from_str(&psbt)?;
         let coloring = to_rgb_coloring_info(coloring_info)?;
@@ -1269,7 +1351,7 @@ impl Wallet {
             coloring,
             input_outpoints,
             min_confirmations,
-            expiration_timestamp,
+            Some(expiration_timestamp),
         )?;
         Ok(PsbtOpPrepareResult {
             operation_id: result.operation_id,
@@ -1483,11 +1565,18 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<OperationResult, RgbLibError> {
-        self._get_wallet()
-            .burn(online, asset_id, amount, fee_rate, min_confirmations)
+        self._get_wallet().burn(
+            online,
+            asset_id,
+            amount,
+            burn_recipient,
+            fee_rate,
+            min_confirmations,
+        )
     }
 
     fn burn_begin(
@@ -1495,6 +1584,7 @@ impl Wallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
         dry_run: bool,
@@ -1503,6 +1593,7 @@ impl Wallet {
             online,
             asset_id,
             amount,
+            burn_recipient,
             fee_rate,
             min_confirmations,
             dry_run,
@@ -1559,6 +1650,31 @@ impl Wallet {
         signed_psbt: String,
     ) -> Result<OperationResult, RgbLibError> {
         self._get_wallet().inflate_end(online, signed_psbt)
+    }
+
+    fn bridge_begin(
+        &self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeBeginResult, RgbLibError> {
+        self._get_wallet().bridge_begin(
+            online,
+            asset_id,
+            recipient.into(),
+            fee_rate,
+            min_confirmations,
+        )
+    }
+
+    fn bridge_end(
+        &self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, RgbLibError> {
+        self._get_wallet().bridge_end(online, signed_psbt)
     }
 
     fn issue_asset_nia(
@@ -1620,6 +1736,25 @@ impl Wallet {
             inflation_amounts,
             reject_list_url,
             None,
+        )
+    }
+
+    fn issue_asset_bfa(
+        &self,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, RgbLibError> {
+        self._get_wallet().issue_asset_bfa(
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
         )
     }
 
@@ -1792,6 +1927,10 @@ impl Wallet {
             ._get_wallet()
             .inspect_rgb_transfer(psbt, fascia_path, entropy)?
             .into())
+    }
+
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, RgbLibError> {
+        self._get_wallet().get_burn_recipient(consignment_path)
     }
 
     fn list_pending_vanilla_txs(&self) -> Result<Vec<PendingVanillaTx>, RgbLibError> {
@@ -2043,11 +2182,18 @@ impl MultisigWallet {
         online: Online,
         asset_id: String,
         amount: u64,
+        burn_recipient: Option<Vec<u8>>,
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<InitOperationResult, RgbLibError> {
-        self._get_wallet()
-            .burn_init(online, asset_id, amount, fee_rate, min_confirmations)
+        self._get_wallet().burn_init(
+            online,
+            asset_id,
+            amount,
+            burn_recipient,
+            fee_rate,
+            min_confirmations,
+        )
     }
 
     fn inflate_init(
@@ -2062,6 +2208,23 @@ impl MultisigWallet {
             online,
             asset_id,
             inflation_amounts,
+            fee_rate,
+            min_confirmations,
+        )
+    }
+
+    fn bridge_init(
+        &self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeInitResult, RgbLibError> {
+        self._get_wallet().bridge_init(
+            online,
+            asset_id,
+            recipient.into(),
             fee_rate,
             min_confirmations,
         )
@@ -2132,6 +2295,27 @@ impl MultisigWallet {
             inflation_amounts,
             reject_list_url,
             None,
+        )
+    }
+
+    fn issue_asset_bfa(
+        &self,
+        online: Online,
+        ticker: String,
+        name: String,
+        precision: u8,
+        bridge_rights: u8,
+        contract_address: String,
+        reject_list_url: Option<String>,
+    ) -> Result<AssetBFA, RgbLibError> {
+        self._get_wallet().issue_asset_bfa(
+            online,
+            ticker,
+            name,
+            precision,
+            bridge_rights,
+            contract_address,
+            reject_list_url,
         )
     }
 
@@ -2257,6 +2441,10 @@ impl MultisigWallet {
             ._get_wallet()
             .inspect_rgb_transfer(psbt, fascia_path, entropy)?
             .into())
+    }
+
+    fn get_burn_recipient(&self, consignment_path: String) -> Result<Vec<u8>, RgbLibError> {
+        self._get_wallet().get_burn_recipient(consignment_path)
     }
 
     fn configure_vss_backup(&self, config: VssBackupConfig) -> Result<(), RgbLibError> {

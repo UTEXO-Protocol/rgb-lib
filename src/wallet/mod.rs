@@ -26,27 +26,27 @@ pub(crate) mod test;
 pub use backup::restore_backup;
 #[cfg(feature = "mpc")]
 pub use mpc::MpcWallet;
-pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use multisig::{
-    HubInfo, InitOperationResult, MultisigOnlineOptions, MultisigVotingStatus, Operation,
-    OperationInfo, RespondToOperation, UserRole,
+    BridgeInitResult, HubInfo, InitOperationResult, MultisigOnlineOptions, MultisigVotingStatus,
+    Operation, OperationInfo, RespondToOperation, UserRole,
 };
+pub use multisig::{Cosigner, MultisigKeys, MultisigWallet};
 pub use objects::{
-    Address, AssetCFA, AssetFilter, AssetIFA, AssetNIA, AssetUDA, Assets, AssignmentsCollection,
-    Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia, IfaIssuanceType, Invoice,
-    InvoiceData, Media, Metadata, Online, Outpoint, PendingVanillaTx, ProofOfReserves,
-    PsbtInputInfo, PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient, RecipientInfo,
-    RecipientType, RgbAllocation, RgbInputInfo, RgbInspection, RgbOperationInfo, RgbOutputInfo,
-    RgbTransitionInfo, Token, TokenLight, Transaction, TransactionType, Transfer, TransferKind,
-    TransferTransportEndpoint, TransportEndpoint, TypeOfTransition, Unspent, Utxo, WalletData,
-    WalletDescriptors, WitnessData,
+    Address, AssetBFA, AssetCFA, AssetFilter, AssetIFA, AssetNIA, AssetUDA, Assets,
+    AssignmentsCollection, Balance, BlockTime, BtcBalance, DatabaseType, EmbeddedMedia,
+    IfaIssuanceType, Invoice, InvoiceData, Media, Metadata, Online, Outpoint, PendingVanillaTx,
+    ProofOfReserves, PsbtInputInfo, PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient,
+    RecipientInfo, RecipientType, RgbAllocation, RgbInputInfo, RgbInspection, RgbOperationInfo,
+    RgbOutputInfo, RgbTransitionInfo, Token, TokenLight, Transaction, TransactionType, Transfer,
+    TransferKind, TransferTransportEndpoint, TransportEndpoint, TypeOfTransition, Unspent, Utxo,
+    WalletData, WalletDescriptors, WitnessData,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use objects::{
-    BurnBeginResult, BurnDetails, InflateBeginResult, InflateDetails, OnlineOptions,
-    OperationResult, RefreshFilter, RefreshResult, RefreshTransferStatus, RefreshedTransfer,
-    SendBeginResult, SendDetails,
+    BridgeBeginResult, BridgeDetails, BurnBeginResult, BurnDetails, InflateBeginResult,
+    InflateDetails, OnlineOptions, OperationResult, RefreshFilter, RefreshResult,
+    RefreshTransferStatus, RefreshedTransfer, SendBeginResult, SendDetails,
 };
 pub use offline::RgbWalletOpsOffline;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
@@ -94,10 +94,16 @@ pub(crate) const SCHEMA_ID_CFA: &str =
     "rgb:sch:JgqK5hJX9YBT4osCV7VcW_iLTcA5csUCnLzvaKTTrNY#mars-house-friend";
 pub(crate) const SCHEMA_ID_IFA: &str =
     "rgb:sch:IpjJhFLz3oywYKQxO3KmFgR0Aa415nlTNrNyEFqMZCE#shoe-colombo-mango";
+pub(crate) const SCHEMA_ID_BFA: &str =
+    "rgb:sch:qmzDdckKuOD~gVQyNz9I6B8YJiIUnaf7O6IPkzYG19E#zebra-consul-avenue";
 
 pub(crate) const RGB_STATE_ASSET_OWNER: &str = "assetOwner";
 pub(crate) const RGB_STATE_INFLATION_ALLOWANCE: &str = "inflationAllowance";
+pub(crate) const RGB_STATE_BRIDGE_RIGHT: &str = "bridgeRight";
 pub(crate) const RGB_GLOBAL_ISSUED_SUPPLY: &str = "issuedSupply";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_GLOBAL_BRIDGED_SUPPLY: &str = "bridgedSupply";
+pub(crate) const RGB_GLOBAL_BRIDGE_LOCATION: &str = "bridgeLocation";
 pub(crate) const RGB_GLOBAL_LINKED_FROM_CONTRACT: &str = "linkedFromContract";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_GLOBAL_LINKED_TO_CONTRACT: &str = "linkedToContract";
@@ -108,3 +114,6 @@ pub(crate) const RGB_METADATA_ALLOWED_INFLATION: &str = "allowedInflation";
 pub(crate) const RGB_METADATA_BURNED_ASSET: &str = "burnedAsset";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub(crate) const RGB_METADATA_BURNED_INFLATION: &str = "burnedInflation";
+/// Where a BFA burn's proceeds are owed; declared only by the BFA schema.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const RGB_METADATA_BURN_RECIPIENT: &str = "burnRecipient";

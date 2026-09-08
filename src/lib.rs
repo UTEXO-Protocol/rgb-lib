@@ -141,12 +141,12 @@ pub use rgbstd::validation::{ValidationConfig, ValidationError};
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use std::{
     cmp::{Ordering, max, min},
-    collections::{BTreeSet, hash_map::DefaultHasher},
+    collections::hash_map::DefaultHasher,
     hash::Hasher,
     num::NonZeroU32,
 };
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt, fs,
     hash::Hash,
     io::{self, ErrorKind, Read, Write},
@@ -226,7 +226,7 @@ use rgbinvoice::{
 #[cfg(feature = "electrum")]
 use rgbstd::indexers::electrum_blocking::electrum_client::ConfigBuilder;
 use rgbstd::{
-    Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, Opout,
+    Allocation, Amount, Assign, Genesis, GraphSeal, Identity, KnownTransition, Layer1, OpId, Opout,
     OutputSeal, OwnedFraction, Precision, Schema, SecretSeal, TokenIndex, Transition, TypeSystem,
     containers::{BuilderSeal, Kit, ValidContract, ValidKit, ValidTransfer},
     contract::{
@@ -249,6 +249,7 @@ use rgbstd::{
     validation::{
         ResolveWitness, Scripts, Status, WitnessOrdProvider, WitnessResolverError, WitnessStatus,
     },
+    vm::ether_extension::BridgeLocation,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use rgbstd::{
@@ -259,12 +260,14 @@ use rgbstd::{
     indexers::AnyResolver,
     info::ContractInfo,
     validation::{OpoutsDagData, Validity, Warning},
+    vm::ether_extension::BurnRecipient,
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-use schemata::{CfaWrapper, NiaWrapper, UdaWrapper};
+use schemata::{BfaWrapper, CfaWrapper, NiaWrapper, UdaWrapper};
 use schemata::{
-    CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset, NonInflatableAsset, OS_ASSET,
-    OS_INFLATION, OS_LINK, TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
+    BridgedFungibleAsset, CollectibleFungibleAsset, IfaWrapper, InflatableFungibleAsset,
+    MS_BURN_RECIPIENT, NonInflatableAsset, OS_ASSET, OS_BRIDGE, OS_INFLATION, OS_LINK, TS_BRIDGE,
+    TS_BURN, TS_INFLATION, TS_LINK, TS_TRANSFER, UniqueDigitalAsset,
 };
 use scrypt::{Params, phc::Salt, scrypt};
 use sea_orm::{
@@ -363,7 +366,7 @@ use crate::{
         parse_address_str, setup_logger, str_to_xpub,
     },
     wallet::{
-        Balance, LocalRgbAllocation, LocalUnspent, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_CFA,
-        SCHEMA_ID_IFA, SCHEMA_ID_NIA, SCHEMA_ID_UDA, WalletDescriptors,
+        Balance, LocalRgbAllocation, LocalUnspent, NUM_KNOWN_SCHEMAS, Outpoint, SCHEMA_ID_BFA,
+        SCHEMA_ID_CFA, SCHEMA_ID_IFA, SCHEMA_ID_NIA, SCHEMA_ID_UDA, WalletDescriptors,
     },
 };

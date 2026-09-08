@@ -161,6 +161,7 @@ fn go_online(wallet: &mut Wallet) -> Online {
             indexer_url: url,
             skip_consistency_check: true,
             vanilla_sync_lookback: 20,
+            eth_rpc_url: None,
         })
         .expect("failed to go online");
     println!("[OK] Online (id: {})", online.id);

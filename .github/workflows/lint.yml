@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   lint:
@@ -15,6 +16,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      - name: Authenticate to private RGB forks
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.BFA_MIRRORS_TOKEN }}@github.com/UTEXO-Protocol/".insteadOf \
+            "https://github.com/UTEXO-Protocol/"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy

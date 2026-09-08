@@ -1399,7 +1399,7 @@ fn offline() {
     );
     assert_matches!(result, Err(Error::Offline));
 
-    let result = wallet.burn_init(fake_online, "aid".into(), 0, 0, 0);
+    let result = wallet.burn_init(fake_online, "aid".into(), 0, None, 0, 0);
     assert_matches!(result, Err(Error::Offline));
 
     let result = wallet.create_utxos_init(fake_online, false, None, None, 0, false);

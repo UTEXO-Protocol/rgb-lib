@@ -638,15 +638,17 @@ fn psbt_op_prepare_uda_missing_input_assignment_returns_coloring_error() {
         .outpoint
         .into();
 
-    let address = BdkAddress::from_str(&party_send.get_address()).unwrap();
+    let colored_script = party_send
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
     tx_builder.add_utxo(vanilla).unwrap();
     tx_builder.manually_selected_only();
     tx_builder
-        .add_recipient(
-            address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
+        .add_recipient(colored_script, BdkAmount::from_sat(amt_sat))
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
     insert_op_return(&mut psbt, true);
@@ -2061,7 +2063,8 @@ fn color_psbt_and_prepare_consume_rejects_input_carrying_inflation_right() {
 }
 
 /// The registered batch has to carry the caller's confirmation depth, which gates both settling and
-/// the reorg-safety checks, and the caller's deadline, which gates the bulk `fail_transfers` sweep.
+/// the reorg-safety checks, and the caller's deadline, which is recorded for the caller's own
+/// abort decision (the bulk `fail_transfers` sweep never acts on it for prepared operations).
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
@@ -2118,12 +2121,13 @@ fn color_psbt_and_prepare_consume_registers_requested_batch_parameters() {
     assert_eq!(batch_transfer.expiration, Some(expiration_timestamp as i64));
 }
 
-/// A batch whose deadline passed without a broadcast is abandoned, so the bulk sweep has to reclaim
-/// its reserved inputs.
+/// A prepared batch is broadcast by the caller, so its deadline passing while the TX is absent from
+/// the indexer proves nothing: the bulk sweep must leave it alone, and only an explicit fail
+/// (the caller's never-broadcast promise) reclaims its reserved inputs.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn color_psbt_and_prepare_consume_bulk_fail_transfers_reclaims_expired_batch() {
+fn color_psbt_and_prepare_consume_bulk_fail_transfers_spares_expired_prepare_batch() {
     initialize();
 
     let amt_sat = 500;
@@ -2159,14 +2163,20 @@ fn color_psbt_and_prepare_consume_bulk_fail_transfers_reclaims_expired_batch() {
         blinding,
     );
 
-    party_send
+    let ColorPrepareResult {
+        batch_transfer_idx, ..
+    } = party_send
         .wallet
         .color_psbt_and_prepare_consume(&mut psbt, coloring_info, MIN_CONFIRMATIONS, Some(expired))
         .unwrap();
     let txid = psbt.unsigned_tx.compute_txid().to_string();
 
-    assert!(party_send.fail_transfers_all());
+    // the caller owns broadcast: expiry plus "not found" is no proof the tx was never sent
+    assert!(!party_send.fail_transfers_all());
+    assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Initiated));
 
+    // only an explicit fail (the caller's never-broadcast promise) releases the inputs
+    assert!(party_send.fail_transfers_single(batch_transfer_idx));
     assert!(party_send.check_test_transfer_status_sender(&txid, TransferStatus::Failed));
 }
 
@@ -2466,15 +2476,17 @@ fn psbt_op_prepare_foreign_escrow_input_persists_claim_change() {
         .utxo
         .outpoint
         .into();
-    let claim_address = BdkAddress::from_str(&party.get_address()).unwrap();
+    let claim_script = party
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut claim_builder = party.wallet.bdk_wallet_mut().build_tx();
     claim_builder.add_utxo(fee_utxo).unwrap();
     claim_builder.manually_selected_only();
     claim_builder
-        .add_recipient(
-            claim_address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
+        .add_recipient(claim_script.clone(), BdkAmount::from_sat(amt_sat))
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut claim_psbt = claim_builder.finish().unwrap();
     prepend_psbt_input(
@@ -2588,11 +2600,22 @@ fn psbt_op_prepare_foreign_escrow_input_persists_claim_change() {
 /// Issue #90 claim: foreign HTLC UTXO spent to a `witness_receive` destination. Receive is the
 /// sole allocation owner; color-prepare must not also project Change on that output.
 #[cfg(feature = "electrum")]
-#[test]
-#[parallel]
-fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
-    initialize();
+struct EscrowClaimFixture {
+    party: SinglesigParty,
+    asset: AssetNIA,
+    receive_data: ReceiveData,
+    proxy_recipient_id: String,
+    operation_id: String,
+    claim_txid: String,
+    claim_vout: u32,
+    blinding_claim: u64,
+}
 
+/// Foreign HTLC escrow claimed into the claimant's own `witness_receive`: prepare, sign with
+/// both parties, broadcast, apply, mine, and publish the consignment to the proxy. Returns
+/// with the incoming invoice still open, so tests can drive the receive side their own way.
+#[cfg(feature = "electrum")]
+fn setup_escrow_claim_to_witness_receive() -> EscrowClaimFixture {
     let amt_sat = 500;
     let blinding_fund = 777;
     let blinding_claim = 888;
@@ -2840,7 +2863,7 @@ fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
         .get_wallet_dir()
         .join(&operation_dir)
         .join("consignments")
-        .join(format!("{}.rgb", asset.asset_id));
+        .join(format!("{}.rgb", asset.asset_id.replace(':', "_")));
     party
         .wallet
         .post_consignment_to_proxy(
@@ -2852,9 +2875,34 @@ fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
         )
         .unwrap();
 
+    EscrowClaimFixture {
+        party,
+        asset,
+        receive_data,
+        proxy_recipient_id,
+        operation_id,
+        claim_txid,
+        claim_vout,
+        blinding_claim,
+    }
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
+    initialize();
+    let EscrowClaimFixture {
+        mut party,
+        asset,
+        receive_data,
+        claim_txid,
+        claim_vout,
+        ..
+    } = setup_escrow_claim_to_witness_receive();
+
     // Open `witness_receive` has no asset_id yet; `refresh(Some(asset_id))` would skip it.
-    // Drive the invoice like `send_to_oneself` (refresh, not `fetch_and_accept`: that API
-    // only writes the stash, which `psbt_op_apply` already did).
+    // Drive the invoice like `send_to_oneself`: refresh completes the SQL side.
     party.wait_for_refresh_raw(None, Some(&[receive_data.batch_transfer_idx]));
     mine(false);
     party.wait_for_refresh(None);
@@ -2899,6 +2947,115 @@ fn psbt_op_foreign_escrow_witness_receive_apply_refresh_balance() {
     assert_eq!(balance.settled, AMOUNT);
     assert_eq!(balance.future, AMOUNT);
     assert_eq!(balance.spendable, AMOUNT);
+}
+
+/// The exposed receive helper: `fetch_and_accept_transfer_by_recipient_id` pins and imports,
+/// the ordinary `refresh` then completes the `witness_receive` accounting. Asserts the
+/// end state through the normal wallet API and again after reopening the wallet.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn psbt_op_foreign_escrow_fetch_and_accept_then_refresh_settles() {
+    initialize();
+    let EscrowClaimFixture {
+        mut party,
+        asset,
+        receive_data,
+        proxy_recipient_id,
+        operation_id,
+        claim_txid,
+        claim_vout,
+        blinding_claim,
+    } = setup_escrow_claim_to_witness_receive();
+    let wallet_data = party.get_wallet_data();
+    let keys = party.get_keys();
+
+    let (_consignment, assignments) = party
+        .wallet
+        .fetch_and_accept_transfer_by_recipient_id(
+            party.party_online(),
+            proxy_recipient_id,
+            receive_data.recipient_id.clone(),
+            PROXY_ENDPOINT.as_str(),
+            blinding_claim,
+            MIN_CONFIRMATIONS,
+            expected_nia(&asset.asset_id, AMOUNT),
+        )
+        .unwrap();
+    assert_eq!(assignments, vec![Assignment::Fungible(AMOUNT)]);
+
+    // the helper only writes the stash: the invoice is still open until refresh
+    let incoming = party
+        .list_transfers_filtered(AssetFilter::AnyOrNone, None)
+        .into_iter()
+        .find(|t| t.kind == TransferKind::ReceiveWitness)
+        .expect("incoming witness transfer");
+    assert_eq!(incoming.status, TransferStatus::WaitingCounterparty);
+
+    party.wait_for_refresh_raw(None, Some(&[receive_data.batch_transfer_idx]));
+    mine(false);
+    party.wait_for_refresh(None);
+
+    let receive = party
+        .list_transfers(Some(&asset.asset_id))
+        .into_iter()
+        .find(|t| t.kind == TransferKind::ReceiveWitness)
+        .expect("incoming witness transfer");
+    assert_eq!(receive.status, TransferStatus::Settled);
+    assert_eq!(receive.assignments, vec![Assignment::Fungible(AMOUNT)]);
+    assert_eq!(
+        party.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Settled
+    );
+
+    let claim_txo = party
+        .db_txos()
+        .into_iter()
+        .find(|t| t.txid == claim_txid && t.vout == claim_vout)
+        .expect("claim output must exist after receive processing");
+    let claim_colorings: Vec<_> = party
+        .db_colorings()
+        .into_iter()
+        .filter(|c| c.txo_idx == claim_txo.idx)
+        .collect();
+    assert_eq!(
+        claim_colorings
+            .iter()
+            .filter(|c| c.r#type == ColoringType::Receive)
+            .count(),
+        1,
+        "exactly one Receive coloring must own the claimed allocation"
+    );
+    assert!(
+        !claim_colorings
+            .iter()
+            .any(|c| c.r#type == ColoringType::Change)
+    );
+    assert!(party.db_pending_witness_scripts().is_empty());
+
+    let balance = party.get_asset_balance(&asset.asset_id);
+    assert_eq!(balance.settled, AMOUNT);
+    assert_eq!(balance.future, AMOUNT);
+    assert_eq!(balance.spendable, AMOUNT);
+
+    // reopen: the settled state must survive a restart, consistency check included
+    drop(party);
+    let mut party = offline_party!(Wallet::new(wallet_data, keys).unwrap());
+    let online = party.go_online(false, None);
+    let party = party!(party.wallet, online);
+    let balance = party.get_asset_balance(&asset.asset_id);
+    assert_eq!(balance.settled, AMOUNT);
+    assert_eq!(balance.spendable, AMOUNT);
+    let receive = party
+        .list_transfers(Some(&asset.asset_id))
+        .into_iter()
+        .find(|t| t.kind == TransferKind::ReceiveWitness)
+        .expect("incoming witness transfer after reopen");
+    assert_eq!(receive.status, TransferStatus::Settled);
+    assert_eq!(
+        party.wallet.psbt_op_reconcile(&operation_id).unwrap(),
+        PsbtOperationStatus::Settled
+    );
 }
 
 #[cfg(feature = "electrum")]
@@ -2980,12 +3137,11 @@ fn psbt_op_status_errors_for_unknown_and_invalid_transition() {
         .wallet
         .psbt_op_apply(party_send.party_online(), &operation_id)
         .unwrap();
-    assert!(matches!(
-        party_send
-            .wallet
-            .psbt_op_apply(party_send.party_online(), &operation_id),
-        Err(Error::InvalidPsbtOperationStatus { .. })
-    ));
+    // a second apply is a no-op, so a lost response can be retried
+    party_send
+        .wallet
+        .psbt_op_apply(party_send.party_online(), &operation_id)
+        .unwrap();
 }
 
 #[cfg(feature = "electrum")]
@@ -3383,6 +3539,74 @@ fn fail_transfers_refused_after_stash_consume_before_sql_commit() {
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
+fn color_psbt_prepare_refuses_vanilla_keychain_output() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    party_send.create_utxos(false, Some(2), None, FEE_RATE, None);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let allocated: OutPoint = party_send
+        .list_unspents(true)
+        .into_iter()
+        .find(|u| u.utxo.colorable && !u.rgb_allocations.is_empty())
+        .unwrap()
+        .utxo
+        .outpoint
+        .into();
+
+    // vanilla (Internal keychain) address: RGB there is invisible to send and spendable as BTC
+    let vanilla_script = BdkAddress::from_str(&party_send.get_address())
+        .unwrap()
+        .assume_checked()
+        .script_pubkey();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder.add_utxo(allocated).unwrap();
+    tx_builder.manually_selected_only();
+    tx_builder
+        .add_recipient(vanilla_script, BdkAmount::from_sat(amt_sat))
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+
+    let result = party_send
+        .wallet
+        .color_psbt_for_outpoints_and_prepare_consume(
+            &mut psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        );
+    assert!(matches!(
+        result,
+        Err(Error::InvalidColoringInfo { details }) if details.contains("vanilla wallet address")
+    ));
+    assert!(
+        party_send
+            .list_transfers(Some(&asset.asset_id))
+            .iter()
+            .all(|t| t.status != TransferStatus::Initiated)
+    );
+}
+
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
 fn color_psbt_persist_projects_change_for_wallet_owned_output() {
     initialize();
 
@@ -3403,15 +3627,17 @@ fn color_psbt_persist_projects_change_for_wallet_owned_output() {
         .into();
 
     // Self-send: RGB destination is a wallet-owned script → Change coloring, not Burn.
-    let self_address = BdkAddress::from_str(&party_send.get_address()).unwrap();
+    let self_script = party_send
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
     tx_builder.add_utxo(allocated).unwrap();
     tx_builder.manually_selected_only();
     tx_builder
-        .add_recipient(
-            self_address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
+        .add_recipient(self_script.clone(), BdkAmount::from_sat(amt_sat))
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
     let input = psbt.unsigned_tx.input[0].previous_output;
@@ -3487,15 +3713,17 @@ fn color_psbt_persist_uda_change_is_non_fungible() {
         .outpoint
         .into();
 
-    let self_address = BdkAddress::from_str(&party_send.get_address()).unwrap();
+    let self_script = party_send
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
     tx_builder.add_utxo(allocated).unwrap();
     tx_builder.manually_selected_only();
     tx_builder
-        .add_recipient(
-            self_address.assume_checked().script_pubkey(),
-            BdkAmount::from_sat(amt_sat),
-        )
+        .add_recipient(self_script.clone(), BdkAmount::from_sat(amt_sat))
         .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
     let mut psbt = tx_builder.finish().unwrap();
     let input = psbt.unsigned_tx.input[0].previous_output;
@@ -3851,6 +4079,154 @@ fn psbt_op_prepare_rejects_second_live_batch_for_same_txid() {
         result,
         Err(Error::BatchTransferAlreadyExists { txid: ref t, .. }) if *t == txid
     );
+}
+
+#[cfg(feature = "electrum")]
+fn snapshot_dir(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = std::collections::BTreeMap::new();
+    if !dir.exists() {
+        return files;
+    }
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        for entry in std::fs::read_dir(&current).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let relative = path.strip_prefix(dir).unwrap().to_path_buf();
+                files.insert(relative, std::fs::read(&path).unwrap());
+            }
+        }
+    }
+    files
+}
+
+/// Same static-blinding PSBT as `psbt_op_prepare_rejects_second_live_batch_for_same_txid`,
+/// ready for a second prepare through either API (`retried_psbt` is the uncolored copy).
+#[cfg(feature = "electrum")]
+fn setup_duplicate_prepare_fixture() -> (SinglesigParty, ColoringInfo, OutPoint, Psbt, Psbt) {
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let input = psbt.unsigned_tx.input[0].previous_output;
+    insert_op_return(&mut psbt, true);
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.value.to_sat() == amt_sat)
+        .unwrap()
+        .0 as u32;
+    let coloring_info =
+        coloring_info_for(&asset.asset_id, HashMap::from([(vout, AMOUNT)]), blinding);
+    let retried_psbt = psbt.clone();
+    (party_send, coloring_info, input, psbt, retried_psbt)
+}
+
+/// A psbt_op-owned batch must not be handed to `consume_transfer_fascia` by a rejected
+/// `color_psbt_for_outpoints_and_prepare_consume` on the same txid.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn duplicate_prepare_consume_after_psbt_op_leaves_artifacts_untouched() {
+    initialize();
+    let (party_send, coloring_info, input, mut psbt, mut retried_psbt) =
+        setup_duplicate_prepare_fixture();
+
+    let PsbtOpPrepareResult { operation_dir, .. } = party_send
+        .wallet
+        .psbt_op_prepare(
+            &mut psbt,
+            coloring_info.clone(),
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+    let transfer_dir = party_send.wallet.get_transfer_dir(&txid);
+    let op_dir = party_send.wallet.get_wallet_dir().join(&operation_dir);
+    assert!(!transfer_dir.join("color_prepare").exists());
+    let transfer_before = snapshot_dir(&transfer_dir);
+    let op_before = snapshot_dir(&op_dir);
+
+    let result = party_send
+        .wallet
+        .color_psbt_for_outpoints_and_prepare_consume(
+            &mut retried_psbt,
+            coloring_info,
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        );
+    assert_eq!(retried_psbt.unsigned_tx.compute_txid().to_string(), txid);
+    assert_matches!(
+        result,
+        Err(Error::BatchTransferAlreadyExists { txid: ref t, .. }) if *t == txid
+    );
+    assert!(!transfer_dir.join("color_prepare").exists());
+    assert_eq!(snapshot_dir(&transfer_dir), transfer_before);
+    assert_eq!(snapshot_dir(&op_dir), op_before);
+}
+
+/// The reverse order: a rejected `psbt_op_prepare` leaves the consume-owned transfer
+/// directory byte-for-byte unchanged and no operation directory behind.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn duplicate_psbt_op_after_prepare_consume_leaves_artifacts_untouched() {
+    initialize();
+    let (party_send, coloring_info, input, mut psbt, mut retried_psbt) =
+        setup_duplicate_prepare_fixture();
+
+    party_send
+        .wallet
+        .color_psbt_for_outpoints_and_prepare_consume(
+            &mut psbt,
+            coloring_info.clone(),
+            vec![input],
+            MIN_CONFIRMATIONS,
+            None,
+        )
+        .unwrap();
+    let txid = psbt.unsigned_tx.compute_txid().to_string();
+    let transfer_dir = party_send.wallet.get_transfer_dir(&txid);
+    let ops_root = party_send.wallet.get_wallet_dir().join("psbt_ops");
+    assert!(transfer_dir.join("color_prepare").exists());
+    let transfer_before = snapshot_dir(&transfer_dir);
+    let ops_before = snapshot_dir(&ops_root);
+
+    let result = party_send.wallet.psbt_op_prepare(
+        &mut retried_psbt,
+        coloring_info,
+        vec![input],
+        MIN_CONFIRMATIONS,
+        None,
+    );
+    assert_eq!(retried_psbt.unsigned_tx.compute_txid().to_string(), txid);
+    assert_matches!(
+        result,
+        Err(Error::BatchTransferAlreadyExists { txid: ref t, .. }) if *t == txid
+    );
+    assert_eq!(snapshot_dir(&transfer_dir), transfer_before);
+    assert_eq!(snapshot_dir(&ops_root), ops_before);
 }
 
 /// `psbt_op_apply` must not consume RGB state until the indexer can see the witness TX, otherwise
@@ -4568,8 +4944,12 @@ fn setup_fetch_accept_pin_fixture(
     party_send.send_btc(&recv_party.get_address(), 99_998_200);
     let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
 
-    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
-    let recipient_script = address.assume_checked().script_pubkey();
+    let recipient_script = recv_party
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
     tx_builder
         .add_recipient(recipient_script.clone(), BdkAmount::from_sat(amt_sat))
@@ -5207,8 +5587,12 @@ fn fetch_consignment_by_recipient_id_unchecked_success() {
     party_send.send_btc(&recv_party.get_address(), 99_998_200);
     let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
 
-    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
-    let recipient_script = address.assume_checked().script_pubkey();
+    let recipient_script = recv_party
+        .wallet
+        .bdk_wallet_mut()
+        .reveal_next_address(KeychainKind::External)
+        .address
+        .script_pubkey();
     let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
     tx_builder
         .add_recipient(recipient_script.clone(), BdkAmount::from_sat(amt_sat))

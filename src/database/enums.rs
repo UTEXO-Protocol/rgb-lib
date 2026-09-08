@@ -18,6 +18,9 @@ pub enum AssetSchema {
     /// IFA schema
     #[sea_orm(num_value = 4)]
     Ifa = 4,
+    /// BFA schema
+    #[sea_orm(num_value = 5)]
+    Bfa = 5,
 }
 
 impl fmt::Display for AssetSchema {
@@ -35,6 +38,7 @@ impl TryFrom<String> for AssetSchema {
             SCHEMA_ID_UDA => AssetSchema::Uda,
             SCHEMA_ID_CFA => AssetSchema::Cfa,
             SCHEMA_ID_IFA => AssetSchema::Ifa,
+            SCHEMA_ID_BFA => AssetSchema::Bfa,
             _ => return Err(Error::UnknownRgbSchema { schema_id }),
         })
     }
@@ -50,7 +54,7 @@ impl TryFrom<SchemaId> for AssetSchema {
 
 impl AssetSchema {
     pub(crate) const VALUES: [Self; NUM_KNOWN_SCHEMAS] =
-        [Self::Nia, Self::Uda, Self::Cfa, Self::Ifa];
+        [Self::Nia, Self::Uda, Self::Cfa, Self::Ifa, Self::Bfa];
 
     fn from_schema_id_str(schema_id: String) -> Result<Self, Error> {
         Ok(match &schema_id[..] {
@@ -58,8 +62,16 @@ impl AssetSchema {
             SCHEMA_ID_UDA => AssetSchema::Uda,
             SCHEMA_ID_CFA => AssetSchema::Cfa,
             SCHEMA_ID_IFA => AssetSchema::Ifa,
+            SCHEMA_ID_BFA => AssetSchema::Bfa,
             _ => return Err(Error::UnknownRgbSchema { schema_id }),
         })
+    }
+
+    /// The pinned schema id, in the exact form a consignment's genesis carries
+    /// it. Callers outside this crate compare against it to tell what a
+    /// consignment is without hardcoding the id a second time.
+    pub fn schema_id(&self) -> String {
+        SchemaId::from(*self).to_string()
     }
 
     /// Get [`AssetSchema`] from [`SchemaId`].
@@ -81,6 +93,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::schema(),
             Self::Cfa => CollectibleFungibleAsset::schema(),
             Self::Ifa => InflatableFungibleAsset::schema(),
+            Self::Bfa => BridgedFungibleAsset::schema(),
         }
     }
 
@@ -90,6 +103,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::scripts(),
             Self::Cfa => CollectibleFungibleAsset::scripts(),
             Self::Ifa => InflatableFungibleAsset::scripts(),
+            Self::Bfa => BridgedFungibleAsset::scripts(),
         }
     }
 
@@ -100,6 +114,7 @@ impl AssetSchema {
             Self::Uda => UniqueDigitalAsset::types(),
             Self::Cfa => CollectibleFungibleAsset::types(),
             Self::Ifa => InflatableFungibleAsset::types(),
+            Self::Bfa => BridgedFungibleAsset::types(),
         }
     }
 
@@ -122,6 +137,7 @@ impl From<AssetSchema> for SchemaId {
         match asset_schema {
             AssetSchema::Cfa => SchemaId::from_str(SCHEMA_ID_CFA).unwrap(),
             AssetSchema::Ifa => SchemaId::from_str(SCHEMA_ID_IFA).unwrap(),
+            AssetSchema::Bfa => SchemaId::from_str(SCHEMA_ID_BFA).unwrap(),
             AssetSchema::Nia => SchemaId::from_str(SCHEMA_ID_NIA).unwrap(),
             AssetSchema::Uda => SchemaId::from_str(SCHEMA_ID_UDA).unwrap(),
         }
@@ -342,6 +358,8 @@ pub enum Assignment {
     NonFungible,
     /// Inflation right
     InflationRight(u64),
+    /// Bridge right
+    BridgeRight,
     /// Link right
     LinkRight,
     /// Any assignment
@@ -356,6 +374,7 @@ impl Assignment {
                 Self::InflationRight(amt.as_u64())
             }
             AllocatedState::Data(_) => Self::NonFungible,
+            AllocatedState::Void if opout.ty == OS_BRIDGE => Self::BridgeRight,
             AllocatedState::Void if opout.ty == OS_LINK => Self::LinkRight,
             _ => unreachable!(),
         }
@@ -377,6 +396,7 @@ impl Assignment {
                     .checked_add(*amt)
                     .expect("total inflation amount cannot exceed u64::MAX")
             }
+            Self::BridgeRight => assignments.bridge += 1,
             Self::LinkRight => {}
             _ => unreachable!("when using this method we should know the assignment type"),
         }
@@ -464,6 +484,26 @@ mod tests {
     use sea_orm::IntoActiveValue;
 
     use super::*;
+
+    /// The SCHEMA_ID_* constants are hand-copied from the schema crates, and
+    /// the roundtrip below only compares them against themselves - so a schema
+    /// change moves the real id and nothing notices. BFA drifted exactly that
+    /// way when it gained a burn recipient.
+    #[test]
+    fn schema_id_constants_match_their_schemas() {
+        for asset_schema in AssetSchema::VALUES {
+            let pinned: SchemaId = asset_schema.into();
+            assert_eq!(
+                pinned,
+                asset_schema.schema().schema_id(),
+                "the {asset_schema} constant is stale"
+            );
+            // What the bindings hand out has to be the same string a
+            // consignment's genesis carries, or a caller comparing the two
+            // quietly decides every consignment is some other schema.
+            assert_eq!(asset_schema.schema_id(), pinned.to_string());
+        }
+    }
 
     #[test]
     fn test_schema_id() {

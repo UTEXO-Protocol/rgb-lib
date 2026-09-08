@@ -93,6 +93,7 @@ pub extern "C" fn rgblib_burn(
     online: *const c_char,
     asset_id: *const c_char,
     amount: *const c_char,
+    burn_recipient: *const c_char,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
 ) -> CResultString {
@@ -101,6 +102,7 @@ pub extern "C" fn rgblib_burn(
         online,
         asset_id,
         amount,
+        burn_recipient,
         fee_rate,
         min_confirmations,
     )
@@ -113,6 +115,7 @@ pub extern "C" fn rgblib_burn_begin(
     online: *const c_char,
     asset_id: *const c_char,
     amount: *const c_char,
+    burn_recipient: *const c_char,
     fee_rate: *const c_char,
     min_confirmations: *const c_char,
     dry_run: bool,
@@ -122,6 +125,7 @@ pub extern "C" fn rgblib_burn_begin(
         online,
         asset_id,
         amount,
+        burn_recipient,
         fee_rate,
         min_confirmations,
         dry_run,

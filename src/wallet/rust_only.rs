@@ -26,6 +26,8 @@ const PSBT_OP_CONSIGNMENTS_DIR: &str = "consignments";
 pub(crate) const STASH_CONSUMED_FILE: &str = "stash_consumed";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const COLOR_PREPARE_FILE: &str = "color_prepare";
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+pub(crate) const PREPARE_BATCH_FILE: &str = "prepare_batch";
 
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 fn persist_stash_consumed_marker(path: &Path) -> Result<(), Error> {
@@ -64,6 +66,7 @@ fn persist_durable_replace(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 /// Expiration applied by `psbt_op_prepare` when the caller gives none.
 pub const PSBT_OP_DEFAULT_EXPIRATION_SECS: u64 = 24 * 60 * 60;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 const PSBT_OP_ID_LEN: usize = 32;
 
 #[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
@@ -213,7 +216,7 @@ fn pin_witness_output_to_recipient_id(
     };
     let witness_id = RgbTxid::from_str(txid).map_err(|_| Error::InvalidTxid)?;
     let status = resolver
-        .resolve_witness(witness_id)
+        .resolve_witness(&PubWitness::Txid(witness_id))
         .map_err(|e| Error::Network {
             details: e.to_string(),
         })?;
@@ -833,7 +836,7 @@ impl Wallet {
 
             for (seal, amount) in output_seals {
                 match schema {
-                    AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa => {
+                    AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa | AssetSchema::Bfa => {
                         asset_transition_builder = asset_transition_builder.add_fungible_state(
                             assignment_name.clone(),
                             seal,
@@ -902,8 +905,9 @@ impl Wallet {
     /// `output_map` indexing follows [`Self::color_psbt`] (legacy P2TR / `OpretFirst` +1 shift).
     ///
     /// Consignments are built from the fascia **before** any stash update. The fascia is saved
-    /// under the wallet transfer dir and a [`TransferStatus::Initiated`] batch is written so
-    /// [`crate::wallet::Wallet::fail_transfers`] can roll back if the tx is never broadcast.
+    /// under the wallet transfer dir and a [`TransferStatus::Initiated`] batch is written so an
+    /// explicit [`crate::wallet::Wallet::fail_transfers`] on it can roll back if the tx is never
+    /// broadcast; the bulk expiry sweep never fails such a batch on its own.
     /// Call [`Self::consume_transfer_fascia`] with [`ColorPrepareResult::batch_transfer_idx`]
     /// **after** broadcast (the indexer must see the tx) to apply the fascia to the RGB stash.
     ///
@@ -927,6 +931,7 @@ impl Wallet {
         let mut runtime = self.rgb_runtime()?;
         // checked before `prepare_psbt_for_coloring`, which would otherwise insert an OP_RETURN
         // into the caller's PSBT on the way to failing
+        self.validate_native_segwit_inputs(psbt)?;
         self.reject_uncolored_input_contracts(&runtime, &prev_outputs, &coloring_info)?;
         let shift_output_map_for_opreturn_first = self.prepare_psbt_for_coloring(psbt)?;
         let (fascia, asset_beneficiaries) = self.color_psbt_with_prevouts_runtime(
@@ -984,10 +989,42 @@ impl Wallet {
             &psbt_inputs,
             coloring_info,
         )?;
+        self.reject_vanilla_outputs(psbt, coloring_info)?;
         // Signed-PSBT check; OP_RETURN is already required. Ignore the legacy P2TR shift flag —
         // this API always uses final vout indices.
         let _ = self.prepare_psbt_for_coloring(psbt)?;
         Ok((runtime, override_set))
+    }
+
+    // checked before coloring commits to the caller's PSBT; `persist_color_prepare_batch`
+    // repeats it for the legacy shifted-vout path
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn reject_vanilla_outputs(
+        &self,
+        psbt: &Psbt,
+        coloring_info: &ColoringInfo,
+    ) -> Result<(), Error> {
+        let txn = self.database().begin_transaction()?;
+        let incoming_witness_scripts = Self::incoming_witness_receive_script_hexes(&txn)?;
+        for asset_coloring in coloring_info.asset_info_map.values() {
+            for vout in asset_coloring.output_map.keys() {
+                let Some(txout) = psbt.unsigned_tx.output.get(*vout as usize) else {
+                    continue;
+                };
+                let keychain = self
+                    .bdk_wallet()
+                    .derivation_of_spk(txout.script_pubkey.clone())
+                    .map(|(keychain, _)| keychain);
+                if keychain == Some(KeychainKind::Internal)
+                    && !incoming_witness_scripts.contains(&txout.script_pubkey.to_hex_string())
+                {
+                    return Err(Error::InvalidColoringInfo {
+                        details: format!("output_map vout {vout} pays a vanilla wallet address"),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Color a PSBT using a provided set of input outpoints.
@@ -1064,6 +1101,32 @@ impl Wallet {
         Ok(())
     }
 
+    // the batch txid is taken from the unsigned tx: a legacy or P2SH-wrapped input changes it
+    // when its scriptSig is finalized
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn validate_native_segwit_inputs(&self, psbt: &Psbt) -> Result<(), Error> {
+        for (i, (input, txin)) in psbt.inputs.iter().zip(&psbt.unsigned_tx.input).enumerate() {
+            let Some(witness_utxo) = input.witness_utxo.as_ref() else {
+                return Err(Error::InvalidColoringInfo {
+                    details: format!("input {i} has no witness_utxo"),
+                });
+            };
+            if !witness_utxo.script_pubkey.is_witness_program() || input.redeem_script.is_some() {
+                return Err(Error::InvalidColoringInfo {
+                    details: format!("input {i} must be native SegWit"),
+                });
+            }
+            if let Some(utxo) = self.bdk_wallet().get_utxo(txin.previous_output)
+                && utxo.txout.script_pubkey != witness_utxo.script_pubkey
+            {
+                return Err(Error::InvalidColoringInfo {
+                    details: format!("input {i} witness_utxo does not match the wallet UTXO"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     fn validate_color_psbt_for_outpoints_inputs(
         &self,
@@ -1073,6 +1136,7 @@ impl Wallet {
         psbt_inputs: &HashSet<OutPoint>,
         coloring_info: &ColoringInfo,
     ) -> Result<(), Error> {
+        self.validate_native_segwit_inputs(psbt)?;
         let omitted: Vec<OutPoint> = psbt_inputs.difference(override_set).copied().collect();
         if !omitted.is_empty() {
             let assigning = runtime.contracts_assigning(omitted)?;
@@ -1187,13 +1251,16 @@ impl Wallet {
         let db_data = txn.get_db_data(false)?;
         let batch_transfer =
             txn.get_batch_transfer_or_fail(batch_transfer_idx, &db_data.batch_transfers)?;
-        if batch_transfer.status != TransferStatus::Initiated {
-            return Err(Error::Internal {
-                details: format!(
-                    "batch transfer {batch_transfer_idx} is {:?}, expected Initiated",
-                    batch_transfer.status
-                ),
-            });
+        match batch_transfer.status {
+            TransferStatus::Initiated => {}
+            TransferStatus::WaitingConfirmations | TransferStatus::Settled => return Ok(()),
+            other => {
+                return Err(Error::Internal {
+                    details: format!(
+                        "batch transfer {batch_transfer_idx} is {other:?}, expected Initiated"
+                    ),
+                });
+            }
         }
         let txid = batch_transfer
             .txid
@@ -1212,15 +1279,12 @@ impl Wallet {
         let fascia_str = fs::read_to_string(transfer_dir.join(FASCIA_FILE))?;
         let fascia: Fascia = serde_json::from_str(&fascia_str).map_err(InternalError::from)?;
         let psbt_path = transfer_dir.join(UNSIGNED_PSBT_FILE);
-        let psbt = if psbt_path.exists() {
-            Some(Psbt::from_str(&fs::read_to_string(&psbt_path)?)?)
-        } else {
-            warn!(
-                self.logger(),
-                "No unsigned PSBT for batch {batch_transfer_idx}, cannot mark its inputs spent"
-            );
-            None
-        };
+        if !psbt_path.exists() {
+            return Err(Error::Inconsistency {
+                details: format!("batch transfer {batch_transfer_idx} has no unsigned PSBT file"),
+            });
+        }
+        let psbt = Psbt::from_str(&fs::read_to_string(&psbt_path)?)?;
         let stash_marker = transfer_dir.join(STASH_CONSUMED_FILE);
         if !stash_marker.exists() {
             if self.indexer().get_tx_confirmations(txid)?.is_none() {
@@ -1240,9 +1304,7 @@ impl Wallet {
             }
         }
         self.update_db_colored_txos_from_bdk(&txn, false)?;
-        if let Some(psbt) = psbt {
-            self.mark_psbt_inputs_spent(&txn, &psbt)?;
-        }
+        self.mark_psbt_inputs_spent(&txn, &psbt)?;
         let mut updated: DbBatchTransferActMod = batch_transfer.into();
         updated.status = ActiveValue::Set(TransferStatus::WaitingConfirmations);
         txn.update_batch_transfer(&mut updated)?;
@@ -1429,6 +1491,7 @@ impl Wallet {
                 *contract_id,
                 beneficiaries_witness,
                 beneficiaries_blinded,
+                [],
                 &fascia,
             )?);
         }
@@ -1449,7 +1512,7 @@ impl Wallet {
             let asset_id = transfer.contract_id().to_string();
             let path = op_dir
                 .join(PSBT_OP_CONSIGNMENTS_DIR)
-                .join(format!("{asset_id}.rgb"));
+                .join(format!("{}.rgb", asset_id.replace(':', "_")));
             transfer.save_file(&path)?;
         }
 
@@ -1536,6 +1599,12 @@ impl Wallet {
         info!(self.logger(), "Applying HTLC operation {operation_id}...");
         self.check_online(online)?;
         let mut meta = self.psbt_op_read_meta(operation_id)?;
+        if matches!(
+            meta.status,
+            PsbtOperationStatus::Applied | PsbtOperationStatus::Settled
+        ) {
+            return Ok(());
+        }
         if meta.status != PsbtOperationStatus::Prepared {
             return Err(Error::InvalidPsbtOperationStatus {
                 details: format!(
@@ -1659,7 +1728,11 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn psbt_op_abort(&mut self, online: Online, operation_id: &str) -> Result<(), Error> {
         info!(self.logger(), "Aborting HTLC operation {operation_id}...");
+        self.check_online(online)?;
         let mut meta = self.psbt_op_read_meta(operation_id)?;
+        if meta.status == PsbtOperationStatus::Failed {
+            return Ok(());
+        }
         if meta.status != PsbtOperationStatus::Prepared {
             return Err(Error::InvalidPsbtOperationStatus {
                 details: format!(
@@ -1682,7 +1755,16 @@ impl Wallet {
         }
         let batch_transfer_idx = self.psbt_op_resolve_batch_idx(&meta)?;
         if let Some(batch_transfer_idx) = batch_transfer_idx {
-            self.fail_transfers(online, Some(batch_transfer_idx), false, true)?;
+            let already_failed = {
+                let txn = self.database().begin_transaction()?;
+                let db_data = txn.get_db_data(false)?;
+                txn.get_batch_transfer_or_fail(batch_transfer_idx, &db_data.batch_transfers)?
+                    .status
+                    == TransferStatus::Failed
+            };
+            if !already_failed {
+                self.fail_transfers(online, Some(batch_transfer_idx), false, true)?;
+            }
         }
         meta.status = PsbtOperationStatus::Failed;
         meta.batch_transfer_idx = batch_transfer_idx;
@@ -1702,18 +1784,26 @@ impl Wallet {
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn psbt_op_reconcile(&self, operation_id: &str) -> Result<PsbtOperationStatus, Error> {
         let mut meta = self.psbt_op_read_meta(operation_id)?;
-        if meta.status == PsbtOperationStatus::Applied
-            && let Some(batch_transfer_idx) = meta.batch_transfer_idx
-        {
+        if let Some(batch_transfer_idx) = meta.batch_transfer_idx {
             let txn = self.database().begin_transaction()?;
             let db_data = txn.get_db_data(false)?;
-            if let Some(batch) = db_data
+            let batch_status = db_data
                 .batch_transfers
                 .iter()
                 .find(|b| b.idx == batch_transfer_idx)
-                && batch.status == TransferStatus::Settled
-            {
-                meta.status = PsbtOperationStatus::Settled;
+                .map(|b| b.status);
+            let settled = match (meta.status, batch_status) {
+                (PsbtOperationStatus::Applied, Some(TransferStatus::Settled)) => {
+                    Some(PsbtOperationStatus::Settled)
+                }
+                // the expiry sweep failed the batch behind the operation's back
+                (PsbtOperationStatus::Prepared, Some(TransferStatus::Failed)) => {
+                    Some(PsbtOperationStatus::Failed)
+                }
+                _ => None,
+            };
+            if let Some(status) = settled {
+                meta.status = status;
                 self.psbt_op_write_meta(operation_id, &meta)?;
             }
         }
@@ -1769,6 +1859,7 @@ impl Wallet {
                 *contract_id,
                 beneficiaries_witness,
                 beneficiaries_blinded,
+                [],
                 &fascia,
             )?);
         }
@@ -1807,16 +1898,6 @@ impl Wallet {
         allow_consume_transfer_fascia: bool,
         runtime: &RgbRuntime,
     ) -> Result<i32, Error> {
-        let transfer_dir = self.get_transfer_dir(txid);
-        fs::create_dir_all(&transfer_dir)?;
-        let fascia_path = transfer_dir.join(FASCIA_FILE);
-        let serialized_fascia = serde_json::to_string(fascia).map_err(InternalError::from)?;
-        fs::write(fascia_path, serialized_fascia)?;
-        fs::write(transfer_dir.join(UNSIGNED_PSBT_FILE), psbt.to_string())?;
-        if allow_consume_transfer_fascia {
-            fs::write(transfer_dir.join(COLOR_PREPARE_FILE), b"")?;
-        }
-
         let created_at = now().unix_timestamp();
         let bitcoin_network = self.bitcoin_network();
         let txn = self.database().begin_transaction()?;
@@ -1838,6 +1919,16 @@ impl Wallet {
                 txid: txid.to_string(),
                 idx: existing.idx,
             });
+        }
+        let transfer_dir = self.get_transfer_dir(txid);
+        fs::create_dir_all(&transfer_dir)?;
+        let fascia_path = transfer_dir.join(FASCIA_FILE);
+        let serialized_fascia = serde_json::to_string(fascia).map_err(InternalError::from)?;
+        fs::write(fascia_path, serialized_fascia)?;
+        fs::write(transfer_dir.join(UNSIGNED_PSBT_FILE), psbt.to_string())?;
+        fs::write(transfer_dir.join(PREPARE_BATCH_FILE), b"")?;
+        if allow_consume_transfer_fascia {
+            fs::write(transfer_dir.join(COLOR_PREPARE_FILE), b"")?;
         }
         let batch_transfer = DbBatchTransferActMod {
             txid: ActiveValue::Set(Some(txid.to_string())),
@@ -1862,9 +1953,22 @@ impl Wallet {
             let asset_transfer_idx = txn.set_asset_transfer(asset_transfer)?;
 
             for (outpoint, assignments) in by_outpoint {
-                let outpoint: Outpoint = (*outpoint).into();
+                let btc_outpoint = *outpoint;
+                let outpoint: Outpoint = btc_outpoint.into();
                 let Some(txo) = txn.get_txo(&outpoint)? else {
-                    continue;
+                    match self.bdk_wallet().get_utxo(btc_outpoint) {
+                        Some(utxo) if utxo.keychain == KeychainKind::External => {
+                            return Err(Error::Inconsistency {
+                                details: format!("wallet input {btc_outpoint} has no TXO row"),
+                            });
+                        }
+                        Some(_) => {
+                            return Err(Error::InvalidColoringInfo {
+                                details: format!("input {btc_outpoint} is a vanilla wallet UTXO"),
+                            });
+                        }
+                        None => continue,
+                    }
                 };
                 let txo_idx = txo.idx;
 
@@ -1918,13 +2022,23 @@ impl Wallet {
                         Self::assignment_for_coloring_output(asset_schema, amount);
                     let owned_by_witness_receive =
                         incoming_witness_scripts.contains(&txout.script_pubkey.to_hex_string());
+                    let keychain = self
+                        .bdk_wallet()
+                        .derivation_of_spk(txout.script_pubkey.clone())
+                        .map(|(keychain, _)| keychain);
+                    // RGB on a vanilla UTXO is invisible to send and spendable as plain BTC
+                    if keychain == Some(KeychainKind::Internal) && !owned_by_witness_receive {
+                        return Err(Error::InvalidColoringInfo {
+                            details: format!(
+                                "output_map vout {vout} pays a vanilla wallet address"
+                            ),
+                        });
+                    }
                     // A wallet-owned script is Change only when no open witness_receive
                     // owns it. Otherwise Receive processing is the sole allocation owner:
                     // projecting Change here would upsert the TXO as pending_witness=false
                     // and later sum with a Receive coloring on the same outpoint.
-                    if self.bdk_wallet().is_mine(txout.script_pubkey.clone())
-                        && !owned_by_witness_receive
-                    {
+                    if keychain == Some(KeychainKind::External) && !owned_by_witness_receive {
                         let outpoint = Outpoint {
                             txid: txid.to_string(),
                             vout,
@@ -2003,7 +2117,9 @@ impl Wallet {
     fn assignment_for_coloring_output(asset_schema: AssetSchema, amount: u64) -> Assignment {
         match asset_schema {
             AssetSchema::Uda => Assignment::NonFungible,
-            AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa => Assignment::Fungible(amount),
+            AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa | AssetSchema::Bfa => {
+                Assignment::Fungible(amount)
+            }
         }
     }
 
@@ -2043,7 +2159,15 @@ impl Wallet {
             let Some(ref recipient_id) = transfer.recipient_id else {
                 continue;
             };
-            if let Ok(Some(script)) = script_buf_from_recipient_id(recipient_id.clone()) {
+            let script = script_buf_from_recipient_id(recipient_id.clone()).map_err(|e| {
+                Error::Inconsistency {
+                    details: format!(
+                        "transfer {} has an undecodable recipient id: {e}",
+                        transfer.idx
+                    ),
+                }
+            })?;
+            if let Some(script) = script {
                 scripts.insert(script.to_hex_string());
             }
         }
@@ -2133,6 +2257,11 @@ impl Wallet {
     /// Fetch a consignment by proxy key, pin the witness output to `witness_recipient_id`, and
     /// accept the transfer.
     ///
+    /// This is a pinned pre-check with an early stash import: it verifies the output, the
+    /// confirmations and `expected`, validates like `refresh` does, and writes the stash only.
+    /// The `witness_receive` accounting (incoming batch, Receive coloring, balance, pending
+    /// witness script) is completed by the ordinary `refresh` on the same invoice afterwards.
+    ///
     /// <div class="warning">This method is meant for special usage on HTLC outpoints</div>
     #[cfg(any(feature = "electrum", feature = "esplora"))]
     pub fn fetch_and_accept_transfer_by_recipient_id(
@@ -2159,14 +2288,25 @@ impl Wallet {
             vout,
             min_confirmations,
         )?;
-        self.accept_transfer_from_consignment_unchecked(
-            online,
+        // RGB on a vanilla UTXO is invisible to send and spendable as BTC
+        let witness_script =
+            script_buf_from_recipient_id(witness_recipient_id)?.ok_or(Error::InvalidRecipientID)?;
+        if !matches!(
+            self.bdk_wallet().derivation_of_spk(witness_script),
+            Some((KeychainKind::External, _))
+        ) {
+            return Err(Error::InvalidRecipientID);
+        }
+        let witness_id = RgbTxid::from_str(&txid).map_err(|_| Error::InvalidTxid)?;
+        let (consignment, assignments, _media_digests) = self.accept_transfer_with_consignment(
             consignment,
-            txid,
+            witness_id,
             vout,
             blinding,
-            expected,
-        )
+            Some(min_confirmations),
+            Some(expected),
+        )?;
+        Ok((consignment, assignments))
     }
 
     /// Create consignments for a PSBT created with the [`send_begin`](Wallet::send_begin) method.
@@ -2246,7 +2386,7 @@ impl Wallet {
                 file_path: consignment_path.to_string_lossy().to_string(),
             })?;
 
-        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding, None)
+        self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding, None, None)
     }
 
     /// Accept an RGB transfer using a TXID to retrieve its consignment from the proxy.
@@ -2273,8 +2413,14 @@ impl Wallet {
             .map_err(InternalError::from)?;
         let consignment = RgbTransfer::load(&consignment_bytes[..]).map_err(InternalError::from)?;
 
-        let (consignment, assignments, _media_digests) =
-            self.accept_transfer_with_consignment(consignment, witness_id, vout, blinding, None)?;
+        let (consignment, assignments, _media_digests) = self.accept_transfer_with_consignment(
+            consignment,
+            witness_id,
+            vout,
+            blinding,
+            None,
+            None,
+        )?;
         Ok((consignment, assignments))
     }
 
@@ -2304,6 +2450,7 @@ impl Wallet {
             witness_id,
             vout,
             blinding,
+            None,
             Some(expected),
         )?;
         Ok((consignment, assignments))
@@ -2316,6 +2463,7 @@ impl Wallet {
         witness_id: RgbTxid,
         vout: u32,
         blinding: u64,
+        min_confirmations: Option<u8>,
         expected: Option<ExpectedTransfer>,
     ) -> Result<(RgbTransfer, Vec<Assignment>, HashSet<String>), Error> {
         let schema_id = consignment.schema_id().to_string();
@@ -2346,9 +2494,18 @@ impl Wallet {
         let validation_config = ValidationConfig {
             chain_net: self.chain_net(),
             trusted_typesystem,
-            ..Default::default()
+            build_opouts_dag: false,
+            safe_height: match min_confirmations {
+                Some(min_confirmations) => NonZeroU32::new(self.safe_height(min_confirmations)?),
+                None => None,
+            },
         };
-        let valid_consignment = match consignment.clone().validate(&resolver, &validation_config) {
+        let valid_consignment = match self.validate_consignment_for_schema(
+            &consignment,
+            asset_schema,
+            &resolver,
+            &validation_config,
+        )? {
             Ok(consignment) => consignment,
             Err(ValidationError::InvalidConsignment(e)) => {
                 error!(self.logger(), "Consignment is invalid: {}", e);
@@ -2671,7 +2828,7 @@ impl Wallet {
                 &txn.iter_tokens()?,
                 &txn.iter_token_medias()?,
             ),
-            AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa => None,
+            AssetSchema::Nia | AssetSchema::Cfa | AssetSchema::Ifa | AssetSchema::Bfa => None,
         };
         let medias = self.get_asset_medias(&txn, asset.media_idx, token)?;
         txn.commit()?;
