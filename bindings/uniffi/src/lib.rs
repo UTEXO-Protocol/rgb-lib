@@ -196,11 +196,53 @@ impl From<rgb_lib::wallet::rust_only::PsbtOperationStatus> for PsbtOperationStat
     }
 }
 
+/// Caller-reported / indexer-observed broadcast lifecycle.
+pub enum PsbtBroadcastState {
+    NotAttempted,
+    Attempted,
+    Observed,
+    Ambiguous,
+}
+
+impl From<rgb_lib::wallet::rust_only::PsbtBroadcastState> for PsbtBroadcastState {
+    fn from(s: rgb_lib::wallet::rust_only::PsbtBroadcastState) -> Self {
+        match s {
+            rgb_lib::wallet::rust_only::PsbtBroadcastState::NotAttempted => Self::NotAttempted,
+            rgb_lib::wallet::rust_only::PsbtBroadcastState::Attempted => Self::Attempted,
+            rgb_lib::wallet::rust_only::PsbtBroadcastState::Observed => Self::Observed,
+            rgb_lib::wallet::rust_only::PsbtBroadcastState::Ambiguous => Self::Ambiguous,
+        }
+    }
+}
+
 /// Result of `psbt_op_prepare`: opaque operation ID + colored PSBT + file-backed payload dir.
 pub struct PsbtOpPrepareResult {
     pub operation_id: String,
     pub colored_psbt: String,
     pub operation_dir: String,
+}
+
+/// Recovered HTLC operation (lookup by witness txid).
+pub struct PsbtOperation {
+    pub operation_id: String,
+    pub colored_psbt: String,
+    pub operation_dir: String,
+    pub status: PsbtOperationStatus,
+    pub broadcast: PsbtBroadcastState,
+    pub txid: String,
+}
+
+impl From<rgb_lib::wallet::rust_only::PsbtOperation> for PsbtOperation {
+    fn from(op: rgb_lib::wallet::rust_only::PsbtOperation) -> Self {
+        Self {
+            operation_id: op.operation_id,
+            colored_psbt: op.colored_psbt,
+            operation_dir: op.operation_dir,
+            status: op.status.into(),
+            broadcast: op.broadcast.into(),
+            txid: op.txid,
+        }
+    }
 }
 
 /// RGB assignments on a (possibly foreign) outpoint.
@@ -1288,6 +1330,14 @@ impl Wallet {
 
     fn psbt_op_reconcile(&self, operation_id: String) -> Result<PsbtOperationStatus, RgbLibError> {
         Ok(self._get_wallet().psbt_op_reconcile(&operation_id)?.into())
+    }
+
+    fn psbt_op_mark_broadcast(&self, operation_id: String) -> Result<(), RgbLibError> {
+        self._get_wallet().psbt_op_mark_broadcast(&operation_id)
+    }
+
+    fn psbt_op_by_txid(&self, txid: String) -> Result<PsbtOperation, RgbLibError> {
+        Ok(self._get_wallet().psbt_op_by_txid(&txid)?.into())
     }
 
     fn contract_assignments_for_outpoints(
