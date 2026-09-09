@@ -1896,6 +1896,15 @@ pub trait WalletOffline: WalletBackup {
                     .media
                     .map(|a| Media::from_attachment(&a, media_dir));
                 let reject_list_url = contract.reject_list_url().map(|u| u.to_string());
+                // a BFA genesis issues nothing and the schema sets no cap: the
+                // supply is whatever the mints seen so far bridged in
+                let known_circulating_supply = if let Some(valid_transfer) = valid_transfer {
+                    BfaWrapper::with(valid_transfer.contract_data())
+                        .total_bridged()
+                        .into()
+                } else {
+                    contract.total_bridged().into()
+                };
                 LocalAssetData {
                     asset_id: contract_id.to_string(),
                     name,
@@ -1906,7 +1915,7 @@ pub trait WalletOffline: WalletBackup {
                     media,
                     initial_supply: 0,
                     max_supply: None,
-                    known_circulating_supply: None,
+                    known_circulating_supply: Some(known_circulating_supply),
                     reject_list_url,
                     token: None,
                     timestamp,

@@ -1407,7 +1407,7 @@ impl Wallet {
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.bridge_end_impl(&txn, &psbt)?;
+        let res = self.bridge_end_impl(&txn, &psbt, true)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();

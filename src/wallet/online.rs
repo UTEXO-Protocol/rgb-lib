@@ -690,6 +690,7 @@ pub trait WalletOnline: WalletOffline {
             eth_rpc_url: online_options.eth_rpc_url.clone(),
             hub_client: None,
             user_role: None,
+            cosigner_xpub: None,
             vanilla_sync_lookback: online_options.vanilla_sync_lookback,
         };
 
@@ -2279,25 +2280,14 @@ pub trait WalletOnline: WalletOffline {
             let mut runtime = self.rgb_runtime()?;
             runtime.accept_transfer(valid_consignment.clone(), self.blockchain_resolver())?;
             let asset_schema: AssetSchema = valid_consignment.schema_id().try_into()?;
-            if asset_schema == AssetSchema::Ifa {
-                let contract_id = valid_consignment.contract_id();
-                let contract_wrapper =
-                    runtime.contract_wrapper::<InflatableFungibleAsset>(contract_id)?;
-                let known_circulating_supply = contract_wrapper.total_issued_supply().into();
-                let asset_id = asset_transfer.asset_id.unwrap();
-                let db_asset = txn.get_asset(asset_id).unwrap().unwrap();
-                let db_known_circulating_supply = db_asset
-                    .known_circulating_supply
-                    .as_ref()
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap();
-                if db_known_circulating_supply < known_circulating_supply {
-                    let mut updated_asset: DbAssetActMod = db_asset.into();
-                    updated_asset.known_circulating_supply =
-                        ActiveValue::Set(Some(known_circulating_supply.to_string()));
-                    txn.update_asset(&mut updated_asset)?;
-                }
+            if let Some(known_circulating_supply) =
+                known_circulating_supply(&runtime, asset_schema, valid_consignment.contract_id())?
+            {
+                raise_known_circulating_supply(
+                    txn,
+                    asset_transfer.asset_id.unwrap(),
+                    known_circulating_supply,
+                )?;
             }
         }
 
@@ -2619,7 +2609,7 @@ pub trait WalletOnline: WalletOffline {
                 lock_time,
             ) {
                 Ok(res) => res,
-                Err(Error::InsufficientBitcoins { .. }) => {
+                Err(err @ Error::InsufficientBitcoins { .. }) => {
                     let used_txos: Vec<Outpoint> =
                         all_inputs.clone().into_iter().map(|o| o.into()).collect();
                     let mut free_utxos = self.get_available_allocations(
@@ -2649,7 +2639,10 @@ pub trait WalletOnline: WalletOffline {
                         all_inputs.insert(a.utxo.into());
                         continue;
                     }
-                    return Err(Error::InsufficientAllocationSlots);
+                    // every free UTXO is in and the PSBT still cannot be funded:
+                    // the shortage is bitcoin, and needed/available describe the
+                    // final attempt. Slot exhaustion is reported by get_utxo.
+                    return Err(err);
                 }
                 Err(e) => return Err(e),
             };
@@ -4606,19 +4599,11 @@ pub trait WalletOnline: WalletOffline {
         drop(runtime);
 
         // Compose the consignment now: the caller needs the OpId before the EVM lock exists.
-        let (txid, transfer_dir, info_contents, fascia) =
+        // It stays local until `bridge_end_impl` broadcasts: posted to the proxy any
+        // earlier it would consume the invoice even when the mint never happens.
+        let (_txid, transfer_dir, info_contents, fascia) =
             self.get_transfer_end_data(&begin_operation_data.psbt)?;
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
-
-        let mut post_recipients = transfer_info.recipients.clone();
-        post_recipients.pop().unwrap();
-        let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, &asset_id);
-        self.post_transfer_data(
-            &mut post_recipients,
-            asset_transfer_dir,
-            txid,
-            self.get_asset_medias(txn, asset.media_idx, None)?,
-        )?;
 
         Ok(begin_operation_data)
     }
@@ -4627,9 +4612,26 @@ pub trait WalletOnline: WalletOffline {
         &mut self,
         txn: &DbTxn,
         signed_psbt: &Psbt,
+        post_consignment: bool,
     ) -> Result<OperationResult, Error> {
-        let (txid, _transfer_dir, info_contents, fascia) =
+        let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(signed_psbt)?;
+
+        // the consignments were composed at begin; post them only now that the mint
+        // is being broadcast, and only from the initiator: every cosigner runs this
+        // at approval too, and a second post fails once the receiver has acked
+        if post_consignment {
+            for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
+                let asset = txn.get_asset(asset_id.clone())?.unwrap();
+                let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
+                self.post_transfer_data(
+                    &mut info_contents_asset.recipients,
+                    asset_transfer_dir,
+                    txid.clone(),
+                    self.get_asset_medias(txn, asset.media_idx, None)?,
+                )?;
+            }
+        }
 
         let batch_transfer_idx = self.finalize_transfer_end(
             txn,
@@ -4640,6 +4642,17 @@ pub trait WalletOnline: WalletOffline {
             fascia,
             false,
         )?;
+
+        // the mint just bridged more in; the minting wallet may never receive
+        // its own consignment, so learn the supply from the transition now
+        let runtime = self.rgb_runtime()?;
+        for asset_id in info_contents.transfers.keys() {
+            let contract_id = ContractId::from_str(asset_id).expect("invalid contract ID");
+            if let Some(known) = known_circulating_supply(&runtime, AssetSchema::Bfa, contract_id)?
+            {
+                raise_known_circulating_supply(txn, asset_id.clone(), known)?;
+            }
+        }
 
         Ok(OperationResult {
             txid,
@@ -5266,4 +5279,52 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
         info!(self.logger(), "Refresh completed");
         Ok(res)
     }
+}
+
+/// The circulating supply a contract's known history proves: the issued supply for IFA, the
+/// bridged-in supply for BFA, nothing for schemas without one.
+fn known_circulating_supply(
+    runtime: &RgbRuntime,
+    asset_schema: AssetSchema,
+    contract_id: ContractId,
+) -> Result<Option<u64>, Error> {
+    Ok(match asset_schema {
+        AssetSchema::Ifa => Some(
+            runtime
+                .contract_wrapper::<InflatableFungibleAsset>(contract_id)?
+                .total_issued_supply()
+                .into(),
+        ),
+        AssetSchema::Bfa => Some(
+            runtime
+                .contract_wrapper::<BridgedFungibleAsset>(contract_id)?
+                .total_bridged()
+                .into(),
+        ),
+        _ => None,
+    })
+}
+
+/// Records a higher known circulating supply; a consignment can only add history, never remove it.
+fn raise_known_circulating_supply(
+    txn: &DbTxn,
+    asset_id: String,
+    known_circulating_supply: u64,
+) -> Result<(), Error> {
+    let db_asset = txn.get_asset(asset_id)?.expect("asset must exist");
+    let db_known_circulating_supply = db_asset
+        .known_circulating_supply
+        .as_deref()
+        .map(|s| {
+            s.parse::<u64>()
+                .expect("DB should contain a valid known circulating supply")
+        })
+        .unwrap_or(0);
+    if db_known_circulating_supply < known_circulating_supply {
+        let mut updated_asset: DbAssetActMod = db_asset.into();
+        updated_asset.known_circulating_supply =
+            ActiveValue::Set(Some(known_circulating_supply.to_string()));
+        txn.update_asset(&mut updated_asset)?;
+    }
+    Ok(())
 }

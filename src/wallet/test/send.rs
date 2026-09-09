@@ -3378,6 +3378,8 @@ fn insufficient_bitcoins() {
         }],
     )]);
     let result = party.send_begin_result(&recipient_map);
+    // despite the name this fails before the PSBT is funded: the only UTXO
+    // carries the asset, so no change slot exists and get_utxo reports it
     assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
 
     // create 1 UTXO for change (add funds, create UTXO, send the rest)
@@ -5342,7 +5344,8 @@ fn no_inexistent_utxos() {
         }],
     )]);
     let result = party.send_begin_result(&recipient_map);
-    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
+    // no free UTXO can cover it, so the answer is the bitcoin shortage, not a slot
+    assert!(matches!(result, Err(Error::InsufficientBitcoins { .. })));
 }
 
 #[cfg(feature = "electrum")]
