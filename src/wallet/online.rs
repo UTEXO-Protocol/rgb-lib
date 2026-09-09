@@ -2609,7 +2609,7 @@ pub trait WalletOnline: WalletOffline {
                 lock_time,
             ) {
                 Ok(res) => res,
-                Err(Error::InsufficientBitcoins { .. }) => {
+                Err(err @ Error::InsufficientBitcoins { .. }) => {
                     let used_txos: Vec<Outpoint> =
                         all_inputs.clone().into_iter().map(|o| o.into()).collect();
                     let mut free_utxos = self.get_available_allocations(
@@ -2639,7 +2639,10 @@ pub trait WalletOnline: WalletOffline {
                         all_inputs.insert(a.utxo.into());
                         continue;
                     }
-                    return Err(Error::InsufficientAllocationSlots);
+                    // every free UTXO is in and the PSBT still cannot be funded:
+                    // the shortage is bitcoin, and needed/available describe the
+                    // final attempt. Slot exhaustion is reported by get_utxo.
+                    return Err(err);
                 }
                 Err(e) => return Err(e),
             };

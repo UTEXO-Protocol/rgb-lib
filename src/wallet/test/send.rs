@@ -3378,7 +3378,7 @@ fn insufficient_bitcoins() {
         }],
     )]);
     let result = party.send_begin_result(&recipient_map);
-    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
+    assert!(matches!(result, Err(Error::InsufficientBitcoins { .. })));
 
     // create 1 UTXO for change (add funds, create UTXO, send the rest)
     fund_wallet(party.get_address());
@@ -5342,7 +5342,8 @@ fn no_inexistent_utxos() {
         }],
     )]);
     let result = party.send_begin_result(&recipient_map);
-    assert!(matches!(result, Err(Error::InsufficientAllocationSlots)));
+    // no free UTXO can cover it, so the answer is the bitcoin shortage, not a slot
+    assert!(matches!(result, Err(Error::InsufficientBitcoins { .. })));
 }
 
 #[cfg(feature = "electrum")]
