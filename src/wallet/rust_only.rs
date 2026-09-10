@@ -6,6 +6,7 @@ use super::*;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 use crate::utils::{recipient_id_from_script_buf, script_buf_from_recipient_id};
 use bdk_wallet::bitcoin::Transaction;
+#[cfg(any(feature = "electrum", feature = "esplora"))]
 use bdk_wallet::bitcoin::hashes::{Hash, sha256};
 use rgbstd::Operation as _;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
