@@ -709,7 +709,7 @@ impl DbTxn {
 
         let in_flight_batch_idx: std::collections::HashSet<i32> = batch_transfers
             .iter()
-            .filter(|bt| !bt.status.settled() && !bt.status.failed())
+            .filter(|bt| bt.incoming && !bt.status.settled() && !bt.status.failed())
             .map(|bt| bt.idx)
             .collect();
         let in_flight_asset_transfer_idx: std::collections::HashSet<i32> = asset_transfers

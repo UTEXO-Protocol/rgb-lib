@@ -483,6 +483,31 @@ pub trait WalletOnline: WalletOffline {
         batch_transfer: &DbBatchTransfer,
         db_data: &DbData,
     ) -> Result<TryFailBatchTransferOutcome, Error> {
+        // an Initiated batch transfer carrying a TXID is broadcast by the caller itself (the
+        // color-consume flow), so failing it would misreport state that already landed: once the
+        // indexer knows the TX its inputs are spent for good, and once the fascia is in the stash
+        // (marker left behind by a consume that crashed before its commit) the SQL side is the only
+        // thing still rollable back, which would diverge the two
+        if batch_transfer.status == TransferStatus::Initiated
+            && let Some(txid) = batch_transfer.txid.as_deref()
+        {
+            let transfer_dir = self.get_transfer_dir(txid);
+            if transfer_dir
+                .join(super::rust_only::STASH_CONSUMED_FILE)
+                .exists()
+            {
+                return Ok(TryFailBatchTransferOutcome::CannotFail);
+            }
+            // only prepare batches are broadcast by the caller; send_begin batches keep failing
+            // offline
+            if transfer_dir
+                .join(super::rust_only::PREPARE_BATCH_FILE)
+                .exists()
+                && self.indexer().get_tx_confirmations(txid)?.is_some()
+            {
+                return Ok(TryFailBatchTransferOutcome::CannotFail);
+            }
+        }
         let updated_batch_transfer =
             match self.refresh_transfer(txn, batch_transfer, db_data, &[], true) {
                 Err(Error::MinFeeNotMet { txid: _ }) | Err(Error::MaxFeeExceeded { txid: _ }) => {
@@ -557,11 +582,13 @@ pub trait WalletOnline: WalletOffline {
                 }
             }
 
-            transfers_changed = true;
-            if let TryFailBatchTransferOutcome::Refreshed =
-                self.try_fail_batch_transfer(txn, &batch_transfer, &db_data)?
-            {
-                cannot_fail = true;
+            match self.try_fail_batch_transfer(txn, &batch_transfer, &db_data)? {
+                TryFailBatchTransferOutcome::Failed => transfers_changed = true,
+                TryFailBatchTransferOutcome::Refreshed => {
+                    transfers_changed = true;
+                    cannot_fail = true;
+                }
+                TryFailBatchTransferOutcome::CannotFail => cannot_fail = true,
             }
         } else {
             // fail all expired transfers that are in a fallible status
@@ -579,8 +606,28 @@ pub trait WalletOnline: WalletOffline {
                         continue;
                     }
                 }
+                // a prepare batch is broadcast by the caller: absence from the indexer at expiry
+                // is no proof it was never sent, so only an explicit fail/abort releases it
+                if batch_transfer.status == TransferStatus::Initiated
+                    && let Some(txid) = batch_transfer.txid.as_deref()
+                    && self
+                        .get_transfer_dir(txid)
+                        .join(super::rust_only::PREPARE_BATCH_FILE)
+                        .exists()
+                {
+                    continue;
+                }
+                match self.try_fail_batch_transfer(txn, batch_transfer, &db_data) {
+                    Ok(TryFailBatchTransferOutcome::CannotFail) => continue,
+                    Ok(_) => {}
+                    // an unreachable indexer must not release inputs nor abort the whole sweep
+                    Err(e @ (Error::Indexer { .. } | Error::Network { .. })) => {
+                        warn!(self.logger(), "Skipping batch {}: {e}", batch_transfer.idx);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
                 transfers_changed = true;
-                self.try_fail_batch_transfer(txn, batch_transfer, &db_data)?;
             }
         }
 
@@ -1290,6 +1337,67 @@ pub trait WalletOnline: WalletOffline {
         )
     }
 
+    // A BFA mint is only valid if the EVM lock it commits to actually happened; the extension
+    // feeds RGB consensus the bridge contract's FundsIn events, so every holder repeats the check
+    fn validate_consignment_for_schema<R: ResolveWitness>(
+        &self,
+        consignment: &RgbTransfer,
+        asset_schema: AssetSchema,
+        resolver: &R,
+        validation_config: &ValidationConfig,
+    ) -> Result<Result<ValidTransfer, ValidationError>, Error> {
+        let contract_id = consignment.contract_id();
+        Ok(if asset_schema == AssetSchema::Bfa {
+            let contract = consignment.clone().into_contract();
+            let valid_contract = match contract.validate(resolver, validation_config) {
+                Ok(valid_contract) => valid_contract,
+                Err(ValidationError::InvalidConsignment(e)) => {
+                    error!(self.logger(), "BFA contract is invalid: {}", e);
+                    return Ok(Err(ValidationError::InvalidConsignment(e)));
+                }
+                Err(e) => return Ok(Err(e)),
+            };
+            let bridge_location =
+                BfaWrapper::with(valid_contract.contract_data()).bridge_location();
+            let mut events: Vec<Event> = vec![];
+            match bridge_location {
+                BridgeLocation::Ethereum(address) => {
+                    let Some(eth_rpc_url) = self.eth_rpc_url().clone() else {
+                        return Err(Error::InvalidEthRpcUrl {
+                            details: s!("Ethereum RPC URL is required for BFA"),
+                        });
+                    };
+                    let eth_client = EthClient::new(&eth_rpc_url)?;
+                    for log in &eth_client.get_logs(&address, "0x0", "latest")? {
+                        // A log we cannot decode cannot authorise a mint, but it must not
+                        // poison the whole set: one amount above u64 would otherwise break
+                        // every mint of this asset, forever.
+                        match log.as_funds_in() {
+                            Ok(Some(funds_in)) => events.push(Event::new(
+                                OpId::from(funds_in.operation_id),
+                                RevealedValue::from(funds_in.amount),
+                            )),
+                            Ok(None) => {}
+                            Err(e) => {
+                                debug!(self.logger(), "skipping undecodable FundsIn log: {}", e)
+                            }
+                        }
+                    }
+                }
+            }
+            let schema = consignment.schema().clone();
+            consignment
+                .clone()
+                .validate_with_extension::<IssuedAmountCheckExt, BridgedContract<'_, MemContract<_>>>(
+                    resolver,
+                    validation_config,
+                    ((&schema, contract_id), &events),
+                )
+        } else {
+            consignment.clone().validate(resolver, validation_config)
+        })
+    }
+
     // validate a received consignment, if valid import any unknown asset (and its media), persist
     // the receive colorings and update the transfer status
     fn validate_received_consignment(
@@ -1361,69 +1469,12 @@ pub trait WalletOnline: WalletOffline {
             consignment: &consignment,
             fallback: self.blockchain_resolver(),
         };
-        // A BFA mint is only valid if the EVM lock it commits to actually happened, and that is
-        // checked inside RGB consensus rather than by us: the extension feeds it the bridge
-        // contract's FundsIn events, and the `cea` opcode matches each mint's OpId and amount
-        // against them. Every holder repeats this check, so a dishonest issuer gains nothing.
-        let validation_result = if asset_schema == AssetSchema::Bfa {
-            let contract = consignment.clone().into_contract();
-            let valid_contract = match contract.validate(&resolver, &validation_config) {
-                Ok(valid_contract) => valid_contract,
-                Err(ValidationError::InvalidConsignment(e)) => {
-                    error!(self.logger(), "BFA contract is invalid: {}", e);
-                    return self.refuse_consignment(
-                        txn,
-                        &mode,
-                        recipient_id,
-                        updated_batch_transfer,
-                    );
-                }
-                Err(ValidationError::ResolverError(e)) => {
-                    warn!(self.logger(), "Network error validating the BFA contract");
-                    return Err(Error::Network {
-                        details: e.to_string(),
-                    });
-                }
-            };
-            let bridge_location =
-                BfaWrapper::with(valid_contract.contract_data()).bridge_location();
-            let mut events: Vec<Event> = vec![];
-            match bridge_location {
-                BridgeLocation::Ethereum(address) => {
-                    let Some(eth_rpc_url) = self.eth_rpc_url().clone() else {
-                        return Err(Error::InvalidEthRpcUrl {
-                            details: s!("Ethereum RPC URL is required for BFA"),
-                        });
-                    };
-                    let eth_client = EthClient::new(&eth_rpc_url)?;
-                    for log in &eth_client.get_logs(&address, "0x0", "latest")? {
-                        // A log we cannot decode cannot authorise a mint, but it must not
-                        // poison the whole set: one amount above u64 would otherwise break
-                        // every mint of this asset, forever.
-                        match log.as_funds_in() {
-                            Ok(Some(funds_in)) => events.push(Event::new(
-                                OpId::from(funds_in.operation_id),
-                                RevealedValue::from(funds_in.amount),
-                            )),
-                            Ok(None) => {}
-                            Err(e) => {
-                                debug!(self.logger(), "skipping undecodable FundsIn log: {}", e)
-                            }
-                        }
-                    }
-                }
-            }
-            let schema = consignment.schema().clone();
-            consignment
-                .clone()
-                .validate_with_extension::<IssuedAmountCheckExt, BridgedContract<'_, MemContract<_>>>(
-                    &resolver,
-                    &validation_config,
-                    ((&schema, contract_id), &events),
-                )
-        } else {
-            consignment.clone().validate(&resolver, &validation_config)
-        };
+        let validation_result = self.validate_consignment_for_schema(
+            &consignment,
+            asset_schema,
+            &resolver,
+            &validation_config,
+        )?;
         let valid_consignment = match validation_result {
             Ok(consignment) => consignment,
             Err(ValidationError::InvalidConsignment(e)) => {
@@ -4394,7 +4445,7 @@ pub trait WalletOnline: WalletOffline {
             let script_pubkey = self
                 .get_new_addresses(KeychainKind::External, 1)?
                 .script_pubkey();
-            let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
+            let beneficiary = beneficiary_from_script_buf(script_pubkey.clone())?;
             let beneficiary = XChainNet::with(chainnet, beneficiary);
             let recipient_id = beneficiary.to_string();
             witness_recipients.push((script_pubkey, amount_sat));
@@ -4532,7 +4583,7 @@ pub trait WalletOnline: WalletOffline {
             .dust_value()
             .to_sat();
         witness_recipients.push((script_pubkey.clone(), dust));
-        let beneficiary = beneficiary_from_script_buf(script_pubkey);
+        let beneficiary = beneficiary_from_script_buf(script_pubkey)?;
         let beneficiary = XChainNet::with(chainnet, beneficiary);
         let recipient_id = beneficiary.to_string();
         local_recipients.push(LocalRecipient {
@@ -4758,7 +4809,7 @@ pub trait WalletOnline: WalletOffline {
             .dust_value()
             .to_sat();
         let witness_recipients: Vec<(ScriptBuf, u64)> = vec![(script_pubkey.clone(), dust)];
-        let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
+        let beneficiary = beneficiary_from_script_buf(script_pubkey.clone())?;
         let beneficiary = XChainNet::with(chainnet, beneficiary);
         let recipient_id = beneficiary.to_string();
         let local_recipients = vec![LocalRecipient {
@@ -5192,6 +5243,14 @@ pub trait RgbWalletOpsOnline: RgbWalletOpsOffline + WalletOnline {
     /// Transfers are eligible if they remain in a fallible status after a `refresh` has been
     /// performed. A transfer in status [`TransferStatus::WaitingBroadcast`] is an exception: it can
     /// only be failed once it has expired, since the TX may still be broadcast before then.
+    /// A prepared operation (an [`TransferStatus::Initiated`] batch created by `psbt_op_prepare`
+    /// or `color_psbt_*_and_prepare_consume`, whose TX the caller broadcasts) is a second
+    /// exception: the bulk sweep never fails it, expired or not, since the TX being absent from
+    /// the indexer does not prove it was never broadcast. It can only be failed explicitly, which
+    /// carries the caller's promise that the TX was never sent; even then it cannot be failed if
+    /// the indexer already knows the TX (its inputs are spent on-chain) or if its fascia is
+    /// already in the RGB stash (`stash_consumed` under the transfer dir), since failing it would
+    /// diverge SQL from the stash.
     fn fail_transfers(
         &mut self,
         online: Online,
