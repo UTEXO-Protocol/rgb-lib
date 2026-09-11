@@ -970,7 +970,7 @@ impl MpcWallet {
             None,
         )?;
         begin_op_data.psbt = self.mpc_sign_psbt(begin_op_data.psbt)?;
-        let res = self.send_end_impl(&txn, &begin_op_data.psbt)?;
+        let res = self.send_end_impl(&txn, &begin_op_data.psbt, true, None)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();
@@ -1036,7 +1036,7 @@ impl MpcWallet {
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_end_impl(&txn, &psbt)?;
+        let res = self.send_end_impl(&txn, &psbt, true, None)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();
