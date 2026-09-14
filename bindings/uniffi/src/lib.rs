@@ -2012,6 +2012,31 @@ impl MultisigWallet {
         )
     }
 
+    fn bridge_init_begin(
+        &self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeBeginResult, RgbLibError> {
+        self._get_wallet().bridge_init_begin(
+            online,
+            asset_id,
+            recipient.into(),
+            fee_rate,
+            min_confirmations,
+        )
+    }
+
+    fn bridge_init_end(
+        &self,
+        online: Online,
+        psbt: String,
+    ) -> Result<InitOperationResult, RgbLibError> {
+        self._get_wallet().bridge_init_end(online, psbt)
+    }
+
     fn issue_asset_nia(
         &self,
         online: Online,

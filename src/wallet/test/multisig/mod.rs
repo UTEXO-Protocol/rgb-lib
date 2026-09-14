@@ -1754,3 +1754,165 @@ fn send_to_oneself() {
         (AMOUNT_SMALL, AMOUNT_SMALL, AMOUNT_SMALL),
     );
 }
+
+/// A mint is prepared without touching the hub and posted only later: the hub
+/// sees exactly one Bridge operation, created by the post, carrying the same
+/// PSBT and the consignment cosigners validate. A deposit that never arrives
+/// therefore leaves nothing on the hub to discard.
+#[cfg(feature = "electrum")]
+#[test]
+#[serial]
+fn bridge_init_begin_end() {
+    initialize();
+    op_counter_reset();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let threshold_colored = 2;
+    let threshold_vanilla = 2;
+    let random_str: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect();
+
+    // multisig wallet keys
+    let wlt_1_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_2_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_3_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+
+    // cosigners
+    let cosigners = vec![
+        Cosigner::from_keys(&wlt_1_keys, None),
+        Cosigner::from_keys(&wlt_2_keys, None),
+        Cosigner::from_keys(&wlt_3_keys, None),
+    ];
+    let cosigner_xpubs: Vec<String> = cosigners
+        .iter()
+        .map(|c| c.account_xpub_colored.clone())
+        .collect();
+
+    // biscuit token setup
+    let root_keypair = KeyPair::new();
+    let root_public_key = root_keypair.public();
+    let mut cosigner_tokens = vec![];
+    for cosigner_xpub in &cosigner_xpubs {
+        cosigner_tokens.push(create_token(
+            &root_keypair,
+            Role::Cosigner(cosigner_xpub.clone()),
+            None,
+        ));
+    }
+
+    // hub setup
+    write_hub_config(
+        &cosigner_xpubs,
+        threshold_colored,
+        threshold_vanilla,
+        root_public_key.to_bytes_hex(),
+        None,
+    );
+    restart_multisig_hub();
+
+    // multisig wallets
+    let multisig_wlt_keys =
+        MultisigKeys::new(cosigners.clone(), threshold_colored, threshold_vanilla);
+    let mut wlt_1_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_1"));
+    let wlt_1_multisig_online = ms_go_online(&mut wlt_1_multisig, &cosigner_tokens[0]);
+    let mut wlt_2_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_2"));
+    let wlt_2_multisig_online = ms_go_online(&mut wlt_2_multisig, &cosigner_tokens[1]);
+    let mut wlt_3_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_3"));
+    let wlt_3_multisig_online = ms_go_online(&mut wlt_3_multisig, &cosigner_tokens[2]);
+
+    // singlesig wallets (for signing)
+    let wlt_1_singlesig = get_test_wallet_with_keys(&wlt_1_keys);
+    let wlt_2_singlesig = get_test_wallet_with_keys(&wlt_2_keys);
+    let wlt_3_singlesig = get_test_wallet_with_keys(&wlt_3_keys);
+
+    // multisig parties
+    let mut wlt_1 = ms_party!(
+        &wlt_1_singlesig,
+        &mut wlt_1_multisig,
+        wlt_1_multisig_online,
+        &cosigner_xpubs[0]
+    );
+    let mut wlt_2 = ms_party!(
+        &wlt_2_singlesig,
+        &mut wlt_2_multisig,
+        wlt_2_multisig_online,
+        &cosigner_xpubs[1]
+    );
+    let mut wlt_3 = ms_party!(
+        &wlt_3_singlesig,
+        &mut wlt_3_multisig,
+        wlt_3_multisig_online,
+        &cosigner_xpubs[2]
+    );
+
+    // fund wallet 1
+    let sats = 30_000;
+    send_sats_to_address(wlt_1.get_address(), Some(sats));
+    mine(false);
+
+    check_hub_info(&mut [&mut wlt_1, &mut wlt_2, &mut wlt_3]);
+
+    // create UTXOs
+    println!("\n=== create UTXOs ===");
+    check_wallets_up_to_date(&mut [&mut wlt_1, &mut wlt_2, &mut wlt_3]);
+    let op_init = wlt_1.create_utxos_init(false, None, None, FEE_RATE);
+    operation_complete::<CreateUtxosHandler>(
+        op_init.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [&mut wlt_3],
+        true,
+    );
+    mine(false);
+
+    // issue BFA: issuance needs no lock, only the bridge the asset is bound to
+    println!("\n=== issue BFA ===");
+    let bfa_asset = issue_asset_bfa_checked(
+        &mut wlt_1,
+        &mut [&mut wlt_2, &mut wlt_3],
+        "0x0000000000000000000000000000000000000001",
+    );
+
+    // mint to the multisig wallet itself through a blinded invoice
+    let receive_data = wlt_1.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+
+    println!("\n=== bridge prepare ===");
+    let hub_before = wlt_1.hub_info().last_operation_idx;
+    let prepared = wlt_1.bridge_init_begin(&bfa_asset.asset_id, recipient);
+    // the OpId binds the two domains: it is what the EVM lock must commit to
+    assert_eq!(prepared.details.opid.len(), 64);
+    assert_eq!(
+        wlt_1.hub_info().last_operation_idx,
+        hub_before,
+        "prepare must not reach the hub"
+    );
+
+    println!("\n=== bridge post ===");
+    let posted = wlt_1.bridge_init_end(&prepared.psbt);
+    assert_eq!(posted.psbt, prepared.psbt);
+    let (op, files) = wlt_1.get_op_and_files(posted.operation_idx);
+    assert!(matches!(op.operation_type, OperationType::Bridge));
+    assert_eq!(op.status, OperationStatus::Pending);
+    assert_eq!(op.initiator_xpub, cosigner_xpubs[0]);
+    // the post carries what a cosigner validates and signs, as bridge_init did
+    for wanted in [
+        FileType::Consignment,
+        FileType::Fascia,
+        FileType::OperationData,
+        FileType::OperationPsbt,
+    ] {
+        assert!(
+            files.iter().any(|f| f.r#type == wanted),
+            "posted operation lacks a {wanted:?} file"
+        );
+    }
+}

@@ -2701,6 +2701,72 @@ impl MultisigWallet {
         })
     }
 
+    /// Prepare a BFA mint without posting it to the hub: compose the bridge
+    /// transition and return its OpId and PSBT. Nothing reaches the hub, so a
+    /// deposit that never arrives leaves no operation behind. Post it with
+    /// [`bridge_init_end`](Self::bridge_init_end) once the deposit is confirmed.
+    pub fn bridge_init_begin(
+        &mut self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+    ) -> Result<BridgeBeginResult, Error> {
+        info!(self.logger(), "Preparing bridge operation...");
+        self.check_online(online)?;
+        self.check_is_cosigner()?;
+        let txn = self.database().begin_transaction()?;
+        let data =
+            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Preparing bridge operation completed");
+        Ok(BridgeBeginResult {
+            psbt: data.psbt.to_string(),
+            batch_transfer_idx: data.batch_transfer_idx,
+            details: BridgeDetails {
+                fascia_path: data
+                    .transfer_dir
+                    .join(FASCIA_FILE)
+                    .to_string_lossy()
+                    .to_string(),
+                min_confirmations,
+                entropy: data.info_batch_transfer.entropy,
+                opid: data
+                    .opid
+                    .expect("a bridge transition always yields an opid"),
+            },
+        })
+    }
+
+    /// Post a mint prepared by [`bridge_init_begin`](Self::bridge_init_begin) to the
+    /// hub, given the PSBT it returned. The transition is rebuilt from the PSBT
+    /// the way the completion path rebuilds it, so nothing else needs keeping.
+    pub fn bridge_init_end(
+        &mut self,
+        online: Online,
+        psbt: String,
+    ) -> Result<InitOperationResult, Error> {
+        info!(self.logger(), "Posting bridge operation...");
+        self.check_online(online)?;
+        self.check_is_cosigner()?;
+        let psbt = Psbt::from_str(&psbt)?;
+        let (_, transfer_dir, info_batch_transfer, _) = self.get_transfer_end_data(&psbt)?;
+        let res = self.post_operation(
+            OperationType::Bridge,
+            PostData::BeginOperationData(Box::new(BeginOperationData {
+                psbt,
+                transfer_dir,
+                info_batch_transfer,
+                batch_transfer_idx: None,
+                opid: None,
+            })),
+        )?;
+        info!(self.logger(), "Posting bridge operation completed");
+        Ok(res)
+    }
+
     /// Prepare the PSBT to burn the specified `amount` of RGB assets, with the provided `fee_rate`
     /// (in sat/vB) and post the operation to the hub.
     ///
