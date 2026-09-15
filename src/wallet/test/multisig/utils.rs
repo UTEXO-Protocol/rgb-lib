@@ -479,15 +479,7 @@ pub(super) trait MultisigOps: OfflineSigParty {
         )
     }
 
-    fn issue_asset_bfa(&mut self, contract_address: &str) -> AssetBFA {
-        self.issue_asset_bfa_with_rights(contract_address, 1)
-    }
-
-    fn issue_asset_bfa_with_rights(
-        &mut self,
-        contract_address: &str,
-        bridge_rights: u8,
-    ) -> AssetBFA {
+    fn issue_asset_bfa(&mut self, contract_address: &str, bridge_rights: u8) -> AssetBFA {
         println!("issue BFA asset {}", self.data_dir());
         let online = self.online();
         let res = self
@@ -870,7 +862,7 @@ pub(super) fn issue_asset_bfa_checked_with_rights(
     contract_address: &str,
     bridge_rights: u8,
 ) -> AssetBFA {
-    let asset = initiator.issue_asset_bfa_with_rights(contract_address, bridge_rights);
+    let asset = initiator.issue_asset_bfa(contract_address, bridge_rights);
     check_issuance(initiator, others, &asset.asset_id, AssetSchema::Bfa);
     asset
 }
