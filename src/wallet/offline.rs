@@ -2189,6 +2189,8 @@ pub trait WalletOffline: WalletBackup {
                 WalletTransactionType::CreateUtxos => create_utxos_txids.push(tx.txid),
                 WalletTransactionType::Drain => drain_txids.push(tx.txid),
                 WalletTransactionType::SendBtc => send_btc_txids.push(tx.txid),
+                // classified below through its batch transfer
+                WalletTransactionType::RgbTransfer => {}
             }
         }
         let rgb_send_txids: Vec<String> = txn

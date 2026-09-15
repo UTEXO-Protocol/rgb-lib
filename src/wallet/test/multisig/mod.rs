@@ -2080,7 +2080,10 @@ fn bridge_init_begin_reserves_every_input() {
     // failing a prepared mint frees what it held: the third mint takes the second
     // one's bridge right back, and still nothing of the first one's
     println!("\n=== fail one, prepare again ===");
-    assert!(wlt_1.fail_transfers_single(second.batch_transfer_idx));
+    let second_batch = second
+        .batch_transfer_idx
+        .expect("a begun mint has a batch transfer");
+    assert!(wlt_1.fail_transfers_single(second_batch));
     let third_recipient = recipient(&mut wlt_1);
     let third =
         wlt_1.bridge_init_begin_with_fee_rate(&bfa_asset.asset_id, third_recipient, fee_rate);
