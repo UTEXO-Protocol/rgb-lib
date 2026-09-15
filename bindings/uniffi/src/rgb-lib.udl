@@ -606,6 +606,7 @@ enum WalletTransactionType {
   "CreateUtxos",
   "Drain",
   "SendBtc",
+  "RgbTransfer",
 };
 
 [Remote]

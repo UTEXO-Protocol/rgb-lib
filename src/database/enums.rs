@@ -347,6 +347,10 @@ pub enum WalletTransactionType {
     /// Transaction used to perform a BTC send
     #[sea_orm(num_value = 3)]
     SendBtc = 3,
+    /// Transaction of an RGB transfer prepared but not yet broadcast; its inputs stay
+    /// reserved until it is broadcast or the transfer fails
+    #[sea_orm(num_value = 4)]
+    RgbTransfer = 4,
 }
 
 /// An RGB assignment.

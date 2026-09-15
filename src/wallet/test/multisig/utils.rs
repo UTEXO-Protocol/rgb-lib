@@ -480,6 +480,14 @@ pub(super) trait MultisigOps: OfflineSigParty {
     }
 
     fn issue_asset_bfa(&mut self, contract_address: &str) -> AssetBFA {
+        self.issue_asset_bfa_with_rights(contract_address, 1)
+    }
+
+    fn issue_asset_bfa_with_rights(
+        &mut self,
+        contract_address: &str,
+        bridge_rights: u8,
+    ) -> AssetBFA {
         println!("issue BFA asset {}", self.data_dir());
         let online = self.online();
         let res = self
@@ -489,7 +497,7 @@ pub(super) trait MultisigOps: OfflineSigParty {
                 TICKER.to_string(),
                 NAME.to_string(),
                 PRECISION,
-                1,
+                bridge_rights,
                 contract_address.to_string(),
                 None,
             )
@@ -500,11 +508,20 @@ pub(super) trait MultisigOps: OfflineSigParty {
     }
 
     fn bridge_init_begin(&mut self, asset_id: &str, recipient: Recipient) -> BridgeBeginResult {
+        self.bridge_init_begin_with_fee_rate(asset_id, recipient, FEE_RATE)
+    }
+
+    fn bridge_init_begin_with_fee_rate(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+        fee_rate: u64,
+    ) -> BridgeBeginResult {
         println!("bridge prepare {}", self.data_dir());
         let online = self.online();
         // nothing is posted, so the hub operation counter stays where it is
         self.multisig_mut()
-            .bridge_init_begin(online, asset_id.to_string(), recipient, FEE_RATE, 1)
+            .bridge_init_begin(online, asset_id.to_string(), recipient, fee_rate, 1)
             .unwrap()
     }
 
@@ -844,7 +861,16 @@ pub(super) fn issue_asset_bfa_checked(
     others: &mut [&mut MultisigParty],
     contract_address: &str,
 ) -> AssetBFA {
-    let asset = initiator.issue_asset_bfa(contract_address);
+    issue_asset_bfa_checked_with_rights(initiator, others, contract_address, 1)
+}
+
+pub(super) fn issue_asset_bfa_checked_with_rights(
+    initiator: &mut MultisigParty,
+    others: &mut [&mut MultisigParty],
+    contract_address: &str,
+    bridge_rights: u8,
+) -> AssetBFA {
+    let asset = initiator.issue_asset_bfa_with_rights(contract_address, bridge_rights);
     check_issuance(initiator, others, &asset.asset_id, AssetSchema::Bfa);
     asset
 }

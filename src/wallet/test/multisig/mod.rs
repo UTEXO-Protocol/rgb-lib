@@ -1916,3 +1916,181 @@ fn bridge_init_begin_end() {
         );
     }
 }
+
+/// Two mints prepared back to back must not spend the same UTXO. The first PSBT
+/// waits unsigned for its EVM lock, and the plain BTC input it took for the fee
+/// is no RGB allocation, so only a reservation keeps it away from the second.
+/// Failing a prepared mint hands its inputs back.
+#[cfg(feature = "electrum")]
+#[test]
+#[serial]
+fn bridge_init_begin_reserves_every_input() {
+    use std::str::FromStr;
+
+    initialize();
+    op_counter_reset();
+
+    let bitcoin_network = BitcoinNetwork::Regtest;
+    let threshold_colored = 2;
+    let threshold_vanilla = 2;
+    let random_str: String = rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(6)
+        .map(char::from)
+        .collect();
+
+    // multisig wallet keys
+    let wlt_1_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_2_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+    let wlt_3_keys = generate_keys(bitcoin_network, WitnessVersion::Taproot);
+
+    // cosigners
+    let cosigners = vec![
+        Cosigner::from_keys(&wlt_1_keys, None),
+        Cosigner::from_keys(&wlt_2_keys, None),
+        Cosigner::from_keys(&wlt_3_keys, None),
+    ];
+    let cosigner_xpubs: Vec<String> = cosigners
+        .iter()
+        .map(|c| c.account_xpub_colored.clone())
+        .collect();
+
+    // biscuit token setup
+    let root_keypair = KeyPair::new();
+    let root_public_key = root_keypair.public();
+    let mut cosigner_tokens = vec![];
+    for cosigner_xpub in &cosigner_xpubs {
+        cosigner_tokens.push(create_token(
+            &root_keypair,
+            Role::Cosigner(cosigner_xpub.clone()),
+            None,
+        ));
+    }
+
+    // hub setup
+    write_hub_config(
+        &cosigner_xpubs,
+        threshold_colored,
+        threshold_vanilla,
+        root_public_key.to_bytes_hex(),
+        None,
+    );
+    restart_multisig_hub();
+
+    // multisig wallets
+    let multisig_wlt_keys =
+        MultisigKeys::new(cosigners.clone(), threshold_colored, threshold_vanilla);
+    let mut wlt_1_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_1"));
+    let wlt_1_multisig_online = ms_go_online(&mut wlt_1_multisig, &cosigner_tokens[0]);
+    let mut wlt_2_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_2"));
+    let wlt_2_multisig_online = ms_go_online(&mut wlt_2_multisig, &cosigner_tokens[1]);
+    let mut wlt_3_multisig = get_test_ms_wallet(&multisig_wlt_keys, format!("{random_str}_3"));
+    let wlt_3_multisig_online = ms_go_online(&mut wlt_3_multisig, &cosigner_tokens[2]);
+
+    // singlesig wallets (for signing)
+    let wlt_1_singlesig = get_test_wallet_with_keys(&wlt_1_keys);
+    let wlt_2_singlesig = get_test_wallet_with_keys(&wlt_2_keys);
+    let wlt_3_singlesig = get_test_wallet_with_keys(&wlt_3_keys);
+
+    // multisig parties
+    let mut wlt_1 = ms_party!(
+        &wlt_1_singlesig,
+        &mut wlt_1_multisig,
+        wlt_1_multisig_online,
+        &cosigner_xpubs[0]
+    );
+    let mut wlt_2 = ms_party!(
+        &wlt_2_singlesig,
+        &mut wlt_2_multisig,
+        wlt_2_multisig_online,
+        &cosigner_xpubs[1]
+    );
+    let mut wlt_3 = ms_party!(
+        &wlt_3_singlesig,
+        &mut wlt_3_multisig,
+        wlt_3_multisig_online,
+        &cosigner_xpubs[2]
+    );
+
+    // fund wallet 1
+    send_sats_to_address(wlt_1.get_address(), Some(100_000));
+    mine(false);
+
+    check_hub_info(&mut [&mut wlt_1, &mut wlt_2, &mut wlt_3]);
+
+    // eight colorable UTXOs: two will carry a bridge right each, the rest are
+    // plain BTC a mint may take to pay its fee
+    println!("\n=== create UTXOs ===");
+    check_wallets_up_to_date(&mut [&mut wlt_1, &mut wlt_2, &mut wlt_3]);
+    let op_init = wlt_1.create_utxos_init(false, Some(8), Some(5_000), FEE_RATE);
+    operation_complete::<CreateUtxosHandler>(
+        op_init.operation_idx,
+        &mut [&mut wlt_1, &mut wlt_2],
+        &mut [],
+        &mut [&mut wlt_3],
+        true,
+    );
+    mine(false);
+
+    // two bridge rights: two mints may be in flight at once
+    println!("\n=== issue BFA ===");
+    let bfa_asset = issue_asset_bfa_checked_with_rights(
+        &mut wlt_1,
+        &mut [&mut wlt_2, &mut wlt_3],
+        "0x0000000000000000000000000000000000000001",
+        2,
+    );
+
+    let inputs = |psbt: &str| -> std::collections::HashSet<bdk_wallet::bitcoin::OutPoint> {
+        bdk_wallet::bitcoin::Psbt::from_str(psbt)
+            .unwrap()
+            .unsigned_tx
+            .input
+            .iter()
+            .map(|i| i.previous_output)
+            .collect()
+    };
+    let recipient = |wlt: &mut MultisigParty| Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: wlt.blind_receive().recipient_id,
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+    // a fee no single 5000-sat UTXO covers, so every mint needs a plain BTC input too
+    let fee_rate = 30;
+
+    println!("\n=== bridge prepare twice ===");
+    let first_recipient = recipient(&mut wlt_1);
+    let first =
+        wlt_1.bridge_init_begin_with_fee_rate(&bfa_asset.asset_id, first_recipient, fee_rate);
+    let second_recipient = recipient(&mut wlt_1);
+    let second =
+        wlt_1.bridge_init_begin_with_fee_rate(&bfa_asset.asset_id, second_recipient, fee_rate);
+    let first_inputs = inputs(&first.psbt);
+    let second_inputs = inputs(&second.psbt);
+    assert!(
+        first_inputs.len() > 1,
+        "the fee rate must force a plain BTC input next to the bridge right"
+    );
+    assert!(
+        first_inputs.is_disjoint(&second_inputs),
+        "two prepared mints share an input: {first_inputs:?} vs {second_inputs:?}"
+    );
+
+    // failing a prepared mint frees what it held: the third mint takes the second
+    // one's bridge right back, and still nothing of the first one's
+    println!("\n=== fail one, prepare again ===");
+    assert!(wlt_1.fail_transfers_single(second.batch_transfer_idx));
+    let third_recipient = recipient(&mut wlt_1);
+    let third =
+        wlt_1.bridge_init_begin_with_fee_rate(&bfa_asset.asset_id, third_recipient, fee_rate);
+    let third_inputs = inputs(&third.psbt);
+    assert!(
+        third_inputs.is_disjoint(&first_inputs),
+        "a live mint's input was reused: {third_inputs:?} vs {first_inputs:?}"
+    );
+    assert!(
+        !third_inputs.is_disjoint(&second_inputs),
+        "the failed mint's inputs were not released"
+    );
+}
