@@ -606,6 +606,7 @@ enum WalletTransactionType {
   "CreateUtxos",
   "Drain",
   "SendBtc",
+  "RgbTransfer",
 };
 
 [Remote]
@@ -1274,6 +1275,14 @@ interface MultisigWallet {
   BridgeInitResult bridge_init(
     Online online, string asset_id, Recipient recipient, u64 fee_rate,
     u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  BridgeBeginResult bridge_init_begin(
+    Online online, string asset_id, Recipient recipient, u64 fee_rate,
+    u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  InitOperationResult bridge_init_end(Online online, string psbt);
 
   [Throws=RgbLibError]
   AssetNIA issue_asset_nia(

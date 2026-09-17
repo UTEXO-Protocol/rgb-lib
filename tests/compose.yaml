@@ -117,7 +117,7 @@ services:
       vss-postgres:
         condition: service_healthy
   rgb-multisig-hub:
-    image: ghcr.io/rgb-tools/rgb-multisig-hub:0.1.1
+    image: ghcr.io/utexo-protocol/rgb-multisig-hub-bfa:0.1.1-1
     ports:
       - 8141:3001
     volumes:
