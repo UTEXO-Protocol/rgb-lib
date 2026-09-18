@@ -15,6 +15,8 @@ import { BridgeBase } from './BridgeBase.sol';
 contract BaseBridge is BridgeBase {
     using SafeERC20 for IERC20;
 
+    error AmountExceedsUint64(uint256 amount);
+
     // =========================================================================
     // Events
     // =========================================================================
@@ -49,9 +51,10 @@ contract BaseBridge is BridgeBase {
         uint256 amount,
         uint256 operationId
     ) external whenNotPaused {
+        if (amount > type(uint64).max) revert AmountExceedsUint64(amount);
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
 
-        emit FundsIn(msg.sender, operationId, amount);
+        emit FundsIn(msg.sender, operationId, uint64(amount));
     }
 
     // =========================================================================
