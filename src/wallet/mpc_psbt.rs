@@ -5,8 +5,8 @@
 
 use amplify::s;
 use bdk_wallet::bitcoin::{
-    OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, XOnlyPublicKey,
-    locktime::absolute::LockTime, psbt::Psbt, transaction::Version,
+    OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, locktime::absolute::LockTime,
+    psbt::Psbt, transaction::Version,
 };
 
 use crate::Error;
@@ -45,6 +45,49 @@ pub fn calculate_fee(
         })
 }
 
+/// Conservative size for native SegWit RGB sends, including the final 32-byte
+/// OP_RETURN commitment and one colored change output. ECDSA uses up to 69 vB.
+pub fn calculate_rgb_send_fee(
+    inputs: &[(OutPoint, TxOut)],
+    outputs: &[TxOut],
+    change_script: &ScriptBuf,
+    fee_rate: bdk_wallet::bitcoin::FeeRate,
+) -> Result<u64, Error> {
+    // Current MPC send limits use fewer than 253 inputs/outputs.
+    if inputs.len() >= 253
+        || outputs.len() >= 252
+        || change_script.len() >= 253
+        || outputs.iter().any(|o| o.script_pubkey.len() >= 253)
+    {
+        return Err(Error::InvalidPsbt {
+            details: s!("MPC send exceeds size estimator limits"),
+        });
+    }
+    let mut size = 11 + 8 + 1 + change_script.len() as u64;
+    for (_, output) in inputs {
+        size += if output.script_pubkey.is_p2wpkh() {
+            69
+        } else if output.script_pubkey.is_p2tr() {
+            58
+        } else {
+            return Err(Error::InvalidPsbt {
+                details: s!("Unsupported MPC input script"),
+            });
+        };
+    }
+    for output in outputs {
+        size += if output.script_pubkey.is_op_return() {
+            43
+        } else {
+            9 + output.script_pubkey.len() as u64
+        };
+    }
+    size.checked_mul(fee_rate.to_sat_per_vb_ceil())
+        .ok_or_else(|| Error::InvalidFeeRate {
+            details: s!("fee amount overflows u64"),
+        })
+}
+
 /// Build an unsigned PSBT from the provided inputs and outputs.
 ///
 /// Each input gets its `witness_utxo` populated in the PSBT (required for
@@ -71,20 +114,12 @@ pub fn build_psbt(inputs: Vec<(OutPoint, TxOut)>, outputs: Vec<TxOut>) -> Result
         details: format!("Failed to create PSBT: {e}"),
     })?;
 
-    // Populate witness_utxo and tap_internal_key for each input (required for Taproot signing)
+    // The prevout contains the Taproot OUTPUT key, not its internal key. An
+    // adapter that knows the internal key must supply and validate it separately.
+    // Inventing tap_internal_key from the output key causes a signer to tweak
+    // the wrong key. witness_utxo is sufficient for external key-path signing.
     for (i, (_, txout)) in inputs.iter().enumerate() {
         psbt.inputs[i].witness_utxo = Some(txout.clone());
-
-        // For P2TR inputs, extract the x-only public key from the script pubkey
-        // P2TR script: OP_1 (0x51) + OP_PUSHBYTES_32 (0x20) + 32-byte x-only pubkey
-        let script = txout.script_pubkey.as_bytes();
-        if script.len() == 34
-            && script[0] == 0x51
-            && script[1] == 0x20
-            && let Ok(xonly) = XOnlyPublicKey::from_slice(&script[2..34])
-        {
-            psbt.inputs[i].tap_internal_key = Some(xonly);
-        }
     }
 
     Ok(psbt)
@@ -190,6 +225,36 @@ mod tests {
     }
 
     #[test]
+    fn taproot_output_does_not_claim_to_reveal_the_internal_key() {
+        use bdk_wallet::bitcoin::{
+            Txid,
+            hashes::Hash,
+            key::TapTweak,
+            secp256k1::{Keypair, Secp256k1, SecretKey},
+        };
+        let secp = Secp256k1::new();
+        let secret = SecretKey::from_slice(&[7; 32]).unwrap();
+        let internal = Keypair::from_secret_key(&secp, &secret)
+            .x_only_public_key()
+            .0;
+        let output_key = internal.tap_tweak(&secp, None).0;
+        assert_ne!(internal.serialize(), output_key.serialize());
+        let prevout = TxOut {
+            value: Amount::from_sat(10_000),
+            script_pubkey: ScriptBuf::new_p2tr_tweaked(output_key),
+        };
+        let outpoint = OutPoint::new(Txid::from_byte_array([8; 32]), 0);
+        let output = TxOut {
+            value: Amount::from_sat(9_000),
+            ..prevout.clone()
+        };
+        let psbt = build_psbt(vec![(outpoint, prevout.clone())], vec![output]).unwrap();
+        assert_eq!(psbt.inputs[0].witness_utxo, Some(prevout));
+        assert!(psbt.inputs[0].tap_internal_key.is_none());
+        assert!(psbt.inputs[0].tap_merkle_root.is_none());
+    }
+
+    #[test]
     fn test_select_coins_sufficient() {
         use bdk_wallet::bitcoin::hashes::Hash;
 
@@ -287,5 +352,57 @@ mod tests {
                 available: 100
             })
         ));
+    }
+}
+
+#[cfg(test)]
+mod rgb_fee_tests {
+    use super::*;
+    use bdk_wallet::bitcoin::{Amount, FeeRate};
+
+    #[test]
+    fn accounts_for_ecdsa_and_final_rgb_commitment() {
+        let script = ScriptBuf::from_hex("00140000000000000000000000000000000000000000").unwrap();
+        let input = (
+            OutPoint::null(),
+            TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: script.clone(),
+            },
+        );
+        let outputs = vec![TxOut {
+            value: Amount::ZERO,
+            script_pubkey: ScriptBuf::new_op_return([]),
+        }];
+        let fee = calculate_rgb_send_fee(
+            &[input],
+            &outputs,
+            &script,
+            FeeRate::from_sat_per_vb(2).unwrap(),
+        )
+        .unwrap();
+        // 11 overhead + 69 P2WPKH input + 43 commitment + 31 change.
+        assert_eq!(fee, 308);
+        assert!(1000 - fee >= script.minimal_non_dust().to_sat());
+    }
+
+    #[test]
+    fn rejects_unsupported_inputs() {
+        let input = (
+            OutPoint::null(),
+            TxOut {
+                value: Amount::from_sat(1000),
+                script_pubkey: ScriptBuf::new(),
+            },
+        );
+        assert!(
+            calculate_rgb_send_fee(
+                &[input],
+                &[],
+                &ScriptBuf::new(),
+                FeeRate::from_sat_per_vb(2).unwrap()
+            )
+            .is_err()
+        );
     }
 }

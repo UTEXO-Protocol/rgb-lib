@@ -1123,7 +1123,7 @@ pub trait WalletOffline: WalletBackup {
                 (beneficiary, recipient_type_full, Some(blind_seal), None)
             }
             RecipientType::Witness => {
-                let script_pubkey = self.get_new_address()?.script_pubkey();
+                let script_pubkey = self.get_receive_address(txn)?.script_pubkey();
                 let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
                 // Per-invoice nonce is only needed when address reuse is on:
                 // without reuse, each witness_receive draws a fresh script, so
@@ -1450,6 +1450,13 @@ pub trait WalletOffline: WalletBackup {
 
     fn get_new_address(&mut self) -> Result<BdkAddress, Error> {
         self.get_new_addresses(KeychainKind::External, 1)
+    }
+
+    // MPC addresses live in this same SQLite database. Reuse the receive
+    // transaction instead of trying to acquire a second connection from its
+    // single-connection pool while creating an invoice.
+    fn get_receive_address(&mut self, _txn: &DbTxn) -> Result<BdkAddress, Error> {
+        self.get_new_address()
     }
 
     /// Return a new Bitcoin address from the vanilla wallet.
