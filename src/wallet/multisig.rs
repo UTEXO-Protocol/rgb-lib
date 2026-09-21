@@ -875,7 +875,7 @@ impl OperationHandler for SendRgbHandler {
         combined_psbt: &Psbt,
         _initiated_by_me: bool,
     ) -> Result<String, Error> {
-        let res = wallet.send_end_impl(txn, combined_psbt)?;
+        let res = wallet.send_end_impl(txn, combined_psbt, true, None)?;
         Ok(res.txid)
     }
 

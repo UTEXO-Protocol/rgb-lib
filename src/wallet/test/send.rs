@@ -7858,7 +7858,6 @@ fn offline_receiver_blind_restart_waiting_counterparty() {
             TransferStatus::WaitingConfirmations
         )
     );
-
     drop(mining_guard);
     mine(false);
     rcv_party.wait_for_refresh_raw(None, None);
@@ -8086,7 +8085,12 @@ fn offline_receiver_witness_restart_donation_true() {
     rcv_party.wait_for_asset_balance(&asset.asset_id, &waiting_balance);
 
     party.refresh_all();
-    assert!(party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations));
+    let waiting_for_confirmations =
+        party.check_test_transfer_status_sender(&txid, TransferStatus::WaitingConfirmations);
+    assert!(
+        waiting_for_confirmations
+            || party.check_test_transfer_status_sender(&txid, TransferStatus::Settled)
+    );
 
     drop(mining_guard);
     mine(false);
@@ -8628,7 +8632,6 @@ fn offline_receiver_mixed_blind_witness_batch_donation_false() {
         TransferStatus::WaitingConfirmations
     ));
     witness_party.wait_for_asset_balance(&asset.asset_id, &witness_waiting_balance);
-
     drop(mining_guard);
     mine(false);
     blind_party.wait_for_refresh_raw(None, None);

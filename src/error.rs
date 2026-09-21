@@ -200,6 +200,13 @@ pub enum Error {
         details: String,
     },
 
+    /// An RGB stock transition is waiting for its surrounding protocol to commit or roll back
+    #[error("RGB operation {operation_id} is in progress")]
+    RgbOperationInProgress {
+        /// Stable identifier of the operation that owns the RGB stock
+        operation_id: String,
+    },
+
     /// An invalid bitcoin address has been provided
     #[error("Address error: {details}")]
     InvalidAddress {

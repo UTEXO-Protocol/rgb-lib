@@ -936,7 +936,7 @@ impl Wallet {
             lock_time,
         )?;
         self.sign_psbt_impl(&mut begin_op_data.psbt, None)?;
-        let res = self.send_end_impl(&txn, &begin_op_data.psbt)?;
+        let res = self.send_end_impl(&txn, &begin_op_data.psbt, true, None)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();
@@ -1051,7 +1051,7 @@ impl Wallet {
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.send_end_impl(&txn, &psbt)?;
+        let res = self.send_end_impl(&txn, &psbt, true, None)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();
@@ -1127,6 +1127,70 @@ impl Wallet {
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Provide out-of-band ACK completed");
+        Ok(res)
+    }
+
+    /// Completes a send whose fascia was already promoted by a protocol-controlled transaction.
+    ///
+    /// <div class="warning">The caller must finalize or roll back the matching RGB stock journal.
+    /// This method is intended only for protocols that require the proposed allocation to be
+    /// visible before the Bitcoin transaction can be broadcast.</div>
+    pub fn send_end_preconsumed(
+        &mut self,
+        online: Online,
+        signed_psbt: String,
+    ) -> Result<OperationResult, Error> {
+        info!(self.logger(), "Sending preconsumed transfer (end)...");
+        self.check_online(online)?;
+        let psbt = Psbt::from_str(&signed_psbt)?;
+        let txn = self.database().begin_transaction()?;
+        let res = self.send_end_impl(&txn, &psbt, false, None)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(self.logger(), "Send preconsumed transfer (end) completed");
+        Ok(res)
+    }
+
+    /// Completes a preconsumed send while owning a matching durable RGB stock operation.
+    ///
+    /// If a promoted RGB acceptance is pending, `operation_id` must exactly match its journal. The
+    /// RGB stock lock is retained while consignments are generated and the transfer is committed,
+    /// preventing recovery from finalizing or rolling back the stock concurrently.
+    ///
+    /// <div class="warning">This method is intended only for protocol integrations that provide
+    /// their own durable commit decision.</div>
+    pub fn send_end_preconsumed_for_operation(
+        &mut self,
+        online: Online,
+        operation_id: &str,
+        signed_psbt: String,
+    ) -> Result<OperationResult, Error> {
+        if operation_id.is_empty() {
+            return Err(Error::Internal {
+                details: s!("RGB protocol operation ID cannot be empty"),
+            });
+        }
+        info!(
+            self.logger(),
+            "Sending preconsumed transfer for RGB protocol operation (end)..."
+        );
+        self.check_online(online)?;
+        let psbt = Psbt::from_str(&signed_psbt)?;
+        if psbt.unsigned_tx.compute_txid().to_string() != operation_id {
+            return Err(Error::Internal {
+                details: s!("RGB protocol operation ID does not match the send transaction"),
+            });
+        }
+        let txn = self.database().begin_transaction()?;
+        let res = self.send_end_impl(&txn, &psbt, false, Some(operation_id))?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        self.trigger_auto_backup();
+        info!(
+            self.logger(),
+            "Send preconsumed transfer for RGB protocol operation completed"
+        );
         Ok(res)
     }
 
