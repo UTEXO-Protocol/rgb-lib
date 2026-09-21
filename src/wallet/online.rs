@@ -2533,6 +2533,7 @@ pub trait WalletOnline: WalletOffline {
 
     fn prepare_psbt(
         &mut self,
+        _txn: &DbTxn,
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
@@ -2595,6 +2596,7 @@ pub trait WalletOnline: WalletOffline {
 
     fn try_prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_unspents: &[LocalUnspent],
         all_inputs: &mut HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
@@ -2603,6 +2605,7 @@ pub trait WalletOnline: WalletOffline {
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
             break match self.prepare_psbt(
+                txn,
                 all_inputs.clone(),
                 witness_recipients,
                 fee_rate,
@@ -3801,6 +3804,15 @@ pub trait WalletOnline: WalletOffline {
         #[cfg(not(test))]
         let input_unspents = self.get_input_unspents(&unspents)?;
 
+        // MPC pending PSBTs may also reserve empty colored fee inputs.
+        let reserved: HashSet<_> = self
+            .get_reserved_vanilla_outpoints(txn)?
+            .into_iter()
+            .collect();
+        let input_unspents = input_unspents
+            .into_iter()
+            .filter(|u| !reserved.contains(&BdkOutPoint::from(u.utxo.clone())))
+            .collect();
         let runtime = self.rgb_runtime()?;
 
         Ok((fee_rate_checked, unspents, input_unspents, runtime))
@@ -3960,6 +3972,7 @@ pub trait WalletOnline: WalletOffline {
             })
             .collect();
         let (mut psbt, btc_change) = self.try_prepare_psbt(
+            txn,
             input_unspents,
             &mut all_inputs,
             witness_recipients,
@@ -4391,9 +4404,7 @@ pub trait WalletOnline: WalletOffline {
         let mut local_recipients = vec![];
         let mut witness_recipients: Vec<(ScriptBuf, u64)> = vec![];
         for (idx, amt) in inflation_amounts.iter().enumerate() {
-            let script_pubkey = self
-                .get_new_addresses(KeychainKind::External, 1)?
-                .script_pubkey();
+            let script_pubkey = self.get_receive_address(txn)?.script_pubkey();
             let beneficiary = beneficiary_from_script_buf(script_pubkey.clone());
             let beneficiary = XChainNet::with(chainnet, beneficiary);
             let recipient_id = beneficiary.to_string();
@@ -4523,9 +4534,7 @@ pub trait WalletOnline: WalletOffline {
         local_recipients.push(local_recipient);
 
         // Roll the bridge right forward onto a fresh output of ours.
-        let script_pubkey = self
-            .get_new_addresses(KeychainKind::External, 1)?
-            .script_pubkey();
+        let script_pubkey = self.get_receive_address(txn)?.script_pubkey();
         let dust = self
             .bdk_wallet()
             .public_descriptor(KeychainKind::External)
@@ -4749,9 +4758,7 @@ pub trait WalletOnline: WalletOffline {
         )?;
 
         let chainnet: ChainNet = self.bitcoin_network().into();
-        let script_pubkey = self
-            .get_new_addresses(KeychainKind::External, 1)?
-            .script_pubkey();
+        let script_pubkey = self.get_receive_address(txn)?.script_pubkey();
         let dust = self
             .bdk_wallet()
             .public_descriptor(KeychainKind::External)
