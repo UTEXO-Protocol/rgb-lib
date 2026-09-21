@@ -479,6 +479,57 @@ pub(super) trait MultisigOps: OfflineSigParty {
         )
     }
 
+    fn issue_asset_bfa(&mut self, contract_address: &str, bridge_rights: u8) -> AssetBFA {
+        println!("issue BFA asset {}", self.data_dir());
+        let online = self.online();
+        let res = self
+            .multisig_mut()
+            .issue_asset_bfa(
+                online,
+                TICKER.to_string(),
+                NAME.to_string(),
+                PRECISION,
+                bridge_rights,
+                contract_address.to_string(),
+                None,
+            )
+            .unwrap();
+        op_counter_bump();
+        println!("issued BFA asset with ID {}", res.asset_id);
+        res
+    }
+
+    fn bridge_init_begin(&mut self, asset_id: &str, recipient: Recipient) -> BridgeBeginResult {
+        self.bridge_init_begin_with_fee_rate(asset_id, recipient, FEE_RATE)
+    }
+
+    fn bridge_init_begin_with_fee_rate(
+        &mut self,
+        asset_id: &str,
+        recipient: Recipient,
+        fee_rate: u64,
+    ) -> BridgeBeginResult {
+        println!("bridge prepare {}", self.data_dir());
+        let online = self.online();
+        // nothing is posted, so the hub operation counter stays where it is
+        self.multisig_mut()
+            .bridge_init_begin(online, asset_id.to_string(), recipient, fee_rate, 1)
+            .unwrap()
+    }
+
+    fn bridge_init_end(&mut self, psbt: &str) -> InitOperationResult {
+        println!("bridge post {}", self.data_dir());
+        let online = self.online();
+        let res = self
+            .multisig_mut()
+            .bridge_init_end(online, psbt.to_string())
+            .unwrap();
+        let op_idx = op_counter_bump();
+        assert_eq!(res.operation_idx, op_idx);
+        println!("posted bridge with operation ID {}", res.operation_idx);
+        res
+    }
+
     fn burn_init(&mut self, asset_id: &str, amount: u64) -> InitOperationResult {
         println!("burn init {}", self.data_dir());
         let bt_before = self.bak_ts();
@@ -794,6 +845,26 @@ impl IssuedAsset {
             IssuedAsset::Ifa(a) => &a.asset_id,
         }
     }
+}
+
+/// Issue a BFA asset from `initiator` and check every cosigner sees it.
+pub(super) fn issue_asset_bfa_checked(
+    initiator: &mut MultisigParty,
+    others: &mut [&mut MultisigParty],
+    contract_address: &str,
+) -> AssetBFA {
+    issue_asset_bfa_checked_with_rights(initiator, others, contract_address, 1)
+}
+
+pub(super) fn issue_asset_bfa_checked_with_rights(
+    initiator: &mut MultisigParty,
+    others: &mut [&mut MultisigParty],
+    contract_address: &str,
+    bridge_rights: u8,
+) -> AssetBFA {
+    let asset = initiator.issue_asset_bfa(contract_address, bridge_rights);
+    check_issuance(initiator, others, &asset.asset_id, AssetSchema::Bfa);
+    asset
 }
 
 pub(super) fn issue_asset(

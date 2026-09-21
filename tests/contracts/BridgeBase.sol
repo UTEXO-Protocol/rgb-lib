@@ -34,7 +34,7 @@ abstract contract BridgeBase is Ownable, Pausable {
     event FundsIn(
         address indexed sender,
         uint256 operationId,
-        uint256 amount
+        uint64 amount
     );
 
     // =========================================================================

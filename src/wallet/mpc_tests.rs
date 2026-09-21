@@ -184,10 +184,21 @@ fn pending_rgb_psbt_reserves_empty_fee_inputs_across_restart() {
     let (dir, wallet, broken) = wallet();
     let txn = wallet.database().begin_transaction().unwrap();
     let script = wallet
-        .register_address(&txn, KeychainKind::Internal)
+        .register_address(&txn, KeychainKind::External)
         .unwrap()
         .script_pubkey();
     let fee = output(5, &script);
+    let persisted_fee = output(6, &script);
+    let free = output(7, &script);
+    for input in [&fee, &persisted_fee, &free] {
+        txn.set_txo(txo(input.0, true)).unwrap();
+    }
+    // New bridge preparations persist reservations in the database. Older MPC
+    // preparations below reserve inputs through their saved PSBT instead.
+    let persisted_psbt = mpc_psbt::build_psbt(vec![persisted_fee.clone()], vec![]).unwrap();
+    wallet
+        .reserve_vanilla_txos(&txn, &persisted_psbt, WalletTransactionType::RgbTransfer)
+        .unwrap();
     let psbt = mpc_psbt::build_psbt(vec![fee.clone()], vec![]).unwrap();
     let txid = psbt.unsigned_tx.compute_txid().to_string();
     let transfer_dir = wallet.get_transfer_dir(&txid);
@@ -208,19 +219,26 @@ fn pending_rgb_psbt_reserves_empty_fee_inputs_across_restart() {
     txn.commit().unwrap();
     let data = wallet.wallet_data().clone();
     drop(wallet);
-    let wallet = MpcWallet::new(
+    let mut wallet = MpcWallet::new(
         data,
         "offline-mpc-regression".into(),
         Box::new(Provider { broken }),
     )
     .unwrap();
     let txn = wallet.database().begin_transaction().unwrap();
-    assert!(
-        wallet
-            .get_reserved_vanilla_outpoints(&txn)
-            .unwrap()
-            .contains(&fee.0)
-    );
+    let reserved = wallet.get_reserved_vanilla_outpoints(&txn).unwrap();
+    assert!(reserved.contains(&fee.0));
+    assert!(reserved.contains(&persisted_fee.0));
+    let (_, _, selected, _) = wallet.get_transfer_begin_data(&txn, 1).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(BdkOutPoint::from(selected[0].utxo.clone()), free.0);
+
+    wallet
+        .release_reserved_txos(&txn, &persisted_psbt.unsigned_tx.compute_txid().to_string())
+        .unwrap();
+    let reserved = wallet.get_reserved_vanilla_outpoints(&txn).unwrap();
+    assert!(reserved.contains(&fee.0));
+    assert!(!reserved.contains(&persisted_fee.0));
     let mut batch: DbBatchTransferActMod = txn
         .iter_batch_transfers()
         .unwrap()

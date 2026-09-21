@@ -143,6 +143,7 @@ pub trait WalletOnline: WalletOffline {
                 txn.update_txo(db_txo)?;
             }
         }
+        self.release_reserved_txos(txn, &tx.compute_txid().to_string())?;
 
         Ok(tx)
     }
@@ -171,6 +172,17 @@ pub trait WalletOnline: WalletOffline {
             })
             .collect();
         txn.set_reserved_txos(reservations)?;
+        Ok(())
+    }
+
+    /// Free the inputs a prepared transfer reserved, once it was broadcast or failed.
+    fn release_reserved_txos(&self, txn: &DbTxn, txid: &str) -> Result<(), Error> {
+        if let Some((_, reservations)) =
+            txn.get_wallet_transaction_with_reserved_txos_by_txid(txid)?
+            && !reservations.is_empty()
+        {
+            txn.del_reserved_txos(&reservations)?;
+        }
         Ok(())
     }
 
@@ -472,6 +484,9 @@ pub trait WalletOnline: WalletOffline {
         batch_transfer: &DbBatchTransfer,
     ) -> Result<DbBatchTransfer, Error> {
         self.set_hub_fail_status(batch_transfer.idx)?;
+        if let Some(txid) = &batch_transfer.txid {
+            self.release_reserved_txos(txn, txid)?;
+        }
         let mut updated_batch_transfer: DbBatchTransferActMod = batch_transfer.clone().into();
         updated_batch_transfer.status = ActiveValue::Set(TransferStatus::Failed);
         txn.update_batch_transfer(&mut updated_batch_transfer)
@@ -3804,12 +3819,13 @@ pub trait WalletOnline: WalletOffline {
         #[cfg(not(test))]
         let input_unspents = self.get_input_unspents(&unspents)?;
 
-        // MPC pending PSBTs may also reserve empty colored fee inputs.
+        // Include persisted reservations (e.g. a prepared bridge mint) and the
+        // MPC override's saved PSBT inputs, including empty colored fee inputs.
         let reserved: HashSet<_> = self
             .get_reserved_vanilla_outpoints(txn)?
             .into_iter()
             .collect();
-        let input_unspents = input_unspents
+        let input_unspents: Vec<LocalUnspent> = input_unspents
             .into_iter()
             .filter(|u| !reserved.contains(&BdkOutPoint::from(u.utxo.clone())))
             .collect();
@@ -4606,6 +4622,15 @@ pub trait WalletOnline: WalletOffline {
             PrepareTransferPsbtResult::Success(begin_operation_data) => *begin_operation_data,
         };
         drop(runtime);
+
+        // The PSBT leaves unsigned and unposted, waiting for its EVM lock. Its RGB
+        // inputs are pinned by the pending transfer; the plain BTC input the fee
+        // took is not, and the next begin would spend it again.
+        self.reserve_vanilla_txos(
+            txn,
+            &begin_operation_data.psbt,
+            WalletTransactionType::RgbTransfer,
+        )?;
 
         // Compose the consignment now: the caller needs the OpId before the EVM lock exists.
         // It stays local until `bridge_end_impl` broadcasts: posted to the proxy any

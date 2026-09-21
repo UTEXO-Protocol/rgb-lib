@@ -1,7 +1,7 @@
 use super::*;
 
-/// keccak256("FundsIn(address,uint256,uint256)")
-const FUNDS_IN_TOPIC: &str = "0xcf4f3270b7400c5ca42954767c516b7c595dcd8038cdd121945a474c616208f8";
+/// keccak256("FundsIn(address,uint256,uint64)")
+const FUNDS_IN_TOPIC: &str = "0xf1a18caea297591892fc07ea412a5e617d8e51e1155912d8871793e1d4e70f87";
 
 pub(crate) struct EthClient {
     client: RestClient,
@@ -61,16 +61,6 @@ fn abi_word(data: &str, index: usize) -> Result<[u8; 32], Error> {
     Ok(buf)
 }
 
-/// Decode a 32-byte indexed topic from its hex string.
-fn topic_word(topic: &str) -> Result<[u8; 32], Error> {
-    let hex = topic.strip_prefix("0x").unwrap_or(topic);
-    let mut buf = [0u8; 32];
-    hex::decode_to_slice(hex, &mut buf).map_err(|e| Error::Network {
-        details: format!("topic hex decode error: {e}"),
-    })?;
-    Ok(buf)
-}
-
 /// Read an ABI uint256 as u64, refusing values that don't fit.
 /// Truncating would silently disagree with the amount the mint commits to.
 fn word_as_u64(word: [u8; 32]) -> Result<u64, Error> {
@@ -93,50 +83,16 @@ impl EthLog {
         if !topic0.eq_ignore_ascii_case(FUNDS_IN_TOPIC) {
             return Ok(None);
         }
-
-        // Deployed UTEXO format, operation id still indexed:
-        // event FundsIn(address indexed sender, uint256 indexed operationId, uint256 amount)
-        // topics = [sig, sender, operationId], data = abi.encode(amount)
-        if self.topics.len() >= 3 {
-            return Ok(Some(FundsInEvent {
-                amount: word_as_u64(abi_word(&self.data, 0)?)?,
-                operation_id: topic_word(&self.topics[2])?,
-            }));
+        if self.topics.len() != 2 || self.data.strip_prefix("0x").unwrap_or(&self.data).len() != 128
+        {
+            return Err(Error::Network {
+                details: s!("unexpected FundsIn ABI layout"),
+            });
         }
-
-        let data_hex = self.data.strip_prefix("0x").unwrap_or(&self.data);
-        let words = data_hex.len() / 64;
-
-        // Legacy format:
-        // event FundsIn(address token, uint256 amount, uint256 operationId)
-        // data = abi.encode(token, amount, operationId)
-        if words >= 3 {
-            let amount = word_as_u64(abi_word(&self.data, 1)?)?;
-            let operation_id = abi_word(&self.data, 2)?;
-            return Ok(Some(FundsInEvent {
-                amount,
-                operation_id,
-            }));
-        }
-
-        // Current format:
-        // event FundsIn(address indexed sender, uint256 operationId, uint256 amount)
-        // data = abi.encode(operationId, amount)
-        if words >= 2 {
-            let operation_id = abi_word(&self.data, 0)?;
-            let amount = word_as_u64(abi_word(&self.data, 1)?)?;
-            return Ok(Some(FundsInEvent {
-                amount,
-                operation_id,
-            }));
-        }
-
-        Err(Error::Network {
-            details: format!(
-                "unexpected FundsIn ABI payload size: {} bytes",
-                data_hex.len() / 2
-            ),
-        })
+        Ok(Some(FundsInEvent {
+            operation_id: abi_word(&self.data, 0)?,
+            amount: word_as_u64(abi_word(&self.data, 1)?)?,
+        }))
     }
 }
 
@@ -171,9 +127,9 @@ struct LogFilter {
     from_block: String,
     /// End block (hex or tag).
     to_block: String,
-    /// Optional topic filters.
+    /// Event signature filter.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    topics: Vec<Option<String>>,
+    topics: Vec<String>,
 }
 
 impl EthClient {
@@ -214,7 +170,7 @@ impl EthClient {
                 address: contract.to_string(),
                 from_block: from_block.to_string(),
                 to_block: to_block.to_string(),
-                topics: vec![Some(FUNDS_IN_TOPIC.to_string())],
+                topics: vec![FUNDS_IN_TOPIC.to_string()],
             }],
             id: 1,
         };
@@ -294,20 +250,7 @@ mod test {
     const OPID: &str = "00000000000000000000000000000000000000000000000000000000000000ab";
 
     #[test]
-    fn decodes_indexed_operation_id() {
-        // what the currently deployed bridge emits: rgbOpId is indexed
-        let log = log(
-            &[FUNDS_IN_TOPIC, &word("dead"), &format!("0x{OPID}")],
-            &["64"],
-        );
-        let event = log.as_funds_in().unwrap().unwrap();
-        assert_eq!(event.amount, 100);
-        assert_eq!(hex::encode(event.operation_id), OPID);
-    }
-
-    #[test]
-    fn decodes_non_indexed_operation_id() {
-        // what BFA expects once `indexed` is dropped from the event
+    fn decodes_bridge_event() {
         let log = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", "64"]);
         let event = log.as_funds_in().unwrap().unwrap();
         assert_eq!(event.amount, 100);
@@ -315,29 +258,69 @@ mod test {
     }
 
     #[test]
-    fn decodes_legacy_layout() {
-        let log = log(&[FUNDS_IN_TOPIC], &["beef", "64", "ab"]);
-        let event = log.as_funds_in().unwrap().unwrap();
-        assert_eq!(event.amount, 100);
-        assert_eq!(hex::encode(event.operation_id), OPID);
+    fn rejects_old_bridge_event() {
+        let old_topic = "0xcf4f3270b7400c5ca42954767c516b7c595dcd8038cdd121945a474c616208f8";
+        let log = log(&[old_topic, &word("dead"), &format!("0x{OPID}")], &["64"]);
+        assert!(log.as_funds_in().unwrap().is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_bridge_event() {
+        let short = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab"]);
+        assert!(short.as_funds_in().is_err());
+
+        let extra_topic = log(&[FUNDS_IN_TOPIC, &word("dead"), &word("ab")], &["ab", "64"]);
+        assert!(extra_topic.as_funds_in().is_err());
+    }
+
+    #[test]
+    fn decodes_maximum_amount_and_rejects_overflow() {
+        let max = log(
+            &[FUNDS_IN_TOPIC, &word("dead")],
+            &["ab", "ffffffffffffffff"],
+        );
+        assert_eq!(max.as_funds_in().unwrap().unwrap().amount, u64::MAX);
+
+        let overflow = log(
+            &[FUNDS_IN_TOPIC, &word("dead")],
+            &["ab", "10000000000000000"],
+        );
+        assert!(overflow.as_funds_in().is_err());
+    }
+
+    #[test]
+    fn queries_bridge_event_signature() {
+        let mut server = mockito::Server::new();
+        let address = "0x0000000000000000000000000000000000000001";
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getLogs",
+            "params": [{
+                "address": address,
+                "fromBlock": "0x0",
+                "toBlock": "latest",
+                "topics": [FUNDS_IN_TOPIC],
+            }],
+            "id": 1,
+        });
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Json(request))
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#)
+            .create();
+
+        let logs = EthClient::new(&server.url())
+            .unwrap()
+            .get_logs(address, "0x0", "latest")
+            .unwrap();
+        assert!(logs.is_empty());
+        mock.assert();
     }
 
     #[test]
     fn ignores_other_events() {
         let log = log(&[&word("1234")], &["64"]);
         assert!(log.as_funds_in().unwrap().is_none());
-    }
-
-    #[test]
-    fn rejects_amount_above_u64() {
-        let amount = "01".to_string() + &"00".repeat(8);
-        let log = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", &amount]);
-        assert!(log.as_funds_in().is_err());
-    }
-
-    #[test]
-    fn rejects_unknown_payload_size() {
-        let log = log(&[FUNDS_IN_TOPIC], &["64"]);
-        assert!(log.as_funds_in().is_err());
     }
 }

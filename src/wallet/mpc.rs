@@ -224,6 +224,7 @@ impl WalletOnline for MpcWallet {
                 })?;
             }
         }
+        self.release_reserved_txos(txn, &tx.compute_txid().to_string())?;
 
         Ok(tx)
     }
