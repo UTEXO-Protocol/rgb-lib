@@ -16,6 +16,16 @@ fn anvil_exec() -> Vec<String> {
     vec![s!("-f"), compose_file, s!("exec"), s!("-T"), s!("anvil")]
 }
 
+// every `forge create` / `cast send` here signs with the one anvil key, so concurrent calls from
+// `#[parallel]` tests race on its nonce ("nonce too low"); serialize the broadcasts, not the tests
+static ANVIL_DEPLOY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn anvil_deploy_guard() -> std::sync::MutexGuard<'static, ()> {
+    ANVIL_DEPLOY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Deploy the TestERC20 contract on anvil and return contract info.
 ///
 /// Uses `forge create` via docker compose exec inside the anvil container.
@@ -25,6 +35,7 @@ pub(crate) fn deploy_test_erc20(
     decimals: u8,
     initial_supply: u64,
 ) -> EthContract {
+    let _deploy_guard = anvil_deploy_guard();
     ensure_openzeppelin_installed();
 
     let mut args = anvil_exec();
@@ -114,6 +125,7 @@ fn ensure_openzeppelin_installed() {
 /// Installs OpenZeppelin deps (if needed), then uses `forge create` via docker compose exec.
 /// `token` is the ERC-20 address the bridge will accept.
 pub(crate) fn deploy_bridge(token: &str) -> EthContract {
+    let _deploy_guard = anvil_deploy_guard();
     ensure_openzeppelin_installed();
 
     let mut args = anvil_exec();
@@ -210,6 +222,7 @@ pub(crate) fn erc20_balance_of(contract: &str, account: &str) -> u64 {
 
 /// Approve `spender` to transfer `amount` of an ERC-20 token via `cast send`.
 pub(crate) fn erc20_approve(token: &str, spender: &str, amount: u64) {
+    let _deploy_guard = anvil_deploy_guard();
     let mut args = anvil_exec();
     args.extend([
         s!("cast"),
@@ -242,6 +255,7 @@ pub(crate) fn erc20_approve(token: &str, spender: &str, amount: u64) {
 ///
 /// `opid` is the 64-char hex RGB operation ID (used as `operationId`).
 pub(crate) fn bridge_funds_in(bridge: &str, amount: u64, opid: &str) {
+    let _deploy_guard = anvil_deploy_guard();
     let operation_id = format!("0x{opid}");
 
     let mut args = anvil_exec();

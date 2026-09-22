@@ -444,18 +444,24 @@ pub fn script_buf_from_recipient_id(recipient_id: String) -> Result<Option<Scrip
     }
 }
 
-pub(crate) fn beneficiary_from_script_buf(script_buf: ScriptBuf) -> Beneficiary {
-    let address_payload = AddressPayload::from_script(&script_buf).unwrap();
-    Beneficiary::WitnessVout(Pay2Vout::new(address_payload), None)
+pub(crate) fn beneficiary_from_script_buf(script_buf: ScriptBuf) -> Result<Beneficiary, Error> {
+    let address_payload =
+        AddressPayload::from_script(&script_buf).map_err(|e| Error::InvalidAddress {
+            details: e.to_string(),
+        })?;
+    Ok(Beneficiary::WitnessVout(
+        Pay2Vout::new(address_payload),
+        None,
+    ))
 }
 
 /// Return the recipient ID for a specific script buf
 pub fn recipient_id_from_script_buf(
     script_buf: ScriptBuf,
     bitcoin_network: BitcoinNetwork,
-) -> String {
-    let beneficiary = beneficiary_from_script_buf(script_buf);
-    XChainNet::with(bitcoin_network.into(), beneficiary).to_string()
+) -> Result<String, Error> {
+    let beneficiary = beneficiary_from_script_buf(script_buf)?;
+    Ok(XChainNet::with(bitcoin_network.into(), beneficiary).to_string())
 }
 
 fn get_derivation_path(keychain: u8) -> DerivationPath {
@@ -917,18 +923,6 @@ impl RgbRuntime {
     pub(crate) fn store_secret_seal(&mut self, seal: GraphSeal) -> Result<bool, InternalError> {
         self.stock
             .store_secret_seal(seal)
-            .map_err(InternalError::from)
-    }
-
-    pub(crate) fn transfer(
-        &self,
-        contract_id: ContractId,
-        outputs: impl AsRef<[OutputSeal]>,
-        secret_seals: impl AsRef<[SecretSeal]>,
-        witness_id: Option<RgbTxid>,
-    ) -> Result<RgbTransfer, InternalError> {
-        self.stock
-            .transfer(contract_id, outputs, secret_seals, [], witness_id)
             .map_err(InternalError::from)
     }
 

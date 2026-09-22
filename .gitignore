@@ -9,3 +9,11 @@
 /.vscode
 .env
 .env.*
+.DS_Store
+# local wallet data and dumps (examples/*.rs stay tracked)
+/examples/*wallet*/
+/rgb-wallet/
+/rgb-wallet-cosigner*/
+/rgb-wallet-cosigner*.zip
+/rgb-utexo/
+/rgb-utexo.zip
