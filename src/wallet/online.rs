@@ -2601,11 +2601,6 @@ pub trait WalletOnline: WalletOffline {
         false
     }
 
-    // Only MPC overrides this hook; ordinary BDK/HTLC reservation behavior stays intact.
-    fn reserve_rgb_inputs(&self, _txn: &DbTxn, _psbt: &Psbt) -> Result<(), Error> {
-        Ok(())
-    }
-
     fn prepare_psbt(
         &mut self,
         _txn: &DbTxn,
@@ -3888,13 +3883,14 @@ pub trait WalletOnline: WalletOffline {
         let input_unspents = self.get_input_unspents(&unspents)?;
 
         // Include complete MPC input reservations and upstream HTLC reservations.
-        let reserved: HashSet<_> = self
+        let reserved: HashSet<Outpoint> = self
             .get_reserved_vanilla_outpoints(txn)?
             .into_iter()
+            .map(Into::into)
             .collect();
         let input_unspents: Vec<LocalUnspent> = input_unspents
             .into_iter()
-            .filter(|u| !reserved.contains(&BdkOutPoint::from(u.utxo.clone())))
+            .filter(|u| !reserved.contains(&u.utxo.outpoint()))
             .collect();
 
         let runtime = self.rgb_runtime()?;
@@ -4056,11 +4052,10 @@ pub trait WalletOnline: WalletOffline {
             })
             .collect();
         // Inspect every contract on the selected inputs, including unrelated assets.
-        let prev_outputs = all_inputs.clone();
         let mut needs_rgb_change = false;
         if self.split_rgb_change() {
-            for id in runtime.contracts_assigning(prev_outputs.clone())? {
-                let states = runtime.contract_assignments_for(id, prev_outputs.clone())?;
+            for id in runtime.contracts_assigning(all_inputs.clone())? {
+                let states = runtime.contract_assignments_for(id, all_inputs.clone())?;
                 let mut collected = AssignmentsCollection::default();
                 for (_, assignments) in states {
                     for (opout, state) in assignments {
@@ -4124,7 +4119,6 @@ pub trait WalletOnline: WalletOffline {
         begin_operation_data.transfer_dir = new_transfer_dir;
 
         if !dry_run {
-            self.reserve_rgb_inputs(txn, &psbt)?;
             // save transfer to DB with Initiated status to reserve the UTXOs
             let batch_transfer_idx = self.save_transfers(
                 txn,

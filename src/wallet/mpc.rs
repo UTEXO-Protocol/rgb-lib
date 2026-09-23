@@ -214,10 +214,6 @@ impl WalletOnline for MpcWallet {
         Ok(tx)
     }
 
-    fn reserve_rgb_inputs(&self, txn: &DbTxn, psbt: &Psbt) -> Result<(), Error> {
-        txn.save_mpc_prepared_inputs(&psbt.unsigned_tx)
-    }
-
     fn split_rgb_change(&self) -> bool {
         true
     }
@@ -1107,6 +1103,8 @@ impl MpcWallet {
             None,
         )?;
         if !dry_run {
+            // Commit the complete input set atomically with the Initiated batch.
+            txn.save_mpc_prepared_inputs(&begin_op_data.psbt.unsigned_tx)?;
             self.update_backup_info(&txn, false)?;
         }
         txn.commit()?;

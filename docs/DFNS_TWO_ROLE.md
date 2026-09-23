@@ -6,7 +6,7 @@
 
 Address and UTXO-query helpers participate in the caller's database transaction. Own change does not consume an unrelated pending witness invoice on a reused script. Pending amount-bearing witness invoices contribute to future balance only until a Receive coloring exists; the public balance accounting fields remain unchanged.
 
-A complete unsigned transaction is saved with the Initiated transfer in `mpc_prepared_inputs`. It reserves colored and fee inputs across restart even when a legacy PSBT file is missing. Legacy Initiated records without complete reservations need their original nonempty matching PSBT restored; malformed, missing or mismatched data blocks spending. Never clear journals/reservations to retry an unknown operation.
+A complete unsigned transaction is saved by `MpcWallet::send_begin` with the Initiated transfer in `mpc_prepared_inputs`, before the same DB commit; dry runs do not reserve inputs. No shared reservation hook is required. It reserves colored and fee inputs across restart even when the original PSBT file is missing. Legacy Initiated records without complete reservations need their original nonempty matching PSBT restored; malformed, missing or mismatched data blocks spending. Never clear journals/reservations to retry an unknown operation.
 
 The scope review removed changes to provider-internal signing, address rotation, MPC `create_utxos` completion and create/drain reservation creation. Those existing service-account operations are not used by the delegated API. Their upstream behavior is unchanged except for adapting shared transaction-aware address/UTXO helpers. The API verifies immutable provider metadata before opening the wallet. All delegated signing remains in Gateway; `src/mpc/dfns.rs` is unchanged.
 
@@ -16,7 +16,7 @@ Clean base: `ca5f6b782e239b104fdaa3c30019668373f92377` (`dev`), eight baseline M
 
 ```sh
 cargo test --locked --lib --features mpc wallet::mpc
-cargo test --locked --lib --features mpc pending_witness
+cargo test --locked --lib --features mpc database::pending_witness_balance_tests
 cargo clippy --locked --lib --features mpc -- -D warnings
 ```
 
@@ -33,4 +33,4 @@ cargo test --locked --lib --features mpc wallet::test::get_asset_balance -- --te
 cargo test --locked --lib --features mpc wallet::test::witness_receive -- --test-threads=1
 ```
 
-Verified 2026-09-23: 14 HTLC, 3 native balance and 2 native witness tests passed. The API integration fixture exercises two successive two-key sends, separate vanilla spend, unknown prepare/submit recovery, unrelated allocations and exhausted RGB change. All coins/keys are disposable regtest fixtures. Private upstream Git mirrors are still build dependencies; no BFA runtime or legacy provider flow is required by these checks.
+Verified 2026-09-23: 14 HTLC, 3 native balance and 2 native witness tests passed. The API integration fixture exercises two successive two-key sends, separate vanilla spend, unknown prepare/submit recovery, fee reservation after restart without the original PSBT, unrelated allocations and exhausted RGB change. All coins/keys are disposable regtest fixtures. Private upstream Git mirrors are still build dependencies; no BFA runtime or legacy provider flow is required by these checks.
