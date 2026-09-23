@@ -67,7 +67,13 @@ pub(crate) fn get_test_wallet_data(data_dir: &str) -> WalletData {
         bitcoin_network: BitcoinNetwork::Regtest,
         database_type: DatabaseType::Sqlite,
         max_allocations_per_utxo: MAX_ALLOCATIONS_PER_UTXO,
-        supported_schemas: AssetSchema::VALUES.to_vec(),
+        supported_schemas: AssetSchema::VALUES
+            .iter()
+            .copied()
+            .filter(|schema| {
+                option_env!("RGB_TEST_NO_EVM").is_none() || *schema != AssetSchema::Bfa
+            })
+            .collect(),
         reuse_addresses: false,
     }
 }
@@ -107,7 +113,13 @@ pub(crate) fn get_test_wallet_raw(
             bitcoin_network,
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: max_allocations_per_utxo.unwrap_or(MAX_ALLOCATIONS_PER_UTXO),
-            supported_schemas: AssetSchema::VALUES.to_vec(),
+            supported_schemas: AssetSchema::VALUES
+                .iter()
+                .copied()
+                .filter(|schema| {
+                    option_env!("RGB_TEST_NO_EVM").is_none() || *schema != AssetSchema::Bfa
+                })
+                .collect(),
             reuse_addresses: false,
         },
         wallet_keys.clone(),
@@ -235,7 +247,10 @@ pub(crate) fn send_sats_to_address(address: String, sats: Option<u64>) {
             .stdin(Stdio::null())
             .arg("compose")
             .args(&bitcoin_cli)
-            .arg("-rpcwallet=miner")
+            .arg(format!(
+                "-rpcwallet={}",
+                std::env::var("RGB_TEST_RPC_WALLET").unwrap_or_else(|_| s!("miner"))
+            ))
             .arg("sendtoaddress")
             .arg(&address)
             .arg(&btc_str)
@@ -342,7 +357,11 @@ pub(crate) fn test_go_online_options(indexer_url: Option<&str>) -> OnlineOptions
         // Test wallets declare AssetSchema::VALUES, which now includes Bfa, and
         // get_online_data refuses a Bfa-capable wallet without an endpoint - so
         // with None here no test could bring any wallet online at all.
-        eth_rpc_url: Some(ANVIL_RPC_URL.to_string()),
+        eth_rpc_url: if option_env!("RGB_TEST_NO_EVM").is_some() {
+            None
+        } else {
+            Some(ANVIL_RPC_URL.to_string())
+        },
     }
 }
 

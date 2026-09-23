@@ -128,7 +128,10 @@ impl Miner {
                 .stdin(Stdio::null())
                 .arg("compose")
                 .args(&bitcoin_cli)
-                .arg("-rpcwallet=miner")
+                .arg(format!(
+                    "-rpcwallet={}",
+                    std::env::var("RGB_TEST_RPC_WALLET").unwrap_or_else(|_| s!("miner"))
+                ))
                 .arg("-generate")
                 .arg(blocks.to_string())
                 .output()
@@ -380,7 +383,13 @@ pub(crate) fn estimate_smart_fee(esplora: bool) -> bool {
 pub(crate) fn wait_indexers_sync() {
     let t_0 = OffsetDateTime::now_utc();
     let mut max_blockcount = 0;
-    for bitcoin_cli in [bitcoin_cli(), esplora_bitcoin_cli()] {
+    let isolated = option_env!("RGB_TEST_ELECTRUM_URL").is_some();
+    let nodes = if isolated {
+        vec![bitcoin_cli()]
+    } else {
+        vec![bitcoin_cli(), esplora_bitcoin_cli()]
+    };
+    for bitcoin_cli in nodes {
         let output = loop {
             if (OffsetDateTime::now_utc() - t_0).as_seconds_f32() > 120.0 {
                 panic!("could not get blockcount ({QUEUE_DEPTH_EXCEEDED})");
@@ -416,7 +425,7 @@ pub(crate) fn wait_indexers_sync() {
         std::thread::sleep(std::time::Duration::from_millis(100));
         let mut all_synced = true;
 
-        let indexer_urls = vec![
+        let mut indexer_urls = vec![
             #[cfg(feature = "electrum")]
             ELECTRUM_URL,
             #[cfg(feature = "electrum")]
@@ -426,6 +435,9 @@ pub(crate) fn wait_indexers_sync() {
             #[cfg(feature = "esplora")]
             ESPLORA_URL,
         ];
+        if isolated {
+            indexer_urls.truncate(1);
+        }
 
         for indexer_url in indexer_urls {
             let err_msg = format!("cannot get indexer {indexer_url}");

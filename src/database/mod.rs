@@ -871,6 +871,11 @@ impl DbTxn {
         let colorings = colorings.map(Ok).unwrap_or_else(|| self.iter_colorings())?;
         let txos = txos.map(Ok).unwrap_or_else(|| self.iter_txos())?;
 
+        let colored_incoming_transfers: HashSet<i32> = colorings
+            .iter()
+            .filter(|coloring| coloring.r#type == ColoringType::Receive)
+            .map(|coloring| coloring.asset_transfer_idx)
+            .collect();
         let txos_allocations = self.get_rgb_allocations(
             txos,
             Some(colorings),
@@ -904,7 +909,10 @@ impl DbTxn {
             .filter(|t| matches!(t.recipient_type, Some(RecipientTypeFull::Witness { .. })))
             .filter_map(|t| {
                 let (at, bt) = t.related_transfers(&asset_transfers, &batch_transfers);
-                if bt.incoming && bt.status.waiting_confirmations() {
+                if bt.incoming
+                    && bt.status.waiting_confirmations()
+                    && !colored_incoming_transfers.contains(&at.idx)
+                {
                     // filter for asset ID (always present in WaitingConfirmations status)
                     if at.asset_id.unwrap() != asset_id {
                         return None;
@@ -1057,6 +1065,42 @@ impl DbTxn {
     }
 
     #[cfg(feature = "mpc")]
+    pub(crate) fn save_mpc_prepared_inputs(&self, tx: &BdkTransaction) -> Result<(), Error> {
+        use entities::mpc_prepared_inputs as inputs;
+        let txid = tx.compute_txid().to_string();
+        if let Some(saved) = self.mpc_prepared_inputs(&txid)? {
+            if saved != *tx {
+                return Err(Error::InvalidPsbt {
+                    details: s!("MPC reservation transaction mismatch"),
+                });
+            }
+            return Ok(());
+        }
+        let model = inputs::ActiveModel {
+            txid: ActiveValue::Set(txid),
+            unsigned_tx: ActiveValue::Set(serde_json::to_string(tx).map_err(InternalError::from)?),
+        };
+        block_on(inputs::Entity::insert(model).exec(self.inner()))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn mpc_prepared_inputs(&self, txid: &str) -> Result<Option<BdkTransaction>, Error> {
+        use entities::mpc_prepared_inputs as inputs;
+        let Some(saved) = block_on(inputs::Entity::find_by_id(txid).one(self.inner()))? else {
+            return Ok(None);
+        };
+        let tx: BdkTransaction =
+            serde_json::from_str(&saved.unsigned_tx).map_err(InternalError::from)?;
+        if tx.compute_txid().to_string() != txid || tx.input.is_empty() {
+            return Err(Error::InvalidPsbt {
+                details: s!("MPC reservation is corrupt; reconcile the saved operation"),
+            });
+        }
+        Ok(Some(tx))
+    }
+
+    #[cfg(feature = "mpc")]
     pub(crate) fn set_mpc_address(&self, addr: mpc_address::ActiveModel) -> Result<i32, Error> {
         let res = block_on(MpcAddress::insert(addr).exec(self.inner()))?;
         Ok(res.last_insert_id)
@@ -1115,3 +1159,117 @@ impl DbTxn {
 }
 
 pub(crate) mod enums;
+
+#[cfg(test)]
+mod pending_witness_balance_tests {
+    use super::*;
+
+    fn balance(status: TransferStatus, with_coloring: bool, requested: Assignment) -> Balance {
+        // Every collection is supplied, so this exercises the real calculation
+        // without opening a database or contacting a Bitcoin node.
+        let txn = DbTxn { txn: None };
+        let coloring = DbColoring {
+            idx: 1,
+            txo_idx: 1,
+            asset_transfer_idx: 1,
+            r#type: ColoringType::Receive,
+            assignment: Assignment::Fungible(25),
+        };
+        txn.get_asset_balance(
+            "asset".into(),
+            Some(vec![DbTransfer {
+                idx: 1,
+                asset_transfer_idx: 1,
+                requested_assignment: Some(requested),
+                recipient_type: Some(RecipientTypeFull::Witness {
+                    vout: Some(1),
+                    recipient_nonce: vec![1; 16],
+                }),
+                recipient_id: Some("recipient".into()),
+                ack: None,
+                invoice_string: None,
+            }]),
+            Some(vec![DbAssetTransfer {
+                idx: 1,
+                user_driven: true,
+                batch_transfer_idx: 1,
+                asset_id: Some("asset".into()),
+            }]),
+            Some(vec![DbBatchTransfer {
+                idx: 1,
+                txid: Some("tx".into()),
+                status,
+                created_at: 1,
+                updated_at: 1,
+                expiration: None,
+                min_confirmations: 1,
+                incoming: true,
+            }]),
+            Some(if with_coloring {
+                vec![coloring]
+            } else {
+                vec![]
+            }),
+            Some(vec![DbTxo {
+                idx: 1,
+                txid: "tx".into(),
+                vout: 1,
+                btc_amount: "0".into(),
+                spent: false,
+                exists: status == TransferStatus::Settled,
+                pending_witness: status != TransferStatus::Settled,
+            }]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn pending_witness_balance_counts_validated_allocation_once() {
+        for requested in [
+            Assignment::Fungible(25),
+            Assignment::Fungible(10),
+            Assignment::Any,
+        ] {
+            assert_eq!(
+                balance(TransferStatus::WaitingConfirmations, true, requested),
+                Balance {
+                    settled: 0,
+                    future: 25,
+                    spendable: 0
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn pending_witness_balance_preserves_legacy_fallback_and_terminal_states() {
+        assert_eq!(
+            balance(
+                TransferStatus::WaitingConfirmations,
+                false,
+                Assignment::Fungible(25)
+            ),
+            Balance {
+                settled: 0,
+                future: 25,
+                spendable: 0
+            }
+        );
+        assert_eq!(
+            balance(TransferStatus::Settled, true, Assignment::Fungible(25)),
+            Balance {
+                settled: 25,
+                future: 25,
+                spendable: 25
+            }
+        );
+        assert_eq!(
+            balance(TransferStatus::Failed, true, Assignment::Fungible(25)),
+            Balance {
+                settled: 0,
+                future: 0,
+                spendable: 0
+            }
+        );
+    }
+}

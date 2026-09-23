@@ -2597,12 +2597,23 @@ pub trait WalletOnline: WalletOffline {
         })
     }
 
+    fn split_rgb_change(&self) -> bool {
+        false
+    }
+
+    // Only MPC overrides this hook; ordinary BDK/HTLC reservation behavior stays intact.
+    fn reserve_rgb_inputs(&self, _txn: &DbTxn, _psbt: &Psbt) -> Result<(), Error> {
+        Ok(())
+    }
+
     fn prepare_psbt(
         &mut self,
+        _txn: &DbTxn,
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
+        _needs_rgb_change: bool,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         let change_addr = self.get_new_address()?.script_pubkey();
         let mut builder = self.bdk_wallet_mut().build_tx();
@@ -2661,18 +2672,22 @@ pub trait WalletOnline: WalletOffline {
 
     fn try_prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_unspents: &[LocalUnspent],
         all_inputs: &mut HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
+        needs_rgb_change: bool,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
             break match self.prepare_psbt(
+                txn,
                 all_inputs.clone(),
                 witness_recipients,
                 fee_rate,
                 lock_time,
+                needs_rgb_change,
             ) {
                 Ok(res) => res,
                 Err(err @ Error::InsufficientBitcoins { .. }) => {
@@ -3781,6 +3796,11 @@ pub trait WalletOnline: WalletOffline {
                 let transfers = txn.iter_transfers()?;
                 let batch_data = existing.get_transfers(&asset_transfers, &transfers)?;
                 for asset_transfer_data in &batch_data.asset_transfers_data {
+                    // Unrelated contracts carried forward on the same inputs
+                    // have no recipients or transport endpoints to synchronize.
+                    if !asset_transfer_data.asset_transfer.user_driven {
+                        continue;
+                    }
                     let asset_id = asset_transfer_data
                         .asset_transfer
                         .asset_id
@@ -3867,20 +3887,14 @@ pub trait WalletOnline: WalletOffline {
         #[cfg(not(test))]
         let input_unspents = self.get_input_unspents(&unspents)?;
 
-        // A prepared, unbroadcast transfer holds its inputs: an RGB allocation is
-        // marked by its pending transfer, a plain BTC input taken for the fee only by
-        // its reservation.
-        let reserved: HashSet<Outpoint> = txn
-            .iter_reserved_txos()?
+        // Include complete MPC input reservations and upstream HTLC reservations.
+        let reserved: HashSet<_> = self
+            .get_reserved_vanilla_outpoints(txn)?
             .into_iter()
-            .map(|r| Outpoint {
-                txid: r.txid,
-                vout: r.vout,
-            })
             .collect();
         let input_unspents: Vec<LocalUnspent> = input_unspents
             .into_iter()
-            .filter(|u| !reserved.contains(&u.utxo.outpoint()))
+            .filter(|u| !reserved.contains(&BdkOutPoint::from(u.utxo.clone())))
             .collect();
 
         let runtime = self.rgb_runtime()?;
@@ -4041,12 +4055,33 @@ pub trait WalletOnline: WalletOffline {
                     .map(|o| o.clone().into())
             })
             .collect();
+        // Inspect every contract on the selected inputs, including unrelated assets.
+        let prev_outputs = all_inputs.clone();
+        let mut needs_rgb_change = false;
+        if self.split_rgb_change() {
+            for id in runtime.contracts_assigning(prev_outputs.clone())? {
+                let states = runtime.contract_assignments_for(id, prev_outputs.clone())?;
+                let mut collected = AssignmentsCollection::default();
+                for (_, assignments) in states {
+                    for (opout, state) in assignments {
+                        collected.add_opout_state(&opout, &state);
+                    }
+                }
+                let needed = transfer_info_map
+                    .get(&id.to_string())
+                    .map(|info| info.original_assignments_needed.clone())
+                    .unwrap_or_default();
+                needs_rgb_change |= collected.change(&needed) != AssignmentsCollection::default();
+            }
+        }
         let (mut psbt, btc_change) = self.try_prepare_psbt(
+            txn,
             input_unspents,
             &mut all_inputs,
             witness_recipients,
             fee_rate_checked,
             lock_time,
+            needs_rgb_change,
         )?;
         psbt.unsigned_tx.output[0].script_pubkey = ScriptBuf::new_op_return([]);
 
@@ -4089,6 +4124,7 @@ pub trait WalletOnline: WalletOffline {
         begin_operation_data.transfer_dir = new_transfer_dir;
 
         if !dry_run {
+            self.reserve_rgb_inputs(txn, &psbt)?;
             // save transfer to DB with Initiated status to reserve the UTXOs
             let batch_transfer_idx = self.save_transfers(
                 txn,

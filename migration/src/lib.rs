@@ -9,6 +9,8 @@ mod m20260414_134758_add_reserved_txo;
 mod m20260415_000001_create_reuse_address_index_table;
 mod m20260625_121819_incoming_rework;
 
+mod m20260923_000001_mpc_prepared_inputs;
+
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -23,6 +25,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260414_134758_add_reserved_txo::Migration),
             Box::new(m20260415_000001_create_reuse_address_index_table::Migration),
             Box::new(m20260625_121819_incoming_rework::Migration),
+            Box::new(m20260923_000001_mpc_prepared_inputs::Migration),
         ]
     }
 }

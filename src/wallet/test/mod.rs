@@ -61,7 +61,10 @@ use crate::{
     wallet::{backup::*, multisig::*, rust_only::*},
 };
 
-const PROXY_HOST: &str = "127.0.0.1:3000/json-rpc";
+const PROXY_HOST: &str = match option_env!("RGB_TEST_PROXY_HOST") {
+    Some(value) => value,
+    None => "127.0.0.1:3000/json-rpc",
+};
 static PROXY_ENDPOINT: Lazy<String> = Lazy::new(|| format!("rpc://{PROXY_HOST}"));
 const TEST_DATA_DIR_PARTS: [&str; 2] = ["tests", "tmp"];
 const PASSWORD: &str = "password";
@@ -73,7 +76,10 @@ const PROXY_HOST_MOD_API: &str = "127.0.0.1:3002/json-rpc";
 #[cfg(feature = "electrum")]
 const PROXY_HOST_MOD_PROTO: &str = "127.0.0.1:3001/json-rpc";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
-const PROXY_URL: &str = "http://127.0.0.1:3000/json-rpc";
+const PROXY_URL: &str = match option_env!("RGB_TEST_PROXY_URL") {
+    Some(value) => value,
+    None => "http://127.0.0.1:3000/json-rpc",
+};
 #[cfg(feature = "electrum")]
 const PROXY_URL_MOD_API: &str = "http://127.0.0.1:3002/json-rpc";
 #[cfg(feature = "electrum")]
@@ -81,7 +87,10 @@ const PROXY_URL_MOD_PROTO: &str = "http://127.0.0.1:3001/json-rpc";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 static TRANSPORT_ENDPOINTS: Lazy<Vec<String>> = Lazy::new(|| vec![PROXY_ENDPOINT.clone()]);
 #[cfg(feature = "electrum")]
-const ELECTRUM_URL: &str = "127.0.0.1:50001";
+const ELECTRUM_URL: &str = match option_env!("RGB_TEST_ELECTRUM_URL") {
+    Some(value) => value,
+    None => "127.0.0.1:50001",
+};
 #[cfg(feature = "electrum")]
 const ELECTRUM_2_URL: &str = "127.0.0.1:50002";
 #[cfg(feature = "electrum")]

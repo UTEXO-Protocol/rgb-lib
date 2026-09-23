@@ -51,6 +51,9 @@ EXPOSED_PORTS=(3000 50001) # see compose.yaml for the exposed ports
 TIMEOUT=100
 
 BCLI="$COMPOSE exec -T -u blits bitcoind bitcoin-cli -regtest"
+if [ -n "${RGB_TEST_RPC_WALLET:-}" ]; then
+    BCLI="$BCLI -rpcwallet=$RGB_TEST_RPC_WALLET"
+fi
 BCLI_SIGNET="$COMPOSE exec -T -u blits bitcoind_signet_custom bitcoin-cli -signet"
 BCLI_ESPLORA="$COMPOSE exec -T esplora cli"
 
@@ -246,7 +249,7 @@ prepare_vss_environment() {
 
 mine() {
     [ -n "$1" ] || _die "num blocks is required"
-    $BCLI -rpcwallet=miner -generate "$1" >/dev/null
+    $BCLI -rpcwallet="${RGB_TEST_RPC_WALLET:-miner}" -generate "$1" >/dev/null
 }
 
 sendtoaddress() {
