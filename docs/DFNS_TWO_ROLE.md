@@ -4,9 +4,11 @@
 
 `MpcWallet` reuses two independently verified P2TR scripts when `reuse_addresses=true`: External is the RGB carrier, Internal is fee/excess BTC. `set_rgb_carrier_amount` accepts 330–100000 sat (default 1000). A carrier is created only when the selected inputs return RGB assignments, including contracts absent from the send request. Carried-forward contracts have no recipient transport endpoints; finalization skips their endpoint update. Other change goes to Internal; sub-dust remainder becomes fee. Estimation includes final Taproot witnesses and the actual OP_RETURN commitment size.
 
-Signing/address helpers participate in the caller's database transaction. Own change does not consume an unrelated pending witness invoice on a reused script. Pending amount-bearing witness invoices contribute to future balance only until a Receive coloring exists; the public balance accounting fields remain unchanged.
+Address and UTXO-query helpers participate in the caller's database transaction. Own change does not consume an unrelated pending witness invoice on a reused script. Pending amount-bearing witness invoices contribute to future balance only until a Receive coloring exists; the public balance accounting fields remain unchanged.
 
 A complete unsigned transaction is saved with the Initiated transfer in `mpc_prepared_inputs`. It reserves colored and fee inputs across restart even when a legacy PSBT file is missing. Legacy Initiated records without complete reservations need their original nonempty matching PSBT restored; malformed, missing or mismatched data blocks spending. Never clear journals/reservations to retry an unknown operation.
+
+The scope review removed changes to provider-internal signing, address rotation, MPC `create_utxos` completion and create/drain reservation creation. Those existing service-account operations are not used by the delegated API. Their upstream behavior is unchanged except for adapting shared transaction-aware address/UTXO helpers. The API verifies immutable provider metadata before opening the wallet. All delegated signing remains in Gateway; `src/mpc/dfns.rs` is unchanged.
 
 ## Evidence and repeatable checks
 

@@ -97,18 +97,6 @@ fn txo(outpoint: OutPoint, exists: bool) -> DbTxoActMod {
 }
 
 #[test]
-fn signing_uses_the_callers_single_connection_transaction() {
-    let (_dir, wallet, _) = wallet();
-    let txn = wallet.database().begin_transaction().unwrap();
-    let address = wallet
-        .register_address(&txn, KeychainKind::External)
-        .unwrap();
-    let psbt = mpc_psbt::build_psbt(vec![output(2, &address.script_pubkey())], vec![]).unwrap();
-    wallet.mpc_sign_psbt(&txn, psbt).unwrap();
-    txn.commit().unwrap();
-}
-
-#[test]
 fn own_change_does_not_consume_a_reused_witness_receive() {
     let (_dir, mut wallet, _) = wallet();
     wallet
@@ -268,27 +256,6 @@ fn pending_rgb_psbt_reserves_empty_fee_inputs_across_restart() {
     txn.commit().unwrap();
     drop(wallet);
     drop(dir);
-}
-
-#[test]
-fn rotation_validates_metadata_without_consuming_the_index() {
-    let (_dir, mut wallet, broken) = wallet();
-    let first = wallet.get_address().unwrap();
-    broken.store(true, Ordering::SeqCst);
-    assert!(matches!(
-        wallet.rotate_address(KeychainKind::Internal),
-        Err(Error::MpcProvider { .. })
-    ));
-    assert_eq!(wallet.get_address().unwrap(), first);
-    broken.store(false, Ordering::SeqCst);
-    assert_ne!(
-        wallet.rotate_address(KeychainKind::Internal).unwrap(),
-        first
-    );
-    assert!(matches!(
-        wallet.blind_receive(None, Assignment::Any, u64::MAX, vec![], 1),
-        Err(Error::InvalidExpiration)
-    ));
 }
 
 #[test]
