@@ -49,6 +49,12 @@ impl MpcWalletProvider for Provider {
 }
 
 fn wallet() -> (tempfile::TempDir, MpcWallet, Arc<AtomicBool>) {
+    wallet_with_schemas(vec![AssetSchema::Nia])
+}
+
+fn wallet_with_schemas(
+    schemas: Vec<AssetSchema>,
+) -> (tempfile::TempDir, MpcWallet, Arc<AtomicBool>) {
     let dir = tempfile::tempdir().unwrap();
     let broken = Arc::new(AtomicBool::new(false));
     let wallet = MpcWallet::new(
@@ -57,7 +63,7 @@ fn wallet() -> (tempfile::TempDir, MpcWallet, Arc<AtomicBool>) {
             bitcoin_network: BitcoinNetwork::Regtest,
             database_type: DatabaseType::Sqlite,
             max_allocations_per_utxo: 5,
-            supported_schemas: vec![AssetSchema::Nia],
+            supported_schemas: schemas,
             reuse_addresses: true,
         },
         "offline-mpc-regression".into(),
@@ -67,6 +73,54 @@ fn wallet() -> (tempfile::TempDir, MpcWallet, Arc<AtomicBool>) {
     )
     .unwrap();
     (dir, wallet, broken)
+}
+
+#[test]
+fn known_bfa_and_nia_invoices_keep_exact_amounts_and_reject_nonfungible_assignments() {
+    // Metadata fixture only: this exercises shared invoice construction, not BFA issuance
+    // or EVM-backed consignment validation. No indexer, signer or funded wallet is opened.
+    for schema in [AssetSchema::Nia, AssetSchema::Bfa] {
+        let (_dir, mut wallet, _) = wallet_with_schemas(vec![AssetSchema::Nia, AssetSchema::Bfa]);
+        let asset_id = "rgb:qXB4xkhB-3pmU6PB-rTy_qNd-ErrO4OQ-8GFLLQq-gzGoing";
+        let txn = wallet.database().begin_transaction().unwrap();
+        txn.set_asset(DbAssetActMod {
+            id: ActiveValue::Set(asset_id.into()),
+            schema: ActiveValue::Set(schema),
+            added_at: ActiveValue::Set(0),
+            initial_supply: ActiveValue::Set("0".into()),
+            name: ActiveValue::Set("Invoice fixture".into()),
+            ticker: ActiveValue::Set(Some("FIXTURE".into())),
+            precision: ActiveValue::Set(0),
+            timestamp: ActiveValue::Set(0),
+            ..Default::default()
+        })
+        .unwrap();
+        txn.commit().unwrap();
+        let expiry = (now().unix_timestamp() + 3600) as u64;
+        let receive = wallet
+            .witness_receive(
+                Some(asset_id.into()),
+                Assignment::Fungible(17),
+                expiry,
+                vec![],
+                1,
+            )
+            .unwrap();
+        let invoice = Invoice::new(receive.invoice).unwrap().invoice_data();
+        assert_eq!(invoice.asset_id.as_deref(), Some(asset_id));
+        assert_eq!(invoice.assignment, Assignment::Fungible(17));
+        assert_eq!(invoice.expiration_timestamp, Some(expiry));
+        assert!(matches!(
+            wallet.witness_receive(
+                Some(asset_id.into()),
+                Assignment::NonFungible,
+                expiry,
+                vec![],
+                1
+            ),
+            Err(Error::InvalidAssignment)
+        ));
+    }
 }
 fn output(seed: u8, script: &ScriptBuf) -> (OutPoint, TxOut) {
     (

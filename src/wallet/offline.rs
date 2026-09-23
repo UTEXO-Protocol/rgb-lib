@@ -1205,7 +1205,11 @@ pub trait WalletOffline: WalletBackup {
         let detected_assignment = match (&assignment, schema) {
             (
                 Assignment::Fungible(amt),
-                Some(AssetSchema::Nia) | Some(AssetSchema::Cfa) | Some(AssetSchema::Ifa) | None,
+                Some(AssetSchema::Nia)
+                | Some(AssetSchema::Cfa)
+                | Some(AssetSchema::Ifa)
+                | Some(AssetSchema::Bfa)
+                | None,
             ) => {
                 invoice_builder = invoice_builder.set_amount_raw(*amt);
                 invoice_builder = invoice_builder.set_assignment_name(RGB_STATE_ASSET_OWNER);
