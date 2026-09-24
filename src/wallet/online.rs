@@ -2599,6 +2599,7 @@ pub trait WalletOnline: WalletOffline {
 
     fn prepare_psbt(
         &mut self,
+        _txn: &DbTxn,
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
@@ -2661,6 +2662,7 @@ pub trait WalletOnline: WalletOffline {
 
     fn try_prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_unspents: &[LocalUnspent],
         all_inputs: &mut HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
@@ -2669,6 +2671,7 @@ pub trait WalletOnline: WalletOffline {
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
             break match self.prepare_psbt(
+                txn,
                 all_inputs.clone(),
                 witness_recipients,
                 fee_rate,
@@ -3781,6 +3784,11 @@ pub trait WalletOnline: WalletOffline {
                 let transfers = txn.iter_transfers()?;
                 let batch_data = existing.get_transfers(&asset_transfers, &transfers)?;
                 for asset_transfer_data in &batch_data.asset_transfers_data {
+                    // Unrelated contracts carried forward on the same inputs
+                    // have no recipients or transport endpoints to synchronize.
+                    if !asset_transfer_data.asset_transfer.user_driven {
+                        continue;
+                    }
                     let asset_id = asset_transfer_data
                         .asset_transfer
                         .asset_id
@@ -3867,16 +3875,11 @@ pub trait WalletOnline: WalletOffline {
         #[cfg(not(test))]
         let input_unspents = self.get_input_unspents(&unspents)?;
 
-        // A prepared, unbroadcast transfer holds its inputs: an RGB allocation is
-        // marked by its pending transfer, a plain BTC input taken for the fee only by
-        // its reservation.
-        let reserved: HashSet<Outpoint> = txn
-            .iter_reserved_txos()?
+        // Include complete MPC input reservations and upstream HTLC reservations.
+        let reserved: HashSet<Outpoint> = self
+            .get_reserved_vanilla_outpoints(txn)?
             .into_iter()
-            .map(|r| Outpoint {
-                txid: r.txid,
-                vout: r.vout,
-            })
+            .map(Into::into)
             .collect();
         let input_unspents: Vec<LocalUnspent> = input_unspents
             .into_iter()
@@ -4042,6 +4045,7 @@ pub trait WalletOnline: WalletOffline {
             })
             .collect();
         let (mut psbt, btc_change) = self.try_prepare_psbt(
+            txn,
             input_unspents,
             &mut all_inputs,
             witness_recipients,

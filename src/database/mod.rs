@@ -1057,6 +1057,42 @@ impl DbTxn {
     }
 
     #[cfg(feature = "mpc")]
+    pub(crate) fn save_mpc_prepared_inputs(&self, tx: &BdkTransaction) -> Result<(), Error> {
+        use entities::mpc_prepared_inputs as inputs;
+        let txid = tx.compute_txid().to_string();
+        if let Some(saved) = self.mpc_prepared_inputs(&txid)? {
+            if saved != *tx {
+                return Err(Error::InvalidPsbt {
+                    details: s!("MPC reservation transaction mismatch"),
+                });
+            }
+            return Ok(());
+        }
+        let model = inputs::ActiveModel {
+            txid: ActiveValue::Set(txid),
+            unsigned_tx: ActiveValue::Set(serde_json::to_string(tx).map_err(InternalError::from)?),
+        };
+        block_on(inputs::Entity::insert(model).exec(self.inner()))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "mpc")]
+    pub(crate) fn mpc_prepared_inputs(&self, txid: &str) -> Result<Option<BdkTransaction>, Error> {
+        use entities::mpc_prepared_inputs as inputs;
+        let Some(saved) = block_on(inputs::Entity::find_by_id(txid).one(self.inner()))? else {
+            return Ok(None);
+        };
+        let tx: BdkTransaction =
+            serde_json::from_str(&saved.unsigned_tx).map_err(InternalError::from)?;
+        if tx.compute_txid().to_string() != txid || tx.input.is_empty() {
+            return Err(Error::InvalidPsbt {
+                details: s!("MPC reservation is corrupt; reconcile the saved operation"),
+            });
+        }
+        Ok(Some(tx))
+    }
+
+    #[cfg(feature = "mpc")]
     pub(crate) fn set_mpc_address(&self, addr: mpc_address::ActiveModel) -> Result<i32, Error> {
         let res = block_on(MpcAddress::insert(addr).exec(self.inner()))?;
         Ok(res.last_insert_id)
