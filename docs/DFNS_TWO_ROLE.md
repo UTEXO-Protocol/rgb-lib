@@ -1,10 +1,10 @@
 # Two-role MPC support
 
-2026-09-23. Provider-neutral library work for the Dfns experiment. Live provider signing remains outside this library's acceptance evidence.
+2026-09-24. Preserve `dev` MPC behavior with blind receiving and one Internal change output. Two addresses remain: External for the initial funded RGB UTXO; Internal for BTC funding and change. The API registers both fixed P2TR scripts with `get_rgb_address` / `get_address`. Fund External before the first blind invoice.
 
-`MpcWallet` reuses two independently verified P2TR scripts when `reuse_addresses=true`: External is the RGB carrier, Internal is fee/excess BTC. `set_rgb_carrier_amount` accepts 330–100000 sat (default 1000). A carrier is created only when the selected inputs return RGB assignments, including contracts absent from the send request. Carried-forward contracts have no recipient transport endpoints; finalization skips their endpoint update. Other change goes to Internal; sub-dust remainder becomes fee. Estimation includes final Taproot witnesses and the actual OP_RETURN commitment size.
+RGB sends keep the upstream builder, fee estimator and dust rule. BTC remainder and returned RGB allocations can share the Internal output. Such an output is not eligible for plain BTC spending. The six public BTC balance fields retain the upstream address-based accounting; they are not a claim that every Internal satoshi is asset-free. There is no fixed carrier setting or separate excess output. `offline.rs` is identical to `dev`; MPC witness receive and pending-witness accounting additions were removed.
 
-Address and UTXO-query helpers participate in the caller's database transaction. Own change does not consume an unrelated pending witness invoice on a reused script. Pending amount-bearing witness invoices contribute to future balance only until a Receive coloring exists; the public balance accounting fields remain unchanged.
+Address and UTXO helpers share the caller's transaction. A clean-dev temporary-wallet probe reproduced an eight-second DB pool timeout on `get_btc_balance(None, true)` without any provider call. The service-account `DfnsProvider` itself is unchanged. The delegated API verifies public metadata and signatures; the Gateway handles customer authorization.
 
 A complete unsigned transaction is saved by `MpcWallet::send_begin` with the Initiated transfer in `mpc_prepared_inputs`, before the same DB commit; dry runs do not reserve inputs. No shared reservation hook is required. It reserves colored and fee inputs across restart even when the original PSBT file is missing. Legacy Initiated records without complete reservations need their original nonempty matching PSBT restored; malformed, missing or mismatched data blocks spending. Never clear journals/reservations to retry an unknown operation.
 
@@ -16,7 +16,6 @@ Clean base: `ca5f6b782e239b104fdaa3c30019668373f92377` (`dev`), eight baseline M
 
 ```sh
 cargo test --locked --lib --features mpc wallet::mpc
-cargo test --locked --lib --features mpc database::pending_witness_balance_tests
 cargo clippy --locked --lib --features mpc -- -D warnings
 ```
 
@@ -33,4 +32,4 @@ cargo test --locked --lib --features mpc wallet::test::get_asset_balance -- --te
 cargo test --locked --lib --features mpc wallet::test::witness_receive -- --test-threads=1
 ```
 
-Verified 2026-09-23: 14 HTLC, 3 native balance and 2 native witness tests passed. The API integration fixture exercises two successive two-key sends, separate vanilla spend, unknown prepare/submit recovery, fee reservation after restart without the original PSBT, unrelated allocations and exhausted RGB change. All coins/keys are disposable regtest fixtures. Private upstream Git mirrors are still build dependencies; no BFA runtime or legacy provider flow is required by these checks.
+Verified 2026-09-24: 12 MPC, 14 native HTLC and 3 native balance tests; all-features/all-targets Clippy. The companion API regtest passes funded blind receiving, two single-Internal-change sends (two keys then one), RGB-change protection, a separate BTC spend, unrelated allocations/exhaustion and restart recovery. No local test establishes live Dfns authorization. Private upstream Git mirrors remain build dependencies; BFA/EVM runtime is not needed.

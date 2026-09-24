@@ -97,53 +97,11 @@ fn txo(outpoint: OutPoint, exists: bool) -> DbTxoActMod {
 }
 
 #[test]
-fn own_change_does_not_consume_a_reused_witness_receive() {
+fn empty_balance_does_not_open_a_nested_transaction() {
     let (_dir, mut wallet, _) = wallet();
-    wallet
-        .witness_receive(
-            None,
-            Assignment::Fungible(25),
-            (now().unix_timestamp() + 3600) as u64,
-            vec!["rpc://127.0.0.1:31010/json-rpc".into()],
-            1,
-        )
-        .unwrap();
-    let txn = wallet.database().begin_transaction().unwrap();
-    let script = wallet
-        .register_address(&txn, KeychainKind::External)
-        .unwrap()
-        .script_pubkey();
-    let change = output(2, &script);
-    txn.set_txo(txo(change.0, false)).unwrap();
-    wallet
-        .record_indexed_outputs(&txn, &script, vec![change.clone()])
-        .unwrap();
-    let saved_change = txn.get_txo(&change.0.into()).unwrap().unwrap();
-    assert!(saved_change.exists);
-    assert!(!saved_change.pending_witness);
-    assert_eq!(txn.iter_pending_witness_scripts().unwrap().len(), 1);
-    let incoming = output(3, &script);
-    wallet
-        .record_indexed_outputs(&txn, &script, vec![incoming.clone()])
-        .unwrap();
-    assert!(
-        txn.get_txo(&incoming.0.into())
-            .unwrap()
-            .unwrap()
-            .pending_witness
-    );
-    // A second indexed output cannot steal the remaining invoice either.
-    let other = output(4, &script);
-    wallet
-        .record_indexed_outputs(&txn, &script, vec![other.clone()])
-        .unwrap();
-    assert!(
-        txn.get_txo(&other.0.into())
-            .unwrap()
-            .unwrap()
-            .pending_witness
-    );
-    txn.commit().unwrap();
+    let balance = wallet.get_btc_balance(None, true).unwrap();
+    assert_eq!(balance.colored.spendable, 0);
+    assert_eq!(balance.vanilla.spendable, 0);
 }
 
 #[test]

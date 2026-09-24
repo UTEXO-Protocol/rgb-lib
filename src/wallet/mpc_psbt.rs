@@ -5,8 +5,8 @@
 
 use amplify::s;
 use bdk_wallet::bitcoin::{
-    OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, locktime::absolute::LockTime,
-    psbt::Psbt, transaction::Version,
+    OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, XOnlyPublicKey,
+    locktime::absolute::LockTime, psbt::Psbt, transaction::Version,
 };
 
 use crate::Error;
@@ -71,132 +71,23 @@ pub fn build_psbt(inputs: Vec<(OutPoint, TxOut)>, outputs: Vec<TxOut>) -> Result
         details: format!("Failed to create PSBT: {e}"),
     })?;
 
-    // A P2TR script contains the tweaked OUTPUT key, never the internal key.
-    // The registry adds authenticated internal-key metadata before external signing.
+    // Populate witness_utxo and tap_internal_key for each input (required for Taproot signing)
     for (i, (_, txout)) in inputs.iter().enumerate() {
         psbt.inputs[i].witness_utxo = Some(txout.clone());
+
+        // For P2TR inputs, extract the x-only public key from the script pubkey
+        // P2TR script: OP_1 (0x51) + OP_PUSHBYTES_32 (0x20) + 32-byte x-only pubkey
+        let script = txout.script_pubkey.as_bytes();
+        if script.len() == 34
+            && script[0] == 0x51
+            && script[1] == 0x20
+            && let Ok(xonly) = XOnlyPublicKey::from_slice(&script[2..34])
+        {
+            psbt.inputs[i].tap_internal_key = Some(xonly);
+        }
     }
 
     Ok(psbt)
-}
-
-/// Fee for the final Taproot transaction shape, including the RGB commitment.
-pub fn actual_fee(
-    inputs: &[(OutPoint, TxOut)],
-    outputs: &[TxOut],
-    rate: bdk_wallet::bitcoin::FeeRate,
-) -> Result<u64, Error> {
-    let mut tx = build_psbt(inputs.to_vec(), outputs.to_vec())?.unsigned_tx;
-    for (input, (_, prevout)) in tx.input.iter_mut().zip(inputs) {
-        if !prevout.script_pubkey.is_p2tr() {
-            return Err(Error::InvalidPsbt {
-                details: s!("MPC split change requires Taproot inputs"),
-            });
-        }
-        input.witness.push([0u8; 65]); // DEFAULT or ALL signature, conservatively sized
-    }
-    for output in &mut tx.output {
-        if output.script_pubkey.is_op_return() {
-            output.script_pubkey = ScriptBuf::new_op_return([0; 32]);
-        }
-    }
-    rate.to_sat_per_vb_ceil()
-        .checked_mul(tx.vsize() as u64)
-        .ok_or_else(|| Error::InvalidFeeRate {
-            details: s!("fee overflow"),
-        })
-}
-
-/// Select fees and construct role-separated change before RGB commitments exist.
-pub fn split_change(
-    mut selected: Vec<(OutPoint, TxOut)>,
-    mut available: Vec<(OutPoint, TxOut)>,
-    mut outputs: Vec<TxOut>,
-    colored: ScriptBuf,
-    vanilla: ScriptBuf,
-    carrier: Option<u64>,
-    rate: bdk_wallet::bitcoin::FeeRate,
-) -> Result<(Psbt, Option<super::BtcChange>), Error> {
-    if colored == vanilla || !colored.is_p2tr() || !vanilla.is_p2tr() {
-        return Err(Error::InvalidPsbt {
-            details: s!("Distinct Taproot role scripts required"),
-        });
-    }
-    let rgb_change = if let Some(amount) = carrier {
-        if amount < colored.minimal_non_dust().to_sat() || amount > 100_000 {
-            return Err(Error::InvalidPsbt {
-                details: s!("RGB carrier outside policy"),
-            });
-        }
-        let change = super::BtcChange {
-            vout: outputs.len() as u32,
-            amount,
-        };
-        outputs.push(TxOut {
-            value: bdk_wallet::bitcoin::Amount::from_sat(amount),
-            script_pubkey: colored,
-        });
-        Some(change)
-    } else {
-        None
-    };
-    let target = outputs
-        .iter()
-        .try_fold(0u64, |sum, output| sum.checked_add(output.value.to_sat()))
-        .ok_or_else(|| Error::InvalidPsbt {
-            details: s!("Output amount overflow"),
-        })?;
-    let mut seen = std::collections::HashSet::new();
-    if selected.iter().any(|(op, _)| !seen.insert(*op)) {
-        return Err(Error::InvalidPsbt {
-            details: s!("Duplicate required input"),
-        });
-    }
-    available.retain(|(op, _)| seen.insert(*op));
-    available.sort_by_key(|(_, output)| output.value);
-    loop {
-        let total = selected
-            .iter()
-            .try_fold(0u64, |sum, (_, output)| {
-                sum.checked_add(output.value.to_sat())
-            })
-            .ok_or_else(|| Error::InvalidPsbt {
-                details: s!("Input amount overflow"),
-            })?;
-        let mut with_vanilla = outputs.clone();
-        with_vanilla.push(TxOut {
-            value: bdk_wallet::bitcoin::Amount::ZERO,
-            script_pubkey: vanilla.clone(),
-        });
-        let fee = actual_fee(&selected, &with_vanilla, rate)?;
-        if let Some(change) = total
-            .checked_sub(target)
-            .and_then(|value| value.checked_sub(fee))
-            && change >= vanilla.minimal_non_dust().to_sat()
-        {
-            with_vanilla.last_mut().unwrap().value = bdk_wallet::bitcoin::Amount::from_sat(change);
-            return Ok((build_psbt(selected, with_vanilla)?, rgb_change));
-        }
-        let minimum_fee = actual_fee(&selected, &outputs, rate)?;
-        let needed = target
-            .checked_add(minimum_fee)
-            .ok_or_else(|| Error::InvalidFeeRate {
-                details: s!("Fee overflow"),
-            })?;
-        if total >= needed && !selected.is_empty() {
-            // Sub-dust remainder is fee. The API enforces the saved maximum fee.
-            return Ok((build_psbt(selected, outputs)?, rgb_change));
-        }
-        match available.pop() {
-            Some(input) => selected.push(input),
-            None => {
-                return Err(Error::InsufficientBitcoins {
-                    needed,
-                    available: total,
-                });
-            }
-        }
-    }
 }
 
 /// Simple largest-first coin selection.
@@ -247,103 +138,6 @@ mod tests {
     use super::*;
     use bdk_wallet::bitcoin::Amount;
     use bdk_wallet::bitcoin::blockdata::fee_rate::FeeRate;
-
-    fn role_script(seed: u8) -> ScriptBuf {
-        use bdk_wallet::bitcoin::secp256k1::{Secp256k1, SecretKey};
-        let key = SecretKey::from_slice(&[seed; 32])
-            .unwrap()
-            .public_key(&Secp256k1::new())
-            .x_only_public_key()
-            .0;
-        ScriptBuf::new_p2tr(&Secp256k1::new(), key, None)
-    }
-    #[test]
-    fn split_change_keeps_rgb_carrier_and_returns_excess_to_vanilla() {
-        use bdk_wallet::bitcoin::{Txid, hashes::Hash};
-        let colored = role_script(1);
-        let vanilla = role_script(2);
-        let input = |seed, amount, script| {
-            (
-                OutPoint::new(Txid::from_byte_array([seed; 32]), 0),
-                TxOut {
-                    value: Amount::from_sat(amount),
-                    script_pubkey: script,
-                },
-            )
-        };
-        let (psbt, change) = split_change(
-            vec![input(1, 1000, colored.clone())],
-            vec![input(2, 100_000, vanilla.clone())],
-            vec![TxOut {
-                value: Amount::ZERO,
-                script_pubkey: ScriptBuf::new_op_return([]),
-            }],
-            colored.clone(),
-            vanilla.clone(),
-            Some(1000),
-            FeeRate::from_sat_per_vb(2).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(psbt.unsigned_tx.input.len(), 2);
-        assert_eq!(psbt.unsigned_tx.output.len(), 3);
-        assert_eq!(change.unwrap().vout, 1);
-        assert_eq!(psbt.unsigned_tx.output[1].script_pubkey, colored);
-        assert_eq!(psbt.unsigned_tx.output[1].value.to_sat(), 1000);
-        assert_eq!(psbt.unsigned_tx.output[2].script_pubkey, vanilla);
-        assert!(psbt.unsigned_tx.output[2].value.to_sat() > 99_000);
-        assert!(
-            psbt.inputs
-                .iter()
-                .all(|input| input.tap_internal_key.is_none())
-        );
-        let (psbt, change) = split_change(
-            vec![input(1, 1000, colored.clone())],
-            vec![],
-            vec![TxOut {
-                value: Amount::ZERO,
-                script_pubkey: ScriptBuf::new_op_return([]),
-            }],
-            colored,
-            vanilla.clone(),
-            None,
-            FeeRate::from_sat_per_vb(1).unwrap(),
-        )
-        .unwrap();
-        assert!(change.is_none());
-        assert_eq!(psbt.unsigned_tx.output.len(), 2);
-        assert_eq!(psbt.unsigned_tx.output[1].script_pubkey, vanilla);
-    }
-    #[test]
-    fn split_change_rejects_dust_carrier_and_reports_shortage() {
-        let outputs = vec![TxOut {
-            value: Amount::ZERO,
-            script_pubkey: ScriptBuf::new_op_return([]),
-        }];
-        assert!(matches!(
-            split_change(
-                vec![],
-                vec![],
-                outputs.clone(),
-                role_script(1),
-                role_script(2),
-                Some(329),
-                FeeRate::from_sat_per_vb(1).unwrap()
-            ),
-            Err(Error::InvalidPsbt { .. })
-        ));
-        assert!(matches!(
-            split_change(
-                vec![],
-                vec![],
-                outputs,
-                role_script(1),
-                role_script(2),
-                Some(1000),
-                FeeRate::from_sat_per_vb(1).unwrap()
-            ),
-            Err(Error::InsufficientBitcoins { .. })
-        ));
-    }
 
     #[test]
     fn test_estimate_tx_vbytes() {

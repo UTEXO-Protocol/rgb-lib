@@ -2597,10 +2597,6 @@ pub trait WalletOnline: WalletOffline {
         })
     }
 
-    fn split_rgb_change(&self) -> bool {
-        false
-    }
-
     fn prepare_psbt(
         &mut self,
         _txn: &DbTxn,
@@ -2608,7 +2604,6 @@ pub trait WalletOnline: WalletOffline {
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
-        _needs_rgb_change: bool,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         let change_addr = self.get_new_address()?.script_pubkey();
         let mut builder = self.bdk_wallet_mut().build_tx();
@@ -2673,7 +2668,6 @@ pub trait WalletOnline: WalletOffline {
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
-        needs_rgb_change: bool,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
             break match self.prepare_psbt(
@@ -2682,7 +2676,6 @@ pub trait WalletOnline: WalletOffline {
                 witness_recipients,
                 fee_rate,
                 lock_time,
-                needs_rgb_change,
             ) {
                 Ok(res) => res,
                 Err(err @ Error::InsufficientBitcoins { .. }) => {
@@ -4051,24 +4044,6 @@ pub trait WalletOnline: WalletOffline {
                     .map(|o| o.clone().into())
             })
             .collect();
-        // Inspect every contract on the selected inputs, including unrelated assets.
-        let mut needs_rgb_change = false;
-        if self.split_rgb_change() {
-            for id in runtime.contracts_assigning(all_inputs.clone())? {
-                let states = runtime.contract_assignments_for(id, all_inputs.clone())?;
-                let mut collected = AssignmentsCollection::default();
-                for (_, assignments) in states {
-                    for (opout, state) in assignments {
-                        collected.add_opout_state(&opout, &state);
-                    }
-                }
-                let needed = transfer_info_map
-                    .get(&id.to_string())
-                    .map(|info| info.original_assignments_needed.clone())
-                    .unwrap_or_default();
-                needs_rgb_change |= collected.change(&needed) != AssignmentsCollection::default();
-            }
-        }
         let (mut psbt, btc_change) = self.try_prepare_psbt(
             txn,
             input_unspents,
@@ -4076,7 +4051,6 @@ pub trait WalletOnline: WalletOffline {
             witness_recipients,
             fee_rate_checked,
             lock_time,
-            needs_rgb_change,
         )?;
         psbt.unsigned_tx.output[0].script_pubkey = ScriptBuf::new_op_return([]);
 
