@@ -1,14 +1,16 @@
 # Two-role MPC support
 
-2026-09-24. Preserve `dev` MPC behavior with blind receiving and one Internal change output. Two addresses remain: External for the initial funded RGB UTXO; Internal for BTC funding and change. The API registers both fixed P2TR scripts with `get_rgb_address` / `get_address`. Fund External before the first blind invoice.
+2026-09-24. Preserve `dev` MPC behavior: fund Internal once, prepare External UTXOs with the existing `create_utxos_begin` / external signing / `create_utxos_end`, then blind receive. Two addresses remain: External for the RGB pool; Internal for BTC funding and one shared BTC/RGB change output. The API registers both fixed P2TR scripts with `get_rgb_address` / `get_address`; the companion API/Gateway/UI now expose delegated pool preparation, review, signing and recovery. No separate External deposit is required by the library.
 
-RGB sends keep the upstream builder, fee estimator and dust rule. BTC remainder and returned RGB allocations can share the Internal output. Such an output is not eligible for plain BTC spending. The six public BTC balance fields retain the upstream address-based accounting; they are not a claim that every Internal satoshi is asset-free. There is no fixed carrier setting or separate excess output. `offline.rs` is identical to `dev`; MPC witness receive and pending-witness accounting additions were removed.
+RGB sends keep the upstream builder, Internal fee-input selection, fee estimator and dust rule. BTC remainder and returned RGB allocations can share the Internal output. Such an output is not eligible for plain BTC spending. The six public BTC balance fields retain the upstream address-based accounting; they are not a claim that every Internal satoshi is asset-free. There is no fixed carrier setting or separate excess output. MPC witness receive and pending-witness accounting additions were removed. The user's separate BFA invoice correction in `offline.rs` is preserved.
 
 Address and UTXO helpers share the caller's transaction. A clean-dev temporary-wallet probe reproduced an eight-second DB pool timeout on `get_btc_balance(None, true)` without any provider call. The service-account `DfnsProvider` itself is unchanged. The delegated API verifies public metadata and signatures; the Gateway handles customer authorization.
 
 A complete unsigned transaction is saved by `MpcWallet::send_begin` with the Initiated transfer in `mpc_prepared_inputs`, before the same DB commit; dry runs do not reserve inputs. No shared reservation hook is required. It reserves colored and fee inputs across restart even when the original PSBT file is missing. Legacy Initiated records without complete reservations need their original nonempty matching PSBT restored; malformed, missing or mismatched data blocks spending. Never clear journals/reservations to retry an unknown operation.
 
-The scope review removed changes to provider-internal signing, address rotation, MPC `create_utxos` completion and create/drain reservation creation. Those existing service-account operations are not used by the delegated API. Their upstream behavior is unchanged except for adapting shared transaction-aware address/UTXO helpers. The API verifies immutable provider metadata before opening the wallet. All delegated signing remains in Gateway; `src/mpc/dfns.rs` is unchanged.
+Pool preparation now excludes known RGB and reserved inputs, reserving selected inputs only when `dry_run=false`. Completion counts and records External outputs using registered provider scripts, because the placeholder BDK descriptors do not track them. Failed broadcast retains reservations; successful completion releases them. Repeating completion does not duplicate outputs or reset spent state. `list_pending_vanilla_txs` and `abort_pending_vanilla_tx` expose the native reservation lifecycle to MPC callers; abort only a transaction known not to have been broadcast and which will not be submitted later. Unknown outcomes require reconciliation.
+
+The default pool remains five 1000-sat outputs, subject to available BTC, with at most one Internal change output. Provider-internal signing, address rotation, drain behavior and `src/mpc/dfns.rs` are unchanged. Gateway owns new-user `deriveFrom` provisioning and requires no library derivation change; existing independent wallets are preserved. Ordinary `Wallet` behavior is unchanged by this step.
 
 ## Evidence and repeatable checks
 
@@ -19,17 +21,10 @@ cargo test --locked --lib --features mpc wallet::mpc
 cargo clippy --locked --lib --features mpc -- -D warnings
 ```
 
-For native/HTLC tests against the API's isolated `tests/dfns/compose.yaml`, set the following for **each Cargo invocation** (indexer/proxy/no-EVM settings are compile-time). Create/fund the named regtest miner first. The override checks only the selected indexer; default upstream multi-indexer tests are unchanged.
+Native test infrastructure now matches `dev`: the four files containing local indexer/proxy/miner/no-EVM overrides were restored. Use the repository's standard test infrastructure for native/HTLC suites. The MPC tests above need only temporary directories and localhost sockets, not Docker or an EVM node.
 
-```sh
-export SKIP_INIT=1 COMPOSE_PROJECT_NAME=dfns-isolated
-export RGB_TEST_RPC_WALLET=dfns-upstream-miner RGB_TEST_NO_EVM=1
-export RGB_TEST_ELECTRUM_URL=127.0.0.1:51111
-export RGB_TEST_PROXY_HOST=127.0.0.1:31110/json-rpc
-export RGB_TEST_PROXY_URL=http://127.0.0.1:31110/json-rpc
-cargo test --locked --lib --features mpc psbt_op_ -- --test-threads=1
-cargo test --locked --lib --features mpc wallet::test::get_asset_balance -- --test-threads=1
-cargo test --locked --lib --features mpc wallet::test::witness_receive -- --test-threads=1
-```
+Verified 2026-09-24 after scope cleanup: 13 MPC tests, all-features/all-targets Clippy and formatting passed. The former helper-only input-filter test was folded into the public `create_utxos_begin` regression, including protection of known RGB change before synchronization. Pool regressions use synthetic UTXOs and a localhost Electrum fixture; they cover protected input selection, dry runs, restart/cancel, failed broadcast, output shape/count, blind invoice creation and repeated completion. They do not validate real signatures or chain acceptance.
 
-Verified 2026-09-24: 12 MPC, 14 native HTLC and 3 native balance tests; all-features/all-targets Clippy. The companion API regtest passes funded blind receiving, two single-Internal-change sends (two keys then one), RGB-change protection, a separate BTC spend, unrelated allocations/exhaustion and restart recovery. No local test establishes live Dfns authorization. Private upstream Git mirrors remain build dependencies; BFA/EVM runtime is not needed.
+Companion API verification on September 24 additionally passed one Internal deposit → pool preparation → blind receive 25 → sends 10 and 5 → remainder 10, with real local signatures/chain acceptance, lost pool prepare/submit responses, cancellation and restart recovery. Live Dfns HD creation/signing still needs acceptance.
+
+Earlier September 24 evidence: 14 native HTLC and 3 native balance tests, plus the companion API regtest for funded blind receiving, two single-Internal-change sends (two keys then one), RGB-change protection, a separate BTC spend, unrelated allocations/exhaustion and restart recovery. Those tests were not rerun for this MPC-only step. No new provider call or live transfer was made. Private upstream Git mirrors remain build dependencies; BFA/EVM runtime is not needed.

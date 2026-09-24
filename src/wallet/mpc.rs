@@ -396,7 +396,7 @@ impl WalletOnline for MpcWallet {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
-        _dry_run: bool,
+        dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -432,7 +432,7 @@ impl WalletOnline for MpcWallet {
         }
 
         // Get vanilla UTXOs for funding
-        let vanilla_utxos = self.query_vanilla_utxos(txn)?;
+        let vanilla_utxos = self.spendable_vanilla_utxos(txn)?;
         let available: Vec<(OutPoint, TxOut)> = vanilla_utxos
             .iter()
             .map(|(op, txout, _)| (*op, txout.clone()))
@@ -494,7 +494,51 @@ impl WalletOnline for MpcWallet {
             });
         }
 
-        mpc_psbt::build_psbt(selected, outputs)
+        let psbt = mpc_psbt::build_psbt(selected, outputs)?;
+        if !dry_run {
+            self.reserve_vanilla_txos(txn, &psbt, WalletTransactionType::CreateUtxos)?;
+        }
+        Ok(psbt)
+    }
+
+    fn create_utxos_end_impl(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<u8, Error> {
+        // Provider scripts are not tracked by the placeholder BDK descriptors.
+        let external_scripts: HashSet<String> = txn
+            .get_mpc_addresses_by_keychain(0)?
+            .into_iter()
+            .map(|address| address.script_pubkey)
+            .collect();
+        let outputs: Vec<_> = signed_psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| external_scripts.contains(&output.script_pubkey.to_hex_string()))
+            .collect();
+        let count = u8::try_from(outputs.len()).map_err(|_| Error::Internal {
+            details: s!("too many External outputs in MPC create_utxos transaction"),
+        })?;
+
+        self.finalize_vanilla_wallet_transaction(
+            txn,
+            signed_psbt,
+            WalletTransactionType::CreateUtxos,
+        )?;
+        let tx = self.broadcast_psbt(txn, signed_psbt)?;
+        for (vout, output) in outputs {
+            // Record each output, even when the provider reuses one address. The
+            // upsert preserves spent state if completion is retried later.
+            txn.set_txo(DbTxoActMod {
+                txid: ActiveValue::Set(tx.compute_txid().to_string()),
+                vout: ActiveValue::Set(vout as u32),
+                btc_amount: ActiveValue::Set(output.value.to_sat().to_string()),
+                exists: ActiveValue::Set(true),
+                spent: ActiveValue::Set(false),
+                pending_witness: ActiveValue::Set(false),
+                ..Default::default()
+            })?;
+        }
+        Ok(count)
     }
 
     fn send_btc_begin_impl(
@@ -767,20 +811,12 @@ impl MpcWallet {
         &self,
         txn: &DbTxn,
     ) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
-        self.filter_spendable_vanilla_utxos(txn, self.query_vanilla_utxos(txn)?)
-    }
-
-    #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn filter_spendable_vanilla_utxos(
-        &self,
-        txn: &DbTxn,
-        utxos: Vec<(OutPoint, TxOut, String)>,
-    ) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
         let excluded: HashSet<_> = self
             .get_unspendable_bdk_outpoints(txn)?
             .into_iter()
             .collect();
-        Ok(utxos
+        Ok(self
+            .query_vanilla_utxos(txn)?
             .into_iter()
             .filter(|(outpoint, _, _)| !excluded.contains(outpoint))
             .collect())
@@ -951,7 +987,7 @@ impl MpcWallet {
         Ok(address.to_string())
     }
 
-    /// Return an External address to fund before the first blind receive.
+    /// Return an External address for the RGB UTXO pool.
     pub fn get_rgb_address(&mut self) -> Result<String, Error> {
         Ok(self
             .get_new_addresses(KeychainKind::External, 1)?
@@ -988,6 +1024,50 @@ impl MpcWallet {
         txn.commit()?;
 
         Ok(addr_info.address)
+    }
+
+    /// List transactions whose inputs remain reserved after a non-dry-run preparation.
+    pub fn list_pending_vanilla_txs(&self) -> Result<Vec<PendingVanillaTx>, Error> {
+        let txn = self.database().begin_transaction()?;
+        let reserved_idxs: Vec<i32> = txn
+            .iter_reserved_txos()?
+            .into_iter()
+            .filter_map(|r| r.reserved_for)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let result = if reserved_idxs.is_empty() {
+            vec![]
+        } else {
+            txn.get_wallet_transactions_by_idxs(&reserved_idxs)?
+                .into_iter()
+                .map(|wt| PendingVanillaTx {
+                    txid: wt.txid,
+                    r#type: wt.r#type,
+                })
+                .collect()
+        };
+        txn.commit()?;
+        Ok(result)
+    }
+
+    /// Abort a pending vanilla transaction, releasing its reserved inputs.
+    ///
+    /// Only abort when the transaction is known not to have been broadcast and
+    /// will not be submitted later. Reconcile unknown broadcast outcomes first.
+    /// Returns [`Error::CannotAbortPendingVanillaTx`] if no reservations remain.
+    pub fn abort_pending_vanilla_tx(&self, txid: String) -> Result<(), Error> {
+        let txn = self.database().begin_transaction()?;
+        let (wt, reservations) = txn
+            .get_wallet_transaction_with_reserved_txos_by_txid(&txid)?
+            .ok_or(Error::CannotAbortPendingVanillaTx)?;
+        if reservations.is_empty() {
+            return Err(Error::CannotAbortPendingVanillaTx);
+        }
+        txn.del_wallet_transaction(wt.idx)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        Ok(())
     }
 
     /// Create new colored UTXOs (begin + MPC sign + end).
