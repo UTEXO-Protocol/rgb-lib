@@ -1006,6 +1006,24 @@ pub trait WalletOnline: WalletOffline {
                         received.insert(opout, Assignment::NonFungible);
                     };
                 }
+                for (no, declarative_assignment) in
+                    typed_assigns.as_declarative().iter().enumerate()
+                {
+                    let opout = Opout::new(*opid, *ass_type, no as u16);
+                    if let Assign::ConfidentialSeal { seal, .. } = declarative_assignment
+                        && Some(*seal) == known_concealed
+                        && *ass_type == OS_BRIDGE
+                    {
+                        received.insert(opout, Assignment::BridgeRight);
+                    }
+                    if let Assign::Revealed { seal, .. } = declarative_assignment
+                        && seal.txid == TxPtr::WitnessTx
+                        && Some(seal.vout.into_u32()) == vout
+                        && *ass_type == OS_BRIDGE
+                    {
+                        received.insert(opout, Assignment::BridgeRight);
+                    };
+                }
             }
         }
 
@@ -3919,6 +3937,7 @@ pub trait WalletOnline: WalletOffline {
                     return Err(Error::InvalidAmountZero);
                 }
             }
+            (Assignment::BridgeRight, AssetSchema::Bfa) => {}
             _ => {
                 return Err(Error::InvalidAssignment);
             }

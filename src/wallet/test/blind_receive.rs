@@ -311,6 +311,69 @@ fn success() {
     assert_eq!(tte_data.len(), transport_endpoints.len());
 }
 
+/// BFA invoices name the state they ask for, like IFA ones: units under `assetOwner`, a mint
+/// lane under `bridgeRight`, which carries no amount.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn bfa_assignments() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let asset_bfa = party.issue_asset_bfa(1, FAKE_ETH_ADDRESS.to_string(), None);
+    let asset_ifa = party.issue_asset_ifa(None, None, None);
+
+    // detect assignment: bridge right, BFA
+    let receive_data = party
+        .wallet
+        .blind_receive(
+            Some(asset_bfa.asset_id.clone()),
+            Assignment::BridgeRight,
+            default_rcv_expiration(),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let invoice = Invoice::new(receive_data.invoice).unwrap();
+    let invoice_data = invoice.invoice_data();
+    assert_eq!(invoice_data.assignment, Assignment::BridgeRight);
+    assert_eq!(
+        invoice_data.assignment_name,
+        Some(RGB_STATE_BRIDGE_RIGHT.to_string())
+    );
+    let transfer = party.get_test_transfer_recipient(&receive_data.recipient_id);
+    assert_eq!(transfer.requested_assignment, Some(Assignment::BridgeRight));
+
+    // detect assignment: amount, BFA
+    let receive_data = party
+        .wallet
+        .blind_receive(
+            Some(asset_bfa.asset_id.clone()),
+            Assignment::Fungible(AMOUNT),
+            default_rcv_expiration(),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let invoice = Invoice::new(receive_data.invoice).unwrap();
+    let invoice_data = invoice.invoice_data();
+    assert_eq!(invoice_data.assignment, Assignment::Fungible(AMOUNT));
+    assert_eq!(
+        invoice_data.assignment_name,
+        Some(RGB_STATE_ASSET_OWNER.to_string())
+    );
+
+    // invalid assignment: bridge right, IFA schema
+    let result = party.wallet.blind_receive(
+        Some(asset_ifa.asset_id.clone()),
+        Assignment::BridgeRight,
+        default_rcv_expiration(),
+        TRANSPORT_ENDPOINTS.clone(),
+        MIN_CONFIRMATIONS,
+    );
+    assert_matches!(result, Err(Error::InvalidAssignment));
+}
+
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]

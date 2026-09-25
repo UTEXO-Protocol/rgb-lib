@@ -1,8 +1,5 @@
 use super::*;
 
-/// A syntactically valid EVM address for tests that never reach the chain.
-const FAKE_ETH_ADDRESS: &str = "0x0000000000000000000000000000000000000001";
-
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]

@@ -109,6 +109,81 @@ fn success() {
     assert_eq!(rights, 1);
 }
 
+/// A mint lane received from the issuer mints like one from genesis: the issuer sends a bridge
+/// right, the receiving wallet mints against a real EVM lock, and the right rolls forward on it.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn mints_with_a_received_right() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    let mut issuer = get_funded_party!();
+    let mut minter = get_funded_party!();
+
+    let asset = issuer.issue_asset_bfa(1, bridge_contract.address.clone(), None);
+
+    // the issuer hands its only lane to the minter
+    let receive_data = minter.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::BridgeRight,
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = issuer.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+    minter.wait_for_refresh(None);
+    issuer.wait_for_refresh(None);
+    mine(false);
+    minter.wait_for_refresh(None);
+    issuer.wait_for_refresh(None);
+
+    // mint to the minter's own blinded invoice with the received right
+    let receive_data = minter.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+    let begin = minter.bridge_begin(&asset.asset_id, recipient);
+    erc20_approve(&eth_contract.address, &bridge_contract.address, AMOUNT);
+    bridge_funds_in(&bridge_contract.address, AMOUNT, &begin.details.opid);
+    let signed_psbt = minter.wallet.sign_psbt(begin.psbt, None).unwrap();
+    let result = minter.bridge_end(signed_psbt);
+    assert!(!result.txid.is_empty());
+
+    minter.wait_for_refresh(None);
+    mine(false);
+    assert!(minter.refresh_asset(&asset.asset_id));
+    assert_eq!(
+        minter.get_asset_balance(&asset.asset_id),
+        Balance {
+            settled: AMOUNT,
+            future: AMOUNT,
+            spendable: AMOUNT,
+        }
+    );
+
+    // the lane rolled forward on the minter; the issuer has none left
+    let rights = |party: &mut SinglesigParty| {
+        party
+            .list_unspents(false)
+            .into_iter()
+            .flat_map(|u| u.rgb_allocations)
+            .filter(|a| matches!(a.assignment, Assignment::BridgeRight))
+            .count()
+    };
+    assert_eq!(rights(&mut minter), 1);
+    assert_eq!(rights(&mut issuer), 0);
+}
+
 /// Without a matching lock the mint must not validate: this is the property the whole schema
 /// exists for, and it is checked by RGB consensus rather than by us.
 #[cfg(feature = "electrum")]

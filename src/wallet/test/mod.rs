@@ -108,6 +108,9 @@ const PRECISION: u8 = 7;
 const AMOUNT: u64 = 666;
 #[cfg(feature = "electrum")]
 const AMOUNT_INFLATION: u64 = 400;
+/// A syntactically valid EVM address for BFA tests that never reach the chain.
+#[cfg(feature = "electrum")]
+const FAKE_ETH_ADDRESS: &str = "0x0000000000000000000000000000000000000001";
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 const AMOUNT_SMALL: u64 = 66;
 #[cfg(any(feature = "electrum", feature = "esplora"))]
