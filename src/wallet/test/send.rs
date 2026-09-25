@@ -6084,6 +6084,166 @@ fn ifa_success() {
     assert_eq!(inflation_right_amount, 0);
 }
 
+/// Settled bridge rights of `asset_id` the wallet holds, one per mint lane.
+#[cfg(feature = "electrum")]
+fn bridge_rights(party: &mut SinglesigParty, asset_id: &str) -> usize {
+    party
+        .list_unspents_with_sync(true)
+        .into_iter()
+        .flat_map(|u| u.rgb_allocations)
+        .filter(|a| a.asset_id.as_deref() == Some(asset_id))
+        .filter(|a| matches!(a.assignment, Assignment::BridgeRight))
+        .count()
+}
+
+/// A BFA issuer hands mint lanes to another wallet with a plain send, like IFA inflation rights,
+/// one right per recipient. A fresh wallet does not know the asset yet, so its first invoices are
+/// asset-less and the sender names the assignment; later ones ask for a `bridgeRight` explicitly.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn bfa_success() {
+    initialize();
+
+    // wallets
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    // issue
+    let asset = party.issue_asset_bfa(3, FAKE_ETH_ADDRESS.to_string(), None);
+    assert_eq!(bridge_rights(&mut party, &asset.asset_id), 3);
+
+    // send 2 rights to asset-less invoices, each paying its own UTXO
+    let receive_data_1 = rcv_party.blind_receive();
+    let receive_data_2 = rcv_party.blind_receive();
+    let receive_utxos: HashSet<_> = rcv_party
+        .list_transfers(None)
+        .into_iter()
+        .map(|t| t.receive_utxo)
+        .collect();
+    assert_eq!(receive_utxos.len(), 2);
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![
+            Recipient {
+                assignment: Assignment::BridgeRight,
+                recipient_id: receive_data_1.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+            Recipient {
+                assignment: Assignment::BridgeRight,
+                recipient_id: receive_data_2.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        ],
+    )]);
+    let txid = party.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+
+    // transfers progress to status Settled after refreshing
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+
+    // transfer checks
+    for receive_data in [&receive_data_1, &receive_data_2] {
+        let recv = rcv_party.get_test_transfer_recipient(&receive_data.recipient_id);
+        let (recv_data, _) = rcv_party.get_test_transfer_data(&recv);
+        assert_eq!(recv_data.status, TransferStatus::Settled);
+    }
+    let sends: Vec<Transfer> = party
+        .list_transfers(Some(&asset.asset_id))
+        .into_iter()
+        .filter(|t| t.kind == TransferKind::Send)
+        .collect();
+    assert_eq!(sends.len(), 2);
+    assert!(sends.iter().all(|t| {
+        t.requested_assignment == Some(Assignment::BridgeRight)
+            && t.status == TransferStatus::Settled
+    }));
+
+    // the receiver holds the 2 lanes, the issuer keeps the third
+    assert_eq!(bridge_rights(&mut rcv_party, &asset.asset_id), 2);
+    assert_eq!(bridge_rights(&mut party, &asset.asset_id), 1);
+
+    // knowing the asset now, the receiver asks for a lane explicitly
+    let receive_data = rcv_party
+        .wallet
+        .blind_receive(
+            Some(asset.asset_id.clone()),
+            Assignment::BridgeRight,
+            default_rcv_expiration(),
+            TRANSPORT_ENDPOINTS.clone(),
+            MIN_CONFIRMATIONS,
+        )
+        .unwrap();
+    let recipient_map = HashMap::from([(
+        asset.asset_id.clone(),
+        vec![Recipient {
+            assignment: Assignment::BridgeRight,
+            recipient_id: receive_data.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        }],
+    )]);
+    let txid = party.send_retry(&recipient_map);
+    assert!(!txid.is_empty());
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+    mine(false);
+    rcv_party.wait_for_refresh(None);
+    party.wait_for_refresh(None);
+
+    assert_eq!(bridge_rights(&mut rcv_party, &asset.asset_id), 3);
+    assert_eq!(bridge_rights(&mut party, &asset.asset_id), 0);
+}
+
+/// A bridge right exists only on BFA, and a send cannot hand out more lanes than it holds.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn bfa_fail() {
+    initialize();
+
+    let mut party = get_funded_party!();
+    let mut rcv_party = get_funded_party!();
+
+    let bridge_right_to = |recipient_id: &str| Recipient {
+        assignment: Assignment::BridgeRight,
+        recipient_id: recipient_id.to_string(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+
+    // a bridge right on a non-BFA asset
+    let asset_nia = party.issue_asset_nia(None);
+    let receive_data = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset_nia.asset_id.clone(),
+        vec![bridge_right_to(&receive_data.recipient_id)],
+    )]);
+    let result = party.send_result(&recipient_map);
+    assert_matches!(result, Err(Error::InvalidAssignment));
+
+    // more lanes than the wallet holds
+    let asset_bfa = party.issue_asset_bfa(1, FAKE_ETH_ADDRESS.to_string(), None);
+    let receive_data_1 = rcv_party.blind_receive();
+    let receive_data_2 = rcv_party.blind_receive();
+    let recipient_map = HashMap::from([(
+        asset_bfa.asset_id.clone(),
+        vec![
+            bridge_right_to(&receive_data_1.recipient_id),
+            bridge_right_to(&receive_data_2.recipient_id),
+        ],
+    )]);
+    let result = party.send_result(&recipient_map);
+    assert_matches!(result, Err(Error::InsufficientAssignments { .. }));
+}
+
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
