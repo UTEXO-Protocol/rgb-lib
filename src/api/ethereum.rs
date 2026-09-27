@@ -14,14 +14,12 @@ pub(crate) struct EthClient {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EthLog {
     /// Contract address that emitted the event.
-    #[allow(dead_code)]
     pub address: String,
     /// Indexed topic hashes (topic[0] = event signature hash).
     pub topics: Vec<String>,
     /// ABI-encoded non-indexed parameters.
     pub data: String,
-    /// Block number (hex).
-    #[allow(dead_code)]
+    /// Block number (hex), absent while the log is pending.
     pub block_number: Option<String>,
     /// Transaction hash.
     #[allow(dead_code)]
@@ -29,6 +27,9 @@ pub(crate) struct EthLog {
     /// Log index within the block (hex).
     #[allow(dead_code)]
     pub log_index: Option<String>,
+    /// Set on a log whose block was reorganized out of the chain.
+    #[serde(default)]
+    pub removed: bool,
 }
 
 /// Decoded FundsIn event from the Bridge contract.
@@ -61,6 +62,19 @@ fn abi_word(data: &str, index: usize) -> Result<[u8; 32], Error> {
     Ok(buf)
 }
 
+/// Parse a JSON-RPC hex quantity.
+fn quantity(hex: &str) -> Result<u64, Error> {
+    u64::from_str_radix(hex.strip_prefix("0x").unwrap_or(hex), 16).map_err(|e| Error::Network {
+        details: format!("invalid Ethereum RPC quantity {hex:?}: {e}"),
+    })
+}
+
+/// Whether two hex addresses name the same account, whatever their case or `0x` prefix.
+fn same_address(a: &str, b: &str) -> bool {
+    let bare = |s: &str| s.strip_prefix("0x").unwrap_or(s).to_ascii_lowercase();
+    bare(a) == bare(b)
+}
+
 /// Read an ABI uint256 as u64, refusing values that don't fit.
 /// Truncating would silently disagree with the amount the mint commits to.
 fn word_as_u64(word: [u8; 32]) -> Result<u64, Error> {
@@ -73,6 +87,11 @@ fn word_as_u64(word: [u8; 32]) -> Result<u64, Error> {
 }
 
 impl EthLog {
+    /// Number of the block the log was mined in, `None` while it is pending.
+    pub fn block_number(&self) -> Result<Option<u64>, Error> {
+        self.block_number.as_deref().map(quantity).transpose()
+    }
+
     /// Try to parse this log as a FundsIn event.
     /// Returns `None` if the log topic doesn't match.
     pub fn as_funds_in(&self) -> Result<Option<FundsInEvent>, Error> {
@@ -150,78 +169,79 @@ impl EthClient {
         }
     }
 
-    /// Fetch logs emitted by `contract` between `from_block` and `to_block`.
-    ///
-    /// `topics` can be used to filter by event signature and/or indexed params.
-    /// Pass an empty slice to get all events from the contract.
+    /// Send one JSON-RPC request and return its result, `None` if the node returned null.
+    fn call<P: Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        method: &'static str,
+        params: P,
+    ) -> Result<Option<R>, Error> {
+        let body = RpcRequest {
+            jsonrpc: "2.0",
+            method,
+            params,
+            id: 1,
+        };
+        let resp: RpcResponse<R> = self
+            .client
+            .post(&self.rpc_url)
+            .header(CONTENT_TYPE, JSON)
+            .json(&body)
+            .send()
+            .map_err(Self::req_err)?
+            .json()
+            .map_err(Self::req_err)?;
+
+        if let Some(err) = resp.error {
+            return Err(Error::Network {
+                details: format!("{method} error {}: {}", err.code, err.message),
+            });
+        }
+        Ok(resp.result)
+    }
+
+    /// Fetch the FundsIn logs `contract` emitted between `from_block` and `to_block`.
     ///
     /// Block parameters accept hex strings (`"0x0"`) or tags (`"earliest"`,
     /// `"latest"`).
+    ///
+    /// Only the contract's own logs are returned, and none from a block the chain reorganized
+    /// away. A log of any other address fails the call: any contract can emit a FundsIn naming
+    /// any OpId and amount, so an RPC that ignores the address filter cannot be trusted with
+    /// deciding whether a mint is backed.
     pub(crate) fn get_logs(
         &self,
         contract: &str,
         from_block: &str,
         to_block: &str,
     ) -> Result<Vec<EthLog>, Error> {
-        let body = RpcRequest {
-            jsonrpc: "2.0",
-            method: "eth_getLogs",
-            params: [LogFilter {
-                address: contract.to_string(),
-                from_block: from_block.to_string(),
-                to_block: to_block.to_string(),
-                topics: vec![FUNDS_IN_TOPIC.to_string()],
-            }],
-            id: 1,
-        };
+        let filter = [LogFilter {
+            address: contract.to_string(),
+            from_block: from_block.to_string(),
+            to_block: to_block.to_string(),
+            topics: vec![FUNDS_IN_TOPIC.to_string()],
+        }];
+        let logs: Vec<EthLog> =
+            self.call("eth_getLogs", filter)?
+                .ok_or_else(|| Error::Network {
+                    details: s!("eth_getLogs returned null result"),
+                })?;
 
-        let resp: RpcResponse<Vec<EthLog>> = self
-            .client
-            .post(&self.rpc_url)
-            .header(CONTENT_TYPE, JSON)
-            .json(&body)
-            .send()
-            .map_err(Self::req_err)?
-            .json()
-            .map_err(Self::req_err)?;
-
-        if let Some(err) = resp.error {
+        if let Some(foreign) = logs.iter().find(|l| !same_address(&l.address, contract)) {
             return Err(Error::Network {
-                details: format!("eth_getLogs error {}: {}", err.code, err.message),
+                details: format!(
+                    "eth_getLogs for {contract} returned a log of {}",
+                    foreign.address
+                ),
             });
         }
-
-        resp.result.ok_or_else(|| Error::Network {
-            details: s!("eth_getLogs returned null result"),
-        })
+        Ok(logs.into_iter().filter(|l| !l.removed).collect())
     }
 
     pub(crate) fn client_version(&self) -> Result<String, Error> {
-        let body: RpcRequest<NullRequest> = RpcRequest {
-            jsonrpc: "2.0",
-            method: "web3_clientVersion",
-            params: NullRequest,
-            id: 1,
-        };
-        let resp: RpcResponse<String> = self
-            .client
-            .post(&self.rpc_url)
-            .header(CONTENT_TYPE, JSON)
-            .json(&body)
-            .send()
-            .map_err(Self::req_err)?
-            .json()
-            .map_err(Self::req_err)?;
-
-        if let Some(err) = resp.error {
-            return Err(Error::Network {
-                details: format!("web3_clientVersion error {}: {}", err.code, err.message),
-            });
-        }
-
-        resp.result.ok_or_else(|| Error::Network {
-            details: s!("web3_clientVersion returned null result"),
-        })
+        self.call("web3_clientVersion", NullRequest)?
+            .ok_or_else(|| Error::Network {
+                details: s!("web3_clientVersion returned null result"),
+            })
     }
 }
 
@@ -244,7 +264,34 @@ mod test {
             block_number: None,
             transaction_hash: None,
             log_index: None,
+            removed: false,
         }
+    }
+
+    const BRIDGE: &str = "0x00000000000000000000000000000000000000b1";
+
+    /// Serve `result` as the answer to any JSON-RPC call.
+    fn rpc_server(result: serde_json::Value) -> (mockito::ServerGuard, mockito::Mock) {
+        let mut server = mockito::Server::new();
+        let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": result});
+        let mock = server
+            .mock("POST", "/")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create();
+        (server, mock)
+    }
+
+    fn rpc_log(address: &str, block: &str, removed: bool) -> serde_json::Value {
+        serde_json::json!({
+            "address": address,
+            "topics": [FUNDS_IN_TOPIC, format!("0x{}", word("dead"))],
+            "data": format!("0x{}{}", word("ab"), word("64")),
+            "blockNumber": block,
+            "transactionHash": format!("0x{}", word("1")),
+            "logIndex": "0x0",
+            "removed": removed,
+        })
     }
 
     const OPID: &str = "00000000000000000000000000000000000000000000000000000000000000ab";
@@ -316,6 +363,52 @@ mod test {
             .unwrap();
         assert!(logs.is_empty());
         mock.assert();
+    }
+
+    /// Any contract can emit a FundsIn naming any OpId and amount, so a log the bridge did not
+    /// emit must never reach the validator - even from an RPC that ignored the address filter.
+    #[test]
+    fn rejects_a_log_of_another_contract() {
+        let stranger = "0x00000000000000000000000000000000000000c2";
+        let (server, mock) = rpc_server(serde_json::json!([
+            rpc_log(BRIDGE, "0x10", false),
+            rpc_log(stranger, "0x11", false),
+        ]));
+        let result = EthClient::new(&server.url())
+            .unwrap()
+            .get_logs(BRIDGE, "0x0", "latest");
+        assert!(
+            matches!(&result, Err(Error::Network { details }) if details.contains(stranger)),
+            "{result:?}"
+        );
+        mock.assert();
+    }
+
+    #[test]
+    fn matches_the_contract_address_in_any_case() {
+        let checksummed = "0x00000000000000000000000000000000000000B1";
+        let (server, _mock) = rpc_server(serde_json::json!([rpc_log(BRIDGE, "0x10", false)]));
+        let logs = EthClient::new(&server.url())
+            .unwrap()
+            .get_logs(checksummed, "0x0", "latest")
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].block_number().unwrap(), Some(0x10));
+    }
+
+    /// A removed log belongs to a block the chain reorganized away: its lock never happened.
+    #[test]
+    fn drops_removed_logs() {
+        let (server, _mock) = rpc_server(serde_json::json!([
+            rpc_log(BRIDGE, "0x10", true),
+            rpc_log(BRIDGE, "0x11", false),
+        ]));
+        let logs = EthClient::new(&server.url())
+            .unwrap()
+            .get_logs(BRIDGE, "0x0", "latest")
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].block_number().unwrap(), Some(0x11));
     }
 
     #[test]
