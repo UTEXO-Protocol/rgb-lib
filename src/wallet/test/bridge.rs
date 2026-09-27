@@ -154,6 +154,125 @@ fn without_evm_lock_fails() {
     );
 }
 
+/// Mint `AMOUNT` on `minter`'s lane to a blinded invoice of `holder`, first locking each of
+/// `locks`, in order, under the mint's OpId. Returns the holder's recipient ID.
+#[cfg(feature = "electrum")]
+fn mint_after_locks(
+    minter: &mut SinglesigParty,
+    holder: &mut SinglesigParty,
+    asset_id: &str,
+    token: &EthContract,
+    bridge: &EthContract,
+    locks: &[u64],
+) -> String {
+    let receive_data = holder.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+    let begin = minter.bridge_begin(asset_id, recipient);
+    for &amount in locks {
+        erc20_approve(&token.address, &bridge.address, amount);
+        bridge_funds_in(&bridge.address, amount, &begin.details.opid);
+    }
+    let signed_psbt = minter.wallet.sign_psbt(begin.psbt, None).unwrap();
+    assert!(!minter.bridge_end(signed_psbt).txid.is_empty());
+    receive_data.recipient_id
+}
+
+/// `fundsIn` lets anyone lock any amount under any OpId, and the federation checks only the
+/// deposit it is shown, so a depositor can lock a wrong amount under its own mint OpId ahead of
+/// the real deposit and still get the mint signed. Holders read every FundsIn log in chain order:
+/// the mint must validate for them all the same, and so must the next mint on the lane, which
+/// descends from the first through the rolled-forward bridge right.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn an_earlier_wrong_amount_lock_does_not_invalidate_the_lane() {
+    initialize();
+
+    let token = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge = deploy_bridge(&token.address);
+
+    let mut minter = get_funded_party!();
+    let mut first_holder = get_funded_party!();
+    let mut second_holder = get_funded_party!();
+
+    let asset = minter.issue_asset_bfa(1, bridge.address.clone(), None);
+
+    // 1 locked under the mint's OpId first, then the amount the mint commits to
+    let first = mint_after_locks(
+        &mut minter,
+        &mut first_holder,
+        &asset.asset_id,
+        &token,
+        &bridge,
+        &[1, AMOUNT],
+    );
+    first_holder.wait_for_refresh(None);
+    mine(false);
+    first_holder.refresh_all();
+    // settles the mint on the minting side, making the rolled-forward right spendable
+    minter.refresh_all();
+
+    // an honestly backed mint on the same lane
+    let second = mint_after_locks(
+        &mut minter,
+        &mut second_holder,
+        &asset.asset_id,
+        &token,
+        &bridge,
+        &[AMOUNT],
+    );
+    second_holder.wait_for_refresh(None);
+    mine(false);
+    second_holder.refresh_all();
+
+    let settled = |holder: &mut SinglesigParty, recipient_id: &str| {
+        holder.check_test_transfer_status_incoming(recipient_id, TransferStatus::Settled)
+            && holder.get_asset_balance(&asset.asset_id).settled == AMOUNT
+    };
+    let first_settled = settled(&mut first_holder, &first);
+    let second_settled = settled(&mut second_holder, &second);
+    assert!(
+        first_settled && second_settled,
+        "holders refused backed mints: first settled = {first_settled}, \
+         next on the lane settled = {second_settled}"
+    );
+}
+
+/// Accepting any matching lock must not accept a mint that only wrong-amount locks back.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn only_wrong_amount_locks_fail() {
+    initialize();
+
+    let token = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge = deploy_bridge(&token.address);
+
+    let mut minter = get_funded_party!();
+    let mut holder = get_funded_party!();
+
+    let asset = minter.issue_asset_bfa(1, bridge.address.clone(), None);
+
+    let recipient_id = mint_after_locks(
+        &mut minter,
+        &mut holder,
+        &asset.asset_id,
+        &token,
+        &bridge,
+        &[1, AMOUNT - 1, AMOUNT + 1],
+    );
+    holder.wait_for_refresh(None);
+    mine(false);
+    holder.refresh_all();
+
+    assert!(holder.check_test_transfer_status_incoming(&recipient_id, TransferStatus::Failed));
+}
+
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
