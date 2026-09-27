@@ -1364,11 +1364,49 @@ impl Wallet {
         fee_rate: u64,
         min_confirmations: u8,
     ) -> Result<BridgeBeginResult, Error> {
+        self.bridge_begin_with_extras(
+            online,
+            asset_id,
+            recipient,
+            fee_rate,
+            min_confirmations,
+            PsbtExtras::default(),
+            None,
+        )
+    }
+
+    /// As [`bridge_begin`](Wallet::bridge_begin), with parts of the transaction fixed by the
+    /// caller: `extras` adds inputs of other parties (signed by them) and outputs to third
+    /// parties, `lock_time` pins the locktime (BDK's anti-fee-sniping height otherwise).
+    ///
+    /// The mint is committed to the whole transaction, so everything that must be in it has to
+    /// be given here: the commitment, the OpId and the consignment all bind this exact txid,
+    /// which is fixed before any deposit exists. This is what lets a mint settle a contract
+    /// atomically with the other parties' inputs (a loan repaid by a mint that also releases
+    /// the borrower's collateral, for instance): the bridge's signature on its own inputs is
+    /// then the only thing missing from the transaction until the deposit is there.
+    pub fn bridge_begin_with_extras(
+        &mut self,
+        online: Online,
+        asset_id: String,
+        recipient: Recipient,
+        fee_rate: u64,
+        min_confirmations: u8,
+        extras: PsbtExtras,
+        lock_time: Option<u32>,
+    ) -> Result<BridgeBeginResult, Error> {
         info!(self.logger(), "Bridging (begin)...");
         self.check_online(online)?;
         let txn = self.database().begin_transaction()?;
-        let begin_operation_data =
-            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        let begin_operation_data = self.bridge_begin_impl(
+            &txn,
+            asset_id,
+            recipient,
+            fee_rate,
+            min_confirmations,
+            &extras,
+            lock_time,
+        )?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();

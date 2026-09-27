@@ -1198,6 +1198,45 @@ pub struct Recipient {
     pub transport_endpoints: Vec<String>,
 }
 
+/// An input owned by another party, spent by a transaction this wallet composes: its owner
+/// signs it, the wallet only accounts for it. `psbt_input` is what the owner needs to sign
+/// (`witness_utxo`, `non_witness_utxo` for a non-taproot input, `witness_script` for a
+/// script-path spend); `satisfaction_weight` is the weight of the witness the owner will add,
+/// so the fee estimate covers it; `sequence` defaults to the wallet's own (RBF, no locktime).
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone)]
+pub struct ForeignInput {
+    /// The outpoint being spent
+    pub outpoint: OutPoint,
+    /// PSBT input data its owner needs to sign it
+    pub psbt_input: bdk_wallet::bitcoin::psbt::Input,
+    /// Weight of the witness (and script sig) its owner will add
+    pub satisfaction_weight: bdk_wallet::bitcoin::Weight,
+    /// Input sequence, if not the wallet's default
+    pub sequence: Option<bdk_wallet::bitcoin::Sequence>,
+}
+
+/// Caller-fixed parts of a transaction the wallet would otherwise compose alone: inputs it does
+/// not own and outputs to third parties. Foreign inputs follow the wallet's own inputs, extra
+/// outputs follow the wallet's own outputs (the commitment host stays at vout 0 and the
+/// recipients keep their positions), so the RGB seals are unaffected.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, Default)]
+pub struct PsbtExtras {
+    /// Inputs of other parties
+    pub foreign_inputs: Vec<ForeignInput>,
+    /// Outputs to third parties, as `(script, amount in sat)`
+    pub extra_outputs: Vec<(ScriptBuf, u64)>,
+}
+
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+impl PsbtExtras {
+    /// Whether nothing is added
+    pub fn is_empty(&self) -> bool {
+        self.foreign_inputs.is_empty() && self.extra_outputs.is_empty()
+    }
+}
+
 /// The information needed to receive RGB assets in witness mode.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]

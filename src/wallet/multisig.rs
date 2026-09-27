@@ -2679,8 +2679,15 @@ impl MultisigWallet {
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
-        let data =
-            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        let data = self.bridge_begin_impl(
+            &txn,
+            asset_id,
+            recipient,
+            fee_rate,
+            min_confirmations,
+            &PsbtExtras::default(),
+            None,
+        )?;
         // Captured before `data` moves into the post: a second begin would pick a
         // different bridge right and produce a different OpId.
         let opid = data
@@ -2717,8 +2724,15 @@ impl MultisigWallet {
         self.check_online(online)?;
         self.check_is_cosigner()?;
         let txn = self.database().begin_transaction()?;
-        let data =
-            self.bridge_begin_impl(&txn, asset_id, recipient, fee_rate, min_confirmations)?;
+        let data = self.bridge_begin_impl(
+            &txn,
+            asset_id,
+            recipient,
+            fee_rate,
+            min_confirmations,
+            &PsbtExtras::default(),
+            None,
+        )?;
         txn.commit()?;
         self.trigger_auto_backup();
         info!(self.logger(), "Preparing bridge operation completed");

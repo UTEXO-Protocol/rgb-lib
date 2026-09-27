@@ -2603,6 +2603,7 @@ pub trait WalletOnline: WalletOffline {
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
+        extras: &PsbtExtras,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         let change_addr = self.get_new_address()?.script_pubkey();
         let mut builder = self.bdk_wallet_mut().build_tx();
@@ -2613,6 +2614,22 @@ pub trait WalletOnline: WalletOffline {
             .manually_selected_only()
             .fee_rate(fee_rate)
             .ordering(bdk_wallet::tx_builder::TxOrdering::Untouched);
+        // other parties' inputs come after the wallet's own, in the order given; their
+        // owners sign them and the fee estimate counts the witness they declared
+        for foreign in &extras.foreign_inputs {
+            builder
+                .add_foreign_utxo_with_sequence(
+                    foreign.outpoint,
+                    foreign.psbt_input.clone(),
+                    foreign.satisfaction_weight,
+                    foreign
+                        .sequence
+                        .unwrap_or(bdk_wallet::bitcoin::Sequence::ENABLE_RBF_NO_LOCKTIME),
+                )
+                .map_err(|e| Error::InvalidPsbt {
+                    details: format!("foreign input {}: {e}", foreign.outpoint),
+                })?;
+        }
         // When the caller pins a locktime (e.g. 0 for an LN funding tx that must
         // be final), honor it; otherwise keep BDK's anti-fee-sniping default.
         if let Some(height) = lock_time {
@@ -2625,6 +2642,10 @@ pub trait WalletOnline: WalletOffline {
             );
         }
         for (script_buf, amount_sat) in witness_recipients {
+            builder.add_recipient(script_buf.clone(), BdkAmount::from_sat(*amount_sat));
+        }
+        // third-party outputs after the wallet's own, so no seal moves
+        for (script_buf, amount_sat) in &extras.extra_outputs {
             builder.add_recipient(script_buf.clone(), BdkAmount::from_sat(*amount_sat));
         }
         builder.drain_to(change_addr.clone());
@@ -2666,6 +2687,7 @@ pub trait WalletOnline: WalletOffline {
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
         lock_time: Option<u32>,
+        extras: &PsbtExtras,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         Ok(loop {
             break match self.prepare_psbt(
@@ -2673,6 +2695,7 @@ pub trait WalletOnline: WalletOffline {
                 witness_recipients,
                 fee_rate,
                 lock_time,
+                extras,
             ) {
                 Ok(res) => res,
                 Err(err @ Error::InsufficientBitcoins { .. }) => {
@@ -4030,6 +4053,7 @@ pub trait WalletOnline: WalletOffline {
         rejected: &mut HashSet<Opout>,
         dry_run: bool,
         lock_time: Option<u32>,
+        extras: &PsbtExtras,
     ) -> Result<PrepareTransferPsbtResult, Error> {
         // prepare BDK PSBT
         let mut all_inputs: HashSet<BdkOutPoint> = transfer_info_map
@@ -4047,6 +4071,7 @@ pub trait WalletOnline: WalletOffline {
             witness_recipients,
             fee_rate_checked,
             lock_time,
+            extras,
         )?;
         psbt.unsigned_tx.output[0].script_pubkey = ScriptBuf::new_op_return([]);
 
@@ -4237,6 +4262,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut rejected,
                 dry_run,
                 lock_time,
+                &PsbtExtras::default(),
             )? {
                 PrepareTransferPsbtResult::Retry => continue,
                 PrepareTransferPsbtResult::Success(begin_operation_data) => {
@@ -4538,6 +4564,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut rejected,
                 dry_run,
                 None,
+                &PsbtExtras::default(),
             )? {
                 PrepareTransferPsbtResult::Retry => {
                     unreachable!("inflate transition has no retry logic")
@@ -4561,6 +4588,8 @@ pub trait WalletOnline: WalletOffline {
         recipient: Recipient,
         fee_rate: u64,
         min_confirmations: u8,
+        extras: &PsbtExtras,
+        lock_time: Option<u32>,
     ) -> Result<BeginOperationData, Error> {
         let asset = txn.check_asset_exists(asset_id.clone())?;
         let schema = asset.schema;
@@ -4671,7 +4700,8 @@ pub trait WalletOnline: WalletOffline {
             &mut runtime,
             &mut rejected,
             false,
-            None,
+            lock_time,
+            extras,
         )? {
             PrepareTransferPsbtResult::Retry => {
                 unreachable!("bridge transition has no retry logic")
@@ -4908,6 +4938,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut rejected,
                 dry_run,
                 None,
+                &PsbtExtras::default(),
             )? {
                 PrepareTransferPsbtResult::Retry => {
                     unreachable!("burn transition has no retry logic")
@@ -5114,6 +5145,7 @@ pub trait WalletOnline: WalletOffline {
                 &mut rejected,
                 dry_run,
                 None,
+                &PsbtExtras::default(),
             )? {
                 PrepareTransferPsbtResult::Retry => {
                     unreachable!("link transition has no retry logic")

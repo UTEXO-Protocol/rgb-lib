@@ -246,7 +246,14 @@ impl WalletOnline for MpcWallet {
         // MPC PSBTs are built manually with a final (zero) locktime, so they are
         // always valid as LN funding txs; the caller-pinned locktime is not needed.
         _lock_time: Option<u32>,
+        extras: &PsbtExtras,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
+        // the manual builder below knows only the wallet's own inputs and outputs
+        if !extras.is_empty() {
+            return Err(Error::InvalidPsbt {
+                details: s!("foreign inputs and extra outputs are not supported by MPC wallets"),
+            });
+        }
         // Get vanilla UTXOs for funding
         let vanilla_utxos = self.query_vanilla_utxos()?;
 
