@@ -1374,7 +1374,11 @@ pub trait WalletOnline: WalletOffline {
             };
             let bridge_location =
                 BfaWrapper::with(valid_contract.contract_data()).bridge_location();
-            let mut events: Vec<Event> = vec![];
+            // Only a finalized lock may back a mint: a holder that accepted one on a lock a
+            // reorg later dropped would hold units nothing backs. Newer locks are kept apart
+            // so a mint they alone back can wait for them instead of being refused for good.
+            let mut final_events: Vec<Event> = vec![];
+            let mut pending_events: Vec<Event> = vec![];
             match bridge_location {
                 BridgeLocation::Ethereum(address) => {
                     let Some(eth_rpc_url) = self.eth_rpc_url().clone() else {
@@ -1383,31 +1387,54 @@ pub trait WalletOnline: WalletOffline {
                         });
                     };
                     let eth_client = EthClient::new(&eth_rpc_url)?;
+                    // read before the logs, so a log counted as final really is
+                    let finalized = eth_client.finalized_block_number()?;
                     for log in &eth_client.get_logs(&address, "0x0", "latest")? {
                         // A log we cannot decode cannot authorise a mint, but it must not
                         // poison the whole set: one amount above u64 would otherwise break
                         // every mint of this asset, forever.
-                        match log.as_funds_in() {
-                            Ok(Some(funds_in)) => events.push(Event::new(
-                                OpId::from(funds_in.operation_id),
-                                RevealedValue::from(funds_in.amount),
-                            )),
-                            Ok(None) => {}
+                        let funds_in = match log.as_funds_in() {
+                            Ok(Some(funds_in)) => funds_in,
+                            Ok(None) => continue,
                             Err(e) => {
-                                debug!(self.logger(), "skipping undecodable FundsIn log: {}", e)
+                                debug!(self.logger(), "skipping undecodable FundsIn log: {}", e);
+                                continue;
                             }
+                        };
+                        let event = Event::new(
+                            OpId::from(funds_in.operation_id),
+                            RevealedValue::from(funds_in.amount),
+                        );
+                        match log.block_number()? {
+                            Some(block) if block <= finalized => final_events.push(event),
+                            _ => pending_events.push(event),
                         }
                     }
                 }
             }
             let schema = consignment.schema().clone();
-            consignment
-                .clone()
-                .validate_with_extension::<IssuedAmountCheckExt, BridgedContract<'_, MemContract<_>>>(
-                    resolver,
-                    validation_config,
-                    ((&schema, contract_id), &events),
-                )
+            let validate = |events: &Vec<Event>| {
+                consignment
+                    .clone()
+                    .validate_with_extension::<IssuedAmountCheckExt, BridgedContract<'_, MemContract<_>>>(
+                        resolver,
+                        validation_config,
+                        ((&schema, contract_id), events),
+                    )
+            };
+            let result = validate(&final_events);
+            if matches!(result, Err(ValidationError::InvalidConsignment(_)))
+                && !pending_events.is_empty()
+            {
+                let mut all_events = final_events;
+                all_events.extend(pending_events);
+                if validate(&all_events).is_ok() {
+                    return Err(Error::Network {
+                        details: s!("the FundsIn lock backing this BFA mint is not final yet"),
+                    });
+                }
+            }
+            result
         } else {
             consignment.clone().validate(resolver, validation_config)
         })

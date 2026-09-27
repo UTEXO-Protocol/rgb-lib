@@ -52,6 +52,8 @@ fn success() {
     // lock the ERC-20 under that OpId, then complete the mint
     erc20_approve(&eth_contract.address, &bridge_contract.address, AMOUNT);
     bridge_funds_in(&bridge_contract.address, AMOUNT, &begin.details.opid);
+    // holders count a lock only once the EVM chain has finalized it
+    evm_finalize();
 
     let signed_psbt = party.wallet.sign_psbt(begin.psbt, None).unwrap();
     let result = party.bridge_end(signed_psbt);
@@ -155,7 +157,8 @@ fn without_evm_lock_fails() {
 }
 
 /// Mint `AMOUNT` on `minter`'s lane to a blinded invoice of `holder`, first locking each of
-/// `locks`, in order, under the mint's OpId. Returns the holder's recipient ID.
+/// `locks`, in order, under the mint's OpId and finalizing them. Returns the holder's recipient
+/// ID.
 #[cfg(feature = "electrum")]
 fn mint_after_locks(
     minter: &mut SinglesigParty,
@@ -177,6 +180,7 @@ fn mint_after_locks(
         erc20_approve(&token.address, &bridge.address, amount);
         bridge_funds_in(&bridge.address, amount, &begin.details.opid);
     }
+    evm_finalize();
     let signed_psbt = minter.wallet.sign_psbt(begin.psbt, None).unwrap();
     assert!(!minter.bridge_end(signed_psbt).txid.is_empty());
     receive_data.recipient_id
@@ -271,6 +275,67 @@ fn only_wrong_amount_locks_fail() {
     holder.refresh_all();
 
     assert!(holder.check_test_transfer_status_incoming(&recipient_id, TransferStatus::Failed));
+}
+
+/// A holder counts only finalized locks, yet a mint whose lock is merely not final yet must wait
+/// for it rather than be refused for good. Serial: a parallel test finalizing its own locks would
+/// finalize this one too.
+#[cfg(feature = "electrum")]
+#[test]
+#[serial]
+fn a_lock_not_final_yet_leaves_the_mint_waiting() {
+    initialize();
+
+    let token = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge = deploy_bridge(&token.address);
+
+    let mut minter = get_funded_party!();
+    let mut holder = get_funded_party!();
+
+    let asset = minter.issue_asset_bfa(1, bridge.address.clone(), None);
+
+    let receive_data = holder.blind_receive();
+    let recipient = Recipient {
+        assignment: Assignment::Fungible(AMOUNT),
+        recipient_id: receive_data.recipient_id.clone(),
+        witness_data: None,
+        transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+    };
+    let begin = minter.bridge_begin(&asset.asset_id, recipient);
+    erc20_approve(&token.address, &bridge.address, AMOUNT);
+    bridge_funds_in(&bridge.address, AMOUNT, &begin.details.opid);
+    let signed_psbt = minter.wallet.sign_psbt(begin.psbt, None).unwrap();
+    assert!(!minter.bridge_end(signed_psbt).txid.is_empty());
+
+    // the lock is on chain but not finalized: the transfer stays waiting, with a retryable error
+    let refresh = holder.refresh_result(None, &[]).unwrap();
+    let failures: Vec<&Error> = refresh
+        .values()
+        .filter_map(|t| t.failure.as_ref())
+        .collect();
+    assert!(
+        matches!(
+            failures.as_slice(),
+            [Error::Network { details }] if details.contains("not final yet")
+        ),
+        "{failures:?}"
+    );
+    assert!(holder.check_test_transfer_status_incoming(
+        &receive_data.recipient_id,
+        TransferStatus::WaitingCounterparty
+    ));
+
+    evm_finalize();
+    holder.wait_for_refresh(None);
+    mine(false);
+    holder.refresh_all();
+    assert!(
+        holder.check_test_transfer_status_incoming(
+            &receive_data.recipient_id,
+            TransferStatus::Settled
+        )
+    );
+    assert_eq!(holder.get_asset_balance(&asset.asset_id).settled, AMOUNT);
 }
 
 #[cfg(feature = "electrum")]

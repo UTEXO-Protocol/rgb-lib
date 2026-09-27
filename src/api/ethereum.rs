@@ -32,6 +32,13 @@ pub(crate) struct EthLog {
     pub removed: bool,
 }
 
+/// The part of an `eth_getBlockByNumber` block this client reads.
+#[derive(Debug, Deserialize)]
+struct BlockHeader {
+    /// Block number (hex).
+    number: String,
+}
+
 /// Decoded FundsIn event from the Bridge contract.
 #[derive(Debug)]
 pub(crate) struct FundsInEvent {
@@ -237,6 +244,16 @@ impl EthClient {
         Ok(logs.into_iter().filter(|l| !l.removed).collect())
     }
 
+    /// Number of the latest block the chain considers finalized.
+    pub(crate) fn finalized_block_number(&self) -> Result<u64, Error> {
+        let block: BlockHeader = self
+            .call("eth_getBlockByNumber", ("finalized", false))?
+            .ok_or_else(|| Error::Network {
+                details: s!("eth_getBlockByNumber reports no finalized block"),
+            })?;
+        quantity(&block.number)
+    }
+
     pub(crate) fn client_version(&self) -> Result<String, Error> {
         self.call("web3_clientVersion", NullRequest)?
             .ok_or_else(|| Error::Network {
@@ -409,6 +426,40 @@ mod test {
             .unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].block_number().unwrap(), Some(0x11));
+    }
+
+    #[test]
+    fn reads_the_finalized_block_number() {
+        let mut server = mockito::Server::new();
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": ["finalized", false],
+            "id": 1,
+        });
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::Json(request))
+            .with_status(200)
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":{"number":"0x1e5c07c2","hash":"0x00"}}"#)
+            .create();
+        let finalized = EthClient::new(&server.url())
+            .unwrap()
+            .finalized_block_number()
+            .unwrap();
+        assert_eq!(finalized, 0x1e5c07c2);
+        mock.assert();
+    }
+
+    #[test]
+    fn no_finalized_block_is_an_error() {
+        let (server, _mock) = rpc_server(serde_json::Value::Null);
+        assert!(
+            EthClient::new(&server.url())
+                .unwrap()
+                .finalized_block_number()
+                .is_err()
+        );
     }
 
     #[test]

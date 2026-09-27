@@ -285,3 +285,31 @@ pub(crate) fn bridge_funds_in(bridge: &str, amount: u64, opid: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// Mine past anvil's finality lag, so every lock made so far is finalized.
+///
+/// Anvil reports as `finalized` the block 64 below its head.
+pub(crate) fn evm_finalize() {
+    let mut args = anvil_exec();
+    args.extend([
+        s!("cast"),
+        s!("rpc"),
+        s!("anvil_mine"),
+        s!("64"),
+        s!("--rpc-url"),
+        s!("http://localhost:8545"),
+    ]);
+
+    let output = Command::new("docker")
+        .stdin(Stdio::null())
+        .arg("compose")
+        .args(&args)
+        .output()
+        .expect("failed to mine anvil blocks");
+
+    assert!(
+        output.status.success(),
+        "cast rpc anvil_mine failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
