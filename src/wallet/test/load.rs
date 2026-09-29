@@ -558,3 +558,48 @@ fn manifest_fingerprint_mismatch_fail() {
         .unwrap();
     assert_matches!(err, Error::FingerprintMismatch);
 }
+
+#[test]
+#[parallel]
+fn keychain_layout_roundtrip_success() {
+    let test_data_dir = create_test_data_dir();
+    let test_data_dir_str = test_data_dir.to_string_lossy().to_string();
+
+    // both sides under the one account at coin type 0, the only one some signers export
+    let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+    let (_, account_xpub, _) = crate::utils::get_account_data_at_coin_type(
+        &BitcoinNetwork::Regtest,
+        &keys.mnemonic,
+        0,
+        WitnessVersion::Taproot,
+    )
+    .unwrap();
+    let keychain_layout = KeychainLayoutOverrides {
+        colored_keychain: Some(9),
+        colored_coin_type: Some(0),
+        vanilla_coin_type: Some(0),
+    };
+    let mut wallet_keys =
+        SinglesigKeys::from_keys_no_mnemonic(&keys, Some(10)).with_keychain_layout(keychain_layout);
+    wallet_keys.account_xpub_colored = account_xpub.to_string();
+    wallet_keys.account_xpub_vanilla = account_xpub.to_string();
+    let wallet_data = get_test_wallet_data(&test_data_dir_str);
+    let wallet = Wallet::new(wallet_data.clone(), wallet_keys.clone()).unwrap();
+    let descriptors = wallet.get_descriptors();
+    drop(wallet);
+
+    // the manifest gives the layout back
+    let loaded = Wallet::load(&test_data_dir_str, &keys.master_fingerprint, None).unwrap();
+    assert_eq!(loaded.get_keys().keychain_layout, keychain_layout);
+    assert_eq!(loaded.get_keys().vanilla_keychain, Some(10));
+    assert_eq!(loaded.get_descriptors(), descriptors);
+    drop(loaded);
+
+    // and pins it: another colored keychain is another wallet
+    let other_layout = wallet_keys.with_keychain_layout(KeychainLayoutOverrides {
+        colored_keychain: Some(8),
+        ..keychain_layout
+    });
+    let err = Wallet::new(wallet_data, other_layout).err().unwrap();
+    assert_matches!(err, Error::WalletSettingMismatch { setting, .. } if setting == "colored_keychain");
+}

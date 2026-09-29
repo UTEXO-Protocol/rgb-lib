@@ -357,6 +357,13 @@ pub enum Error {
         details: String,
     },
 
+    /// The requested keychain layout (coin types and keychain indexes) is invalid
+    #[error("Invalid keychain layout: {details}")]
+    InvalidKeychainLayout {
+        /// Error details
+        details: String,
+    },
+
     /// The provided mnemonic phrase is invalid
     #[error("Invalid mnemonic error: {details}")]
     InvalidMnemonic {

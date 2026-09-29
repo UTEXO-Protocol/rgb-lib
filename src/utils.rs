@@ -283,6 +283,64 @@ pub(crate) fn get_coin_type(bitcoin_network: &BitcoinNetwork, rgb: bool) -> u32 
     }
 }
 
+/// Where the two sides of a singlesig wallet live, resolved against the wallet network.
+///
+/// The default is rgb-lib's standard layout: the colored side on its own coin type
+/// (827166' on mainnet, 827167' elsewhere) at keychain 0, the vanilla side on the standard
+/// Bitcoin coin type (0'/1') at keychain 0 or the requested `vanilla_keychain`.
+///
+/// Hosts whose signer can only export the standard BIP-86 account (hardware wallets) can put
+/// both sides under that one account by overriding the colored coin type and choosing two
+/// distinct keychain indexes (see [`KeychainLayoutOverrides`]). The layout is purely local:
+/// invoices, consignments, ACKs and witness transactions never carry derivation paths, so
+/// singlesig transfers interoperate with wallets that use the default layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeychainLayout {
+    pub(crate) colored_coin_type: u32,
+    pub(crate) vanilla_coin_type: u32,
+    pub(crate) colored_keychain: u8,
+    pub(crate) vanilla_keychain: u8,
+}
+
+impl KeychainLayout {
+    pub(crate) fn resolve(
+        bitcoin_network: &BitcoinNetwork,
+        overrides: &KeychainLayoutOverrides,
+        vanilla_keychain: Option<u8>,
+    ) -> Result<Self, Error> {
+        let layout = Self {
+            colored_coin_type: overrides
+                .colored_coin_type
+                .unwrap_or(get_coin_type(bitcoin_network, true)),
+            vanilla_coin_type: overrides
+                .vanilla_coin_type
+                .unwrap_or(get_coin_type(bitcoin_network, false)),
+            colored_keychain: overrides.colored_keychain.unwrap_or(KEYCHAIN_RGB),
+            vanilla_keychain: vanilla_keychain.unwrap_or(KEYCHAIN_BTC),
+        };
+        for (side, coin_type) in [
+            ("colored", layout.colored_coin_type),
+            ("vanilla", layout.vanilla_coin_type),
+        ] {
+            if ChildNumber::from_hardened_idx(coin_type).is_err() {
+                return Err(Error::InvalidKeychainLayout {
+                    details: format!("{side} coin type {coin_type} is not a valid hardened index"),
+                });
+            }
+        }
+        if layout.colored_coin_type == layout.vanilla_coin_type
+            && layout.colored_keychain == layout.vanilla_keychain
+        {
+            // one keychain would feed both BDK keychains: colored UTXOs would be spendable as
+            // vanilla ones and RGB allocations could be burnt by a plain BTC send
+            return Err(Error::InvalidKeychainLayout {
+                details: s!("colored and vanilla sides resolve to the same keychain"),
+            });
+        }
+        Ok(layout)
+    }
+}
+
 pub(crate) fn get_account_derivation_children(
     witness_version: WitnessVersion,
     coin_type: u32,
@@ -297,10 +355,9 @@ pub(crate) fn get_account_derivation_children(
 fn derive_account_xprv_from_mnemonic(
     bitcoin_network: &BitcoinNetwork,
     mnemonic: &str,
-    rgb: bool,
+    coin_type: u32,
     witness_version: WitnessVersion,
 ) -> Result<(Xpriv, Fingerprint), Error> {
-    let coin_type = get_coin_type(bitcoin_network, rgb);
     let account_derivation_children = get_account_derivation_children(witness_version, coin_type);
     let mnemonic = Mnemonic::parse_in(Language::English, mnemonic.to_string())?;
     let master_xprv = Xpriv::new_master(*bitcoin_network, &mnemonic.to_seed("")).unwrap();
@@ -322,8 +379,27 @@ pub fn get_account_data(
     rgb: bool,
     witness_version: WitnessVersion,
 ) -> Result<(Xpriv, Xpub, Fingerprint), Error> {
+    get_account_data_at_coin_type(
+        bitcoin_network,
+        mnemonic,
+        get_coin_type(bitcoin_network, rgb),
+        witness_version,
+    )
+}
+
+/// Get the account-level xPriv and xPub for the given mnemonic, Bitcoin network, coin type and
+/// witness version.
+///
+/// Use this to prepare [`crate::wallet::SinglesigKeys`] for a non-default keychain layout
+/// (see `colored_coin_type` / `vanilla_coin_type`).
+pub fn get_account_data_at_coin_type(
+    bitcoin_network: &BitcoinNetwork,
+    mnemonic: &str,
+    coin_type: u32,
+    witness_version: WitnessVersion,
+) -> Result<(Xpriv, Xpub, Fingerprint), Error> {
     let (account_xprv, master_fingerprint) =
-        derive_account_xprv_from_mnemonic(bitcoin_network, mnemonic, rgb, witness_version)?;
+        derive_account_xprv_from_mnemonic(bitcoin_network, mnemonic, coin_type, witness_version)?;
     let account_xpub = get_xpub_from_xprv(&account_xprv);
     Ok((account_xprv, account_xpub, master_fingerprint))
 }
@@ -343,17 +419,16 @@ pub(crate) fn get_account_xpubs(
 fn derive_descriptor(
     bitcoin_network: &BitcoinNetwork,
     mnemonic: &str,
-    rgb: bool,
+    coin_type: u32,
     keychain: u8,
     expected_xpub: &Xpub,
     witness_version: WitnessVersion,
 ) -> Result<String, Error> {
     let (account_xprv, account_xpub, master_fingerprint) =
-        get_account_data(bitcoin_network, mnemonic, rgb, witness_version)?;
+        get_account_data_at_coin_type(bitcoin_network, mnemonic, coin_type, witness_version)?;
     if account_xpub != *expected_xpub {
         return Err(Error::InvalidBitcoinKeys);
     }
-    let coin_type = get_coin_type(bitcoin_network, rgb);
     calculate_descriptor_from_xprv(
         &master_fingerprint,
         coin_type,
@@ -366,7 +441,7 @@ fn derive_descriptor(
 pub(crate) fn get_descriptors(
     bitcoin_network: &BitcoinNetwork,
     mnemonic: &str,
-    vanilla_keychain: Option<u8>,
+    layout: &KeychainLayout,
     expected_xpub_btc: &Xpub,
     expected_xpub_rgb: &Xpub,
     witness_version: WitnessVersion,
@@ -374,16 +449,16 @@ pub(crate) fn get_descriptors(
     let colored = derive_descriptor(
         bitcoin_network,
         mnemonic,
-        true,
-        KEYCHAIN_RGB,
+        layout.colored_coin_type,
+        layout.colored_keychain,
         expected_xpub_rgb,
         witness_version,
     )?;
     let vanilla = derive_descriptor(
         bitcoin_network,
         mnemonic,
-        false,
-        vanilla_keychain.unwrap_or(KEYCHAIN_BTC),
+        layout.vanilla_coin_type,
+        layout.vanilla_keychain,
         expected_xpub_btc,
         witness_version,
     )?;
@@ -391,27 +466,26 @@ pub(crate) fn get_descriptors(
 }
 
 pub(crate) fn get_descriptors_from_xpubs(
-    bitcoin_network: &BitcoinNetwork,
     master_fingerprint: &str,
     xpub_rgb: &Xpub,
     xpub_btc: &Xpub,
-    vanilla_keychain: Option<u8>,
+    layout: &KeychainLayout,
     witness_version: WitnessVersion,
 ) -> Result<WalletDescriptors, Error> {
     let master_fingerprint =
         Fingerprint::from_str(master_fingerprint).map_err(|_| Error::InvalidFingerprint)?;
     let colored = calculate_descriptor_from_xpub(
         &master_fingerprint,
-        get_coin_type(bitcoin_network, true),
+        layout.colored_coin_type,
         xpub_rgb,
-        KEYCHAIN_RGB,
+        layout.colored_keychain,
         witness_version,
     )?;
     let vanilla = calculate_descriptor_from_xpub(
         &master_fingerprint,
-        get_coin_type(bitcoin_network, false),
+        layout.vanilla_coin_type,
         xpub_btc,
-        vanilla_keychain.unwrap_or(KEYCHAIN_BTC),
+        layout.vanilla_keychain,
         witness_version,
     )?;
     Ok(WalletDescriptors { colored, vanilla })
@@ -1485,5 +1559,393 @@ mod tests_transport_url_nonce {
             "rpcs://proxy.example.com/0.2/json-rpc?foo=bar&baz=qux"
         );
         assert_eq!(nonce, Some(vec![0xab]));
+    }
+}
+
+#[cfg(test)]
+mod tests_keychain_layout {
+    use super::*;
+    use crate::keys::generate_keys;
+    use crate::wallet::SinglesigKeys;
+    use bdk_wallet::descriptor::ExtendedDescriptor;
+
+    fn norm(desc: &str) -> String {
+        desc.replace('h', "'")
+    }
+
+    // both sides under the standard BIP-86 account at coin type 0, colored on keychain 9 (the
+    // vanilla one, 10, is SinglesigKeys::vanilla_keychain)
+    fn single_account() -> KeychainLayoutOverrides {
+        KeychainLayoutOverrides {
+            colored_keychain: Some(9),
+            colored_coin_type: Some(0),
+            vanilla_coin_type: Some(0),
+        }
+    }
+
+    #[test]
+    fn default_layout_matches_standard_rgb_lib_layout() {
+        let none = KeychainLayoutOverrides::default();
+        let mainnet = KeychainLayout::resolve(&BitcoinNetwork::Mainnet, &none, None).unwrap();
+        assert_eq!(
+            mainnet,
+            KeychainLayout {
+                colored_coin_type: COIN_RGB_MAINNET,
+                vanilla_coin_type: 0,
+                colored_keychain: KEYCHAIN_RGB,
+                vanilla_keychain: KEYCHAIN_BTC,
+            }
+        );
+        let signet = KeychainLayout::resolve(&BitcoinNetwork::Signet, &none, Some(10)).unwrap();
+        assert_eq!(signet.colored_coin_type, COIN_RGB_TESTNET);
+        assert_eq!(signet.vanilla_coin_type, 1);
+        assert_eq!(signet.vanilla_keychain, 10);
+    }
+
+    #[test]
+    fn layout_rejects_shared_keychain() {
+        // colored moved onto the vanilla coin type without a distinct keychain
+        let mut overrides = KeychainLayoutOverrides {
+            colored_coin_type: Some(0),
+            ..Default::default()
+        };
+        let err = KeychainLayout::resolve(&BitcoinNetwork::Mainnet, &overrides, None).unwrap_err();
+        assert!(matches!(err, Error::InvalidKeychainLayout { .. }));
+        overrides.colored_keychain = Some(9);
+        let err =
+            KeychainLayout::resolve(&BitcoinNetwork::Mainnet, &overrides, Some(9)).unwrap_err();
+        assert!(matches!(err, Error::InvalidKeychainLayout { .. }));
+    }
+
+    #[test]
+    fn layout_rejects_non_hardenable_coin_type() {
+        let overrides = KeychainLayoutOverrides {
+            colored_coin_type: Some(0x8000_0000),
+            colored_keychain: Some(9),
+            ..Default::default()
+        };
+        let err =
+            KeychainLayout::resolve(&BitcoinNetwork::Mainnet, &overrides, Some(10)).unwrap_err();
+        assert!(matches!(err, Error::InvalidKeychainLayout { .. }));
+    }
+
+    #[test]
+    fn single_account_layout_from_xpubs() {
+        // hardware-wallet layout: both sides under the one exported BIP-86 account
+        let keys = generate_keys(BitcoinNetwork::Mainnet, WitnessVersion::Taproot);
+        let net = BitcoinNetwork::Mainnet;
+        let (_, account_xpub, _) =
+            get_account_data_at_coin_type(&net, &keys.mnemonic, 0, WitnessVersion::Taproot)
+                .unwrap();
+        let layout = KeychainLayout::resolve(&net, &single_account(), Some(10)).unwrap();
+        let descs = get_descriptors_from_xpubs(
+            &keys.master_fingerprint,
+            &account_xpub,
+            &account_xpub,
+            &layout,
+            WitnessVersion::Taproot,
+        )
+        .unwrap();
+        let fp = &keys.master_fingerprint;
+        assert!(
+            norm(&descs.colored).contains(&format!("[{fp}/86'/0'/0'/9]")),
+            "{}",
+            descs.colored
+        );
+        assert!(
+            norm(&descs.vanilla).contains(&format!("[{fp}/86'/0'/0'/10]")),
+            "{}",
+            descs.vanilla
+        );
+        assert_ne!(descs.colored, descs.vanilla);
+
+        // the mnemonic path derives exactly the same descriptors (public parts)
+        let with_mnemonic = get_descriptors(
+            &net,
+            &keys.mnemonic,
+            &layout,
+            &account_xpub,
+            &account_xpub,
+            WitnessVersion::Taproot,
+        )
+        .unwrap();
+        assert!(norm(&with_mnemonic.colored).contains(&format!("[{fp}/86'/0'/0'/9]")));
+        assert!(norm(&with_mnemonic.vanilla).contains(&format!("[{fp}/86'/0'/0'/10]")));
+    }
+
+    #[test]
+    fn default_layout_descriptors_unchanged() {
+        let keys = generate_keys(BitcoinNetwork::Regtest, WitnessVersion::Taproot);
+        let net = BitcoinNetwork::Regtest;
+        let nk = net.network_kind();
+        let xpub_rgb = str_to_xpub(&keys.account_xpub_colored, &nk).unwrap();
+        let xpub_btc = str_to_xpub(&keys.account_xpub_vanilla, &nk).unwrap();
+        let layout =
+            KeychainLayout::resolve(&net, &KeychainLayoutOverrides::default(), None).unwrap();
+        let descs = get_descriptors_from_xpubs(
+            &keys.master_fingerprint,
+            &xpub_rgb,
+            &xpub_btc,
+            &layout,
+            WitnessVersion::Taproot,
+        )
+        .unwrap();
+        let fp = &keys.master_fingerprint;
+        assert!(norm(&descs.colored).contains(&format!("[{fp}/86'/827167'/0'/0]")));
+        assert!(norm(&descs.vanilla).contains(&format!("[{fp}/86'/1'/0'/0]")));
+    }
+
+    fn inconsistent_xpubs(res: Result<(WalletDescriptors, bool), Error>) -> bool {
+        matches!(
+            res,
+            Err(Error::InvalidKeychainLayout { details })
+                if details == "account xpubs are inconsistent with the configured coin types"
+        )
+    }
+
+    #[test]
+    fn account_xpubs_must_match_the_coin_types() {
+        for net in [BitcoinNetwork::Mainnet, BitcoinNetwork::Signet] {
+            let keys = generate_keys(net, WitnessVersion::Taproot);
+            let (_, account_xpub, _) =
+                get_account_data_at_coin_type(&net, &keys.mnemonic, 0, WitnessVersion::Taproot)
+                    .unwrap();
+            let account_xpub = account_xpub.to_string();
+            for with_mnemonic in [false, true] {
+                let default_keys = if with_mnemonic {
+                    SinglesigKeys::from_keys(&keys, None)
+                } else {
+                    SinglesigKeys::from_keys_no_mnemonic(&keys, None)
+                };
+
+                // default layout: two coin types, two account xPubs
+                default_keys.build_descriptors(&net).unwrap();
+
+                // both sides under one account: one coin type, the same account xPub twice
+                let mut single = default_keys.clone().with_keychain_layout(single_account());
+                single.vanilla_keychain = Some(10);
+                single.account_xpub_colored = account_xpub.clone();
+                single.account_xpub_vanilla = account_xpub.clone();
+                single.build_descriptors(&net).unwrap();
+
+                // same xPub for both sides but the colored coin type left to its default: the
+                // colored descriptor would claim 827166'/827167' for a key at 0'
+                let mut forgot_colored_coin = single.clone();
+                forgot_colored_coin.keychain_layout.colored_coin_type = None;
+                assert!(inconsistent_xpubs(
+                    forgot_colored_coin.build_descriptors(&net)
+                ));
+
+                // off mainnet the vanilla default is 1', so the vanilla coin type is needed too
+                let mut forgot_vanilla_coin = single.clone();
+                forgot_vanilla_coin.keychain_layout.vanilla_coin_type = None;
+                let res = forgot_vanilla_coin.build_descriptors(&net);
+                if net == BitcoinNetwork::Mainnet {
+                    res.unwrap();
+                } else {
+                    assert!(inconsistent_xpubs(res));
+                }
+
+                // default coin types with the same xPub for both sides
+                let mut same_xpub = default_keys.clone();
+                same_xpub.account_xpub_colored = same_xpub.account_xpub_vanilla.clone();
+                assert!(inconsistent_xpubs(same_xpub.build_descriptors(&net)));
+
+                // one coin type, but the colored xPub is still the RGB account's
+                let mut other_xpub = single.clone();
+                other_xpub.account_xpub_colored = keys.account_xpub_colored.clone();
+                assert!(inconsistent_xpubs(other_xpub.build_descriptors(&net)));
+            }
+        }
+    }
+
+    #[test]
+    fn account_xpubs_compared_as_keys() {
+        let net = BitcoinNetwork::Signet;
+        let keys = generate_keys(net, WitnessVersion::Taproot);
+        let (_, account_xpub, _) =
+            get_account_data_at_coin_type(&net, &keys.mnemonic, 0, WitnessVersion::Taproot)
+                .unwrap();
+        let mut single = SinglesigKeys::from_keys_no_mnemonic(&keys, Some(10))
+            .with_keychain_layout(single_account());
+        single.account_xpub_colored = account_xpub.to_string();
+        single.account_xpub_vanilla = account_xpub.to_string();
+        let (descs, _) = single.build_descriptors(&net).unwrap();
+
+        // the same key encoded with mainnet version bytes (xpub) on one side
+        let mut mainnet_encoded = account_xpub;
+        mainnet_encoded.network = NetworkKind::Main;
+        assert!(mainnet_encoded.to_string().starts_with("xpub"));
+        let mut mixed = single.clone();
+        mixed.account_xpub_colored = mainnet_encoded.to_string();
+        assert_eq!(mixed.build_descriptors(&net).unwrap().0, descs);
+
+        // the same key with other metadata, as a host that only has the public key and chain
+        // code would build it: accepted, and it derives the same scripts
+        let mut relabelled = account_xpub;
+        relabelled.depth = 0;
+        relabelled.parent_fingerprint = Fingerprint::default();
+        relabelled.child_number = ChildNumber::from_normal_idx(0).unwrap();
+        let mut bare = single.clone();
+        bare.account_xpub_colored = relabelled.to_string();
+        let (bare_descs, _) = bare.build_descriptors(&net).unwrap();
+        let script_at = |desc: &str, index: u32| {
+            ExtendedDescriptor::from_str(desc)
+                .unwrap()
+                .at_derivation_index(index)
+                .unwrap()
+                .script_pubkey()
+        };
+        for index in [0, 1, 100] {
+            assert_eq!(
+                script_at(&bare_descs.colored, index),
+                script_at(&descs.colored, index)
+            );
+        }
+
+        // and it is still the same key when the coin types differ
+        bare.keychain_layout = KeychainLayoutOverrides::default();
+        bare.account_xpub_vanilla = account_xpub.to_string();
+        assert!(inconsistent_xpubs(bare.build_descriptors(&net)));
+    }
+
+    // Serialized shapes written before SinglesigKeys grouped the overrides into
+    // KeychainLayoutOverrides, for the key of "abandon ... about" on signet. The account xPub at
+    // m/86'/0'/0' serves both sides of the single-account layout; the other two are the default
+    // layout's accounts (m/86'/827167'/0' and m/86'/1'/0').
+    const TPUB_COIN_0: &str = "tpubDC3pD7UZXnsgh3EBjbtBQiB1FnLask7UHBSunZ1DPK4dCFFZoFRkgxHB8gt42FvLzx1DpxfHWxAsYaY6b643RVcGjDxXxns7wKKYnnfEcbB";
+    const TPUB_COLORED: &str = "tpubDCtpoJs6YJcjLnr9gq6jYriYNMuWEu8mSDvEQU5st3ZkJbFqqzwpHUiPvxqD2366ciFAfpehk1k2d7Tyk7AJEr8uZva7KfnX4RpsiVSoEcZ";
+    const TPUB_VANILLA: &str = "tpubDDfvzhdVV4unsoKt5aE6dcsNsfeWbTgmLZPi8LQDYU2xixrYemMfWJ3BaVneH3u7DBQePdTwhpybaKRU95pi6PMUtLPBJLVQRpzEnjfjZzX";
+
+    #[cfg(not(feature = "camel_case"))]
+    const KEYS_JSON: &str = r#"{"account_xpub_vanilla":"TPUB","account_xpub_colored":"TPUB","vanilla_keychain":10,"colored_keychain":9,"colored_coin_type":0,"vanilla_coin_type":0,"master_fingerprint":"73c5da0a","mnemonic":null,"witness_version":"Taproot"}"#;
+    #[cfg(feature = "camel_case")]
+    const KEYS_JSON: &str = r#"{"accountXpubVanilla":"TPUB","accountXpubColored":"TPUB","vanillaKeychain":10,"coloredKeychain":9,"coloredCoinType":0,"vanillaCoinType":0,"masterFingerprint":"73c5da0a","mnemonic":null,"witnessVersion":"Taproot"}"#;
+    // the shape before the layout existed at all
+    #[cfg(not(feature = "camel_case"))]
+    const KEYS_JSON_NO_LAYOUT: &str = r#"{"account_xpub_vanilla":"TPUB_V","account_xpub_colored":"TPUB_C","vanilla_keychain":null,"master_fingerprint":"73c5da0a","mnemonic":null,"witness_version":"Taproot"}"#;
+    #[cfg(feature = "camel_case")]
+    const KEYS_JSON_NO_LAYOUT: &str = r#"{"accountXpubVanilla":"TPUB_V","accountXpubColored":"TPUB_C","vanillaKeychain":null,"masterFingerprint":"73c5da0a","mnemonic":null,"witnessVersion":"Taproot"}"#;
+
+    #[test]
+    fn singlesig_keys_json_keeps_its_flat_shape() {
+        let json = KEYS_JSON.replace("TPUB", TPUB_COIN_0);
+        let keys: SinglesigKeys = serde_json::from_str(&json).unwrap();
+        assert_eq!(keys.keychain_layout, single_account());
+        assert_eq!(keys.vanilla_keychain, Some(10));
+        keys.build_descriptors(&BitcoinNetwork::Signet).unwrap();
+        // written back field for field, byte for byte
+        assert_eq!(serde_json::to_string(&keys).unwrap(), json);
+
+        let json = KEYS_JSON_NO_LAYOUT
+            .replace("TPUB_V", TPUB_VANILLA)
+            .replace("TPUB_C", TPUB_COLORED);
+        let keys: SinglesigKeys = serde_json::from_str(&json).unwrap();
+        assert_eq!(keys.keychain_layout, KeychainLayoutOverrides::default());
+        keys.build_descriptors(&BitcoinNetwork::Signet).unwrap();
+
+        // numeric strings are still accepted inside the flattened struct, and a bad value still
+        // fails the whole deserialization instead of falling back to the default layout
+        let json = KEYS_JSON.replace("TPUB", TPUB_COIN_0);
+        let as_strings = json.replace(":9,", r#":"9","#).replace(":0,", r#":"0","#);
+        let keys: SinglesigKeys = serde_json::from_str(&as_strings).unwrap();
+        assert_eq!(keys.keychain_layout, single_account());
+        let bad = json.replace(":9,", r#":"nine","#);
+        assert!(serde_json::from_str::<SinglesigKeys>(&bad).is_err());
+    }
+
+    const MANIFEST_JSON: &str = r#"{
+  "version": 1,
+  "bitcoin_network": "Signet",
+  "database_type": "Sqlite",
+  "max_allocations_per_utxo": 1,
+  "supported_schemas": [
+    "Nia"
+  ],
+  "reuse_addresses": false,
+  "account_xpub_vanilla": "TPUB",
+  "account_xpub_colored": "TPUB",
+  "vanilla_keychain": 10,
+  "colored_keychain": 9,
+  "colored_coin_type": 0,
+  "vanilla_coin_type": 0,
+  "master_fingerprint": "73c5da0a",
+  "witness_version": "Taproot"
+}"#;
+    // the four settings apart, so a mix-up between them shows
+    const MANIFEST_JSON_DISTINCT: &str = r#"{
+  "version": 1,
+  "bitcoin_network": "Signet",
+  "database_type": "Sqlite",
+  "max_allocations_per_utxo": 1,
+  "supported_schemas": [
+    "Nia"
+  ],
+  "reuse_addresses": false,
+  "account_xpub_vanilla": "TPUB_V",
+  "account_xpub_colored": "TPUB_C",
+  "vanilla_keychain": 10,
+  "colored_keychain": 9,
+  "colored_coin_type": 0,
+  "vanilla_coin_type": 5,
+  "master_fingerprint": "73c5da0a",
+  "witness_version": "Taproot"
+}"#;
+    const MANIFEST_JSON_DEFAULT: &str = r#"{
+  "version": 1,
+  "bitcoin_network": "Signet",
+  "database_type": "Sqlite",
+  "max_allocations_per_utxo": 1,
+  "supported_schemas": [
+    "Nia"
+  ],
+  "reuse_addresses": false,
+  "account_xpub_vanilla": "TPUB_V",
+  "account_xpub_colored": "TPUB_C",
+  "vanilla_keychain": 0,
+  "master_fingerprint": "73c5da0a",
+  "witness_version": "Taproot"
+}"#;
+
+    #[test]
+    fn manifest_keeps_its_shape() {
+        use crate::wallet::WalletManifest;
+
+        let json = MANIFEST_JSON.replace("TPUB", TPUB_COIN_0);
+        let manifest: WalletManifest = serde_json::from_str(&json).unwrap();
+        let (wallet_data, keys) = manifest.into_parts(s!("data_dir"), None);
+        assert_eq!(keys.keychain_layout, single_account());
+        assert_eq!(keys.vanilla_keychain, Some(10));
+        keys.build_descriptors(&wallet_data.bitcoin_network)
+            .unwrap();
+        let rewritten = WalletManifest::new(&wallet_data, &keys);
+        assert_eq!(serde_json::to_string_pretty(&rewritten).unwrap(), json);
+
+        let json = MANIFEST_JSON_DISTINCT
+            .replace("TPUB_V", TPUB_VANILLA)
+            .replace("TPUB_C", TPUB_COIN_0);
+        let manifest: WalletManifest = serde_json::from_str(&json).unwrap();
+        let (wallet_data, keys) = manifest.into_parts(s!("data_dir"), None);
+        assert_eq!(
+            keys.keychain_layout,
+            KeychainLayoutOverrides {
+                colored_keychain: Some(9),
+                colored_coin_type: Some(0),
+                vanilla_coin_type: Some(5),
+            }
+        );
+        let rewritten = WalletManifest::new(&wallet_data, &keys);
+        assert_eq!(serde_json::to_string_pretty(&rewritten).unwrap(), json);
+
+        let json = MANIFEST_JSON_DEFAULT
+            .replace("TPUB_V", TPUB_VANILLA)
+            .replace("TPUB_C", TPUB_COLORED);
+        let manifest: WalletManifest = serde_json::from_str(&json).unwrap();
+        let (wallet_data, keys) = manifest.into_parts(s!("data_dir"), None);
+        assert_eq!(keys.keychain_layout, KeychainLayoutOverrides::default());
+        keys.build_descriptors(&wallet_data.bitcoin_network)
+            .unwrap();
+        let rewritten = WalletManifest::new(&wallet_data, &keys);
+        assert_eq!(serde_json::to_string_pretty(&rewritten).unwrap(), json);
     }
 }
