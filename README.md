@@ -4,6 +4,8 @@
 compatible wallets in a simple fashion, without having to worry about Bitcoin
 and RGB internals.
 
+<!-- test: ai-review label trigger -->
+
 It primarily uses [bdk] to provide Bitcoin walleting functionalities, and
 several RGB libraries to provide RGB specific functionalities that can be found
 in the [rgb-protocol] organization.
