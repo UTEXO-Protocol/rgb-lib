@@ -20,3 +20,6 @@ pub mod transfer_transport_endpoint;
 pub mod transport_endpoint;
 pub mod txo;
 pub mod wallet_transaction;
+
+#[cfg(feature = "mpc")]
+pub mod mpc_prepared_inputs;

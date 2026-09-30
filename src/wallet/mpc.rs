@@ -45,12 +45,14 @@ impl WalletCore for MpcWallet {
     ) -> Result<(), Error> {
         debug!(self.logger(), "MPC: Syncing TXOs from indexer...");
 
-        // Get colored (External) MPC addresses and query indexer for their UTXOs
-        let colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
+        // External funding is colored; Internal outputs are colored only when
+        // RGB preparation has already recorded them (the upstream change policy).
+        let mut colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
+        colored_addrs.extend(txn.get_mpc_addresses_by_keychain(1)?);
 
         let db_txos = txn.iter_txos()?;
         let db_outpoints: HashSet<String> = db_txos
-            .into_iter()
+            .iter()
             .filter(|t| t.exists && !t.spent)
             .map(|u| u.outpoint().to_string())
             .collect();
@@ -69,6 +71,13 @@ impl WalletCore for MpcWallet {
 
             for (outpoint, txout) in utxos {
                 let op_str = outpoint.to_string();
+                if addr.keychain == 1
+                    && !db_txos
+                        .iter()
+                        .any(|txo| txo.outpoint().to_string() == op_str)
+                {
+                    continue;
+                }
                 if db_outpoints.contains(&op_str) {
                     continue;
                 }
@@ -113,38 +122,9 @@ impl WalletOffline for MpcWallet {
         keychain: KeychainKind,
         _count: u32,
     ) -> Result<BdkAddress, Error> {
-        let keychain_u8 = match keychain {
-            KeychainKind::External => 0u8,
-            KeychainKind::Internal => 1u8,
-        };
-
         let txn = self.database().begin_transaction()?;
-
-        if self.wallet_data().reuse_addresses
-            && let Some(last) = txn.get_last_mpc_address(keychain_u8)?
-        {
-            return parse_address_str(&last.address, self.bitcoin_network());
-        }
-
-        let index = txn.get_next_mpc_derivation_index(keychain_u8)?;
-
-        let addr_info: MpcAddressInfo =
-            self.provider
-                .create_address(self.bitcoin_network(), keychain, index)?;
-
-        // Save to DB
-        let db_addr = database::entities::mpc_address::ActiveModel {
-            address: ActiveValue::Set(addr_info.address.clone()),
-            script_pubkey: ActiveValue::Set(addr_info.script_pubkey.to_hex_string()),
-            signing_key_id: ActiveValue::Set(addr_info.signing_key_id),
-            keychain: ActiveValue::Set(keychain_u8),
-            derivation_index: ActiveValue::Set(index),
-            ..Default::default()
-        };
-        txn.set_mpc_address(db_addr)?;
+        let address = self.register_address(&txn, keychain)?;
         txn.commit()?;
-
-        let address = parse_address_str(&addr_info.address, self.bitcoin_network())?;
         Ok(address)
     }
 
@@ -152,6 +132,45 @@ impl WalletOffline for MpcWallet {
         // Return empty iterator — MPC vanilla UTXOs are tracked separately
         // This is OK because all callers that need vanilla UTXOs are overridden
         std::iter::empty()
+    }
+
+    fn get_reserved_vanilla_outpoints(&self, txn: &DbTxn) -> Result<Vec<BdkOutPoint>, Error> {
+        let mut reserved: Vec<BdkOutPoint> = txn
+            .iter_reserved_txos()?
+            .into_iter()
+            .map(BdkOutPoint::from)
+            .collect();
+        // One complete transaction is committed with the RGB batch. Older
+        // operations are adopted once, only after validating their original PSBT.
+        for batch in txn
+            .iter_batch_transfers()?
+            .into_iter()
+            .filter(|batch| !batch.incoming && !batch.status.settled() && !batch.status.failed())
+        {
+            let txid = batch.txid.ok_or_else(|| Error::InvalidPsbt {
+                details: s!("Pending MPC operation has no txid"),
+            })?;
+            let tx = match txn.mpc_prepared_inputs(&txid)? {
+                Some(tx) => tx,
+                None => {
+                    let path = self.get_transfer_dir(&txid).join(UNSIGNED_PSBT_FILE);
+                    let text = fs::read_to_string(path).map_err(|_| Error::InvalidPsbt {
+                        details: s!("Pending MPC operation lacks complete reservations and its original PSBT; restore the saved operation") })?;
+                    let psbt = Psbt::from_str(&text)?;
+                    if psbt.unsigned_tx.compute_txid().to_string() != txid
+                        || psbt.unsigned_tx.input.is_empty()
+                    {
+                        return Err(Error::InvalidPsbt {
+                            details: s!("Pending MPC PSBT transaction mismatch"),
+                        });
+                    }
+                    txn.save_mpc_prepared_inputs(&psbt.unsigned_tx)?;
+                    psbt.unsigned_tx
+                }
+            };
+            reserved.extend(tx.input.iter().map(|input| input.previous_output));
+        }
+        Ok(reserved)
     }
 
     fn get_btc_balance_impl(
@@ -165,7 +184,7 @@ impl WalletOffline for MpcWallet {
 
         #[cfg(any(feature = "electrum", feature = "esplora"))]
         {
-            let vanilla_utxos = self.query_vanilla_utxos()?;
+            let vanilla_utxos = self.query_vanilla_utxos(txn)?;
             let vanilla_total: u64 = vanilla_utxos
                 .iter()
                 .map(|(_, txout, _)| txout.value.to_sat())
@@ -235,11 +254,14 @@ impl WalletOnline for MpcWallet {
             // Vanilla UTXOs not in txo table — skip silently
         }
 
+        self.release_reserved_txos(txn, &tx.compute_txid().to_string())?;
+
         Ok(tx)
     }
 
     fn prepare_psbt(
         &mut self,
+        txn: &DbTxn,
         input_outpoints: HashSet<BdkOutPoint>,
         witness_recipients: &Vec<(ScriptBuf, u64)>,
         fee_rate: FeeRate,
@@ -248,12 +270,11 @@ impl WalletOnline for MpcWallet {
         _lock_time: Option<u32>,
     ) -> Result<(Psbt, Option<BtcChange>), Error> {
         // Get vanilla UTXOs for funding
-        let vanilla_utxos = self.query_vanilla_utxos()?;
+        let vanilla_utxos = self.spendable_vanilla_utxos(txn)?;
 
         // Collect the required colored inputs (already selected by RGB logic)
-        let txn = self.database().begin_transaction()?;
-        let colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
-        txn.commit()?;
+        let mut colored_addrs = txn.get_mpc_addresses_by_keychain(0)?;
+        colored_addrs.extend(txn.get_mpc_addresses_by_keychain(1)?);
         let mut selected_inputs: Vec<(OutPoint, TxOut)> = Vec::new();
 
         for addr in &colored_addrs {
@@ -288,6 +309,11 @@ impl WalletOnline for MpcWallet {
                 })?;
         }
 
+        if selected_inputs.len() != input_outpoints.len() {
+            return Err(Error::InvalidPsbt {
+                details: s!("Required RGB input is absent from indexer"),
+            });
+        }
         // Calculate total from colored inputs
         let colored_total: u64 = selected_inputs
             .iter()
@@ -338,7 +364,7 @@ impl WalletOnline for MpcWallet {
 
         // Change output
         let change_amount = total_input - required_output_value - fee;
-        let change_address = self.get_new_addresses(KeychainKind::Internal, 1)?;
+        let change_address = self.register_address(txn, KeychainKind::Internal)?;
         let change_script = change_address.script_pubkey();
 
         if change_amount > mpc_psbt::TAPROOT_DUST {
@@ -370,7 +396,7 @@ impl WalletOnline for MpcWallet {
         size: Option<u32>,
         fee_rate: u64,
         skip_sync: bool,
-        _dry_run: bool,
+        dry_run: bool,
     ) -> Result<Psbt, Error> {
         let fee_rate_checked = self.check_fee_rate(fee_rate)?;
 
@@ -406,7 +432,7 @@ impl WalletOnline for MpcWallet {
         }
 
         // Get vanilla UTXOs for funding
-        let vanilla_utxos = self.query_vanilla_utxos()?;
+        let vanilla_utxos = self.spendable_vanilla_utxos(txn)?;
         let available: Vec<(OutPoint, TxOut)> = vanilla_utxos
             .iter()
             .map(|(op, txout, _)| (*op, txout.clone()))
@@ -444,7 +470,7 @@ impl WalletOnline for MpcWallet {
         }
 
         for _ in 0..actual_count {
-            let addr = self.get_new_addresses(KeychainKind::External, 1)?;
+            let addr = self.register_address(txn, KeychainKind::External)?;
             colored_outputs.push(TxOut {
                 value: BdkAmount::from_sat(utxo_size as u64),
                 script_pubkey: addr.script_pubkey(),
@@ -461,14 +487,58 @@ impl WalletOnline for MpcWallet {
 
         let mut outputs = colored_outputs;
         if change > mpc_psbt::TAPROOT_DUST {
-            let change_addr = self.get_new_addresses(KeychainKind::Internal, 1)?;
+            let change_addr = self.register_address(txn, KeychainKind::Internal)?;
             outputs.push(TxOut {
                 value: BdkAmount::from_sat(change),
                 script_pubkey: change_addr.script_pubkey(),
             });
         }
 
-        mpc_psbt::build_psbt(selected, outputs)
+        let psbt = mpc_psbt::build_psbt(selected, outputs)?;
+        if !dry_run {
+            self.reserve_vanilla_txos(txn, &psbt, WalletTransactionType::CreateUtxos)?;
+        }
+        Ok(psbt)
+    }
+
+    fn create_utxos_end_impl(&mut self, txn: &DbTxn, signed_psbt: &Psbt) -> Result<u8, Error> {
+        // Provider scripts are not tracked by the placeholder BDK descriptors.
+        let external_scripts: HashSet<String> = txn
+            .get_mpc_addresses_by_keychain(0)?
+            .into_iter()
+            .map(|address| address.script_pubkey)
+            .collect();
+        let outputs: Vec<_> = signed_psbt
+            .unsigned_tx
+            .output
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| external_scripts.contains(&output.script_pubkey.to_hex_string()))
+            .collect();
+        let count = u8::try_from(outputs.len()).map_err(|_| Error::Internal {
+            details: s!("too many External outputs in MPC create_utxos transaction"),
+        })?;
+
+        self.finalize_vanilla_wallet_transaction(
+            txn,
+            signed_psbt,
+            WalletTransactionType::CreateUtxos,
+        )?;
+        let tx = self.broadcast_psbt(txn, signed_psbt)?;
+        for (vout, output) in outputs {
+            // Record each output, even when the provider reuses one address. The
+            // upsert preserves spent state if completion is retried later.
+            txn.set_txo(DbTxoActMod {
+                txid: ActiveValue::Set(tx.compute_txid().to_string()),
+                vout: ActiveValue::Set(vout as u32),
+                btc_amount: ActiveValue::Set(output.value.to_sat().to_string()),
+                exists: ActiveValue::Set(true),
+                spent: ActiveValue::Set(false),
+                pending_witness: ActiveValue::Set(false),
+                ..Default::default()
+            })?;
+        }
+        Ok(count)
     }
 
     fn send_btc_begin_impl(
@@ -478,7 +548,7 @@ impl WalletOnline for MpcWallet {
         amount: u64,
         fee_rate: u64,
         skip_sync: bool,
-        _dry_run: bool,
+        dry_run: bool,
         // MPC PSBTs are built manually with a final (zero) locktime, so they are
         // always valid as LN funding txs; the caller-pinned locktime is not needed.
         _lock_time: Option<u32>,
@@ -502,7 +572,7 @@ impl WalletOnline for MpcWallet {
         let unspendable = self.get_unspendable_bdk_outpoints(txn)?;
         let unspendable_set: HashSet<OutPoint> = unspendable.into_iter().collect();
 
-        let vanilla_utxos = self.query_vanilla_utxos()?;
+        let vanilla_utxos = self.query_vanilla_utxos(txn)?;
         let available: Vec<(OutPoint, TxOut)> = vanilla_utxos
             .into_iter()
             .filter(|(op, _, _)| !unspendable_set.contains(op))
@@ -520,14 +590,18 @@ impl WalletOnline for MpcWallet {
         }];
 
         if change > mpc_psbt::TAPROOT_DUST {
-            let change_addr = self.get_new_addresses(KeychainKind::Internal, 1)?;
+            let change_addr = self.register_address(txn, KeychainKind::Internal)?;
             outputs.push(TxOut {
                 value: BdkAmount::from_sat(change),
                 script_pubkey: change_addr.script_pubkey(),
             });
         }
 
-        mpc_psbt::build_psbt(selected, outputs)
+        let psbt = mpc_psbt::build_psbt(selected, outputs)?;
+        if !dry_run {
+            self.reserve_vanilla_txos(txn, &psbt, WalletTransactionType::SendBtc)?;
+        }
+        Ok(psbt)
     }
 
     fn drain_to_begin_impl(
@@ -551,7 +625,7 @@ impl WalletOnline for MpcWallet {
         let script_pubkey = self.get_script_pubkey(&address)?;
 
         // Collect all UTXOs (vanilla only; never drain colored)
-        let vanilla_utxos = self.query_vanilla_utxos()?;
+        let vanilla_utxos = self.query_vanilla_utxos(txn)?;
         let mut all_inputs: Vec<(OutPoint, TxOut)> = vanilla_utxos
             .into_iter()
             .map(|(op, txout, _)| (op, txout))
@@ -603,6 +677,32 @@ impl RgbWalletOpsOnline for MpcWallet {}
 // ---------------------------------------------------------------------------
 
 impl MpcWallet {
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn register_address(&self, txn: &DbTxn, keychain: KeychainKind) -> Result<BdkAddress, Error> {
+        let keychain_u8 = match keychain {
+            KeychainKind::External => 0u8,
+            KeychainKind::Internal => 1u8,
+        };
+        if self.wallet_data().reuse_addresses
+            && let Some(last) = txn.get_last_mpc_address(keychain_u8)?
+        {
+            return parse_address_str(&last.address, self.bitcoin_network());
+        }
+        let index = txn.get_next_mpc_derivation_index(keychain_u8)?;
+        let addr_info: MpcAddressInfo =
+            self.provider
+                .create_address(self.bitcoin_network(), keychain, index)?;
+        txn.set_mpc_address(database::entities::mpc_address::ActiveModel {
+            address: ActiveValue::Set(addr_info.address.clone()),
+            script_pubkey: ActiveValue::Set(addr_info.script_pubkey.to_hex_string()),
+            signing_key_id: ActiveValue::Set(addr_info.signing_key_id),
+            keychain: ActiveValue::Set(keychain_u8),
+            derivation_index: ActiveValue::Set(index),
+            ..Default::default()
+        })?;
+        parse_address_str(&addr_info.address, self.bitcoin_network())
+    }
+
     /// Create a new MPC wallet.
     ///
     /// **Note:** For MPC wallets, `wallet_data.reuse_addresses` is recommended to be `true`
@@ -667,14 +767,32 @@ impl MpcWallet {
         })
     }
 
+    /// Fetch node-indexed prevouts for the fixed MPC roles on the checked network.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn list_mpc_unspents(&self, online: Online) -> Result<Vec<(OutPoint, TxOut)>, Error> {
+        self.check_online(online)?;
+        let txn = self.database().begin_transaction()?;
+        let mut outputs = Vec::new();
+        for role in [0, 1] {
+            for address in txn.get_mpc_addresses_by_keychain(role)? {
+                let script = ScriptBuf::from_hex(&address.script_pubkey).map_err(|_| {
+                    Error::InvalidPsbt {
+                        details: s!("Invalid MPC script"),
+                    }
+                })?;
+                outputs.extend(self.indexer().list_unspent_for_script(&script)?);
+            }
+        }
+        txn.commit()?;
+        Ok(outputs)
+    }
+
     /// Query vanilla (Internal keychain) UTXOs from the indexer.
     ///
     /// Returns (outpoint, txout, signing_key_id) tuples.
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    fn query_vanilla_utxos(&self) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
-        let txn = self.database().begin_transaction()?;
+    fn query_vanilla_utxos(&self, txn: &DbTxn) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
         let addrs = txn.get_mpc_addresses_by_keychain(1)?;
-        txn.commit()?;
         let mut all_utxos = Vec::new();
         for addr in &addrs {
             let script = ScriptBuf::from_hex(&addr.script_pubkey).map_err(|e| Error::Internal {
@@ -686,6 +804,22 @@ impl MpcWallet {
             }
         }
         Ok(all_utxos)
+    }
+
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    fn spendable_vanilla_utxos(
+        &self,
+        txn: &DbTxn,
+    ) -> Result<Vec<(OutPoint, TxOut, String)>, Error> {
+        let excluded: HashSet<_> = self
+            .get_unspendable_bdk_outpoints(txn)?
+            .into_iter()
+            .collect();
+        Ok(self
+            .query_vanilla_utxos(txn)?
+            .into_iter()
+            .filter(|(outpoint, _, _)| !excluded.contains(outpoint))
+            .collect())
     }
 
     /// Look up signing key IDs for each input in a PSBT.
@@ -853,6 +987,13 @@ impl MpcWallet {
         Ok(address.to_string())
     }
 
+    /// Return an External address for the RGB UTXO pool.
+    pub fn get_rgb_address(&mut self) -> Result<String, Error> {
+        Ok(self
+            .get_new_addresses(KeychainKind::External, 1)?
+            .to_string())
+    }
+
     /// Rotate the pinned address for the given keychain.
     ///
     /// Creates a new address via the MPC provider. Future reuse will return this new address.
@@ -883,6 +1024,50 @@ impl MpcWallet {
         txn.commit()?;
 
         Ok(addr_info.address)
+    }
+
+    /// List transactions whose inputs remain reserved after a non-dry-run preparation.
+    pub fn list_pending_vanilla_txs(&self) -> Result<Vec<PendingVanillaTx>, Error> {
+        let txn = self.database().begin_transaction()?;
+        let reserved_idxs: Vec<i32> = txn
+            .iter_reserved_txos()?
+            .into_iter()
+            .filter_map(|r| r.reserved_for)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let result = if reserved_idxs.is_empty() {
+            vec![]
+        } else {
+            txn.get_wallet_transactions_by_idxs(&reserved_idxs)?
+                .into_iter()
+                .map(|wt| PendingVanillaTx {
+                    txid: wt.txid,
+                    r#type: wt.r#type,
+                })
+                .collect()
+        };
+        txn.commit()?;
+        Ok(result)
+    }
+
+    /// Abort a pending vanilla transaction, releasing its reserved inputs.
+    ///
+    /// Only abort when the transaction is known not to have been broadcast and
+    /// will not be submitted later. Reconcile unknown broadcast outcomes first.
+    /// Returns [`Error::CannotAbortPendingVanillaTx`] if no reservations remain.
+    pub fn abort_pending_vanilla_tx(&self, txid: String) -> Result<(), Error> {
+        let txn = self.database().begin_transaction()?;
+        let (wt, reservations) = txn
+            .get_wallet_transaction_with_reserved_txos_by_txid(&txid)?
+            .ok_or(Error::CannotAbortPendingVanillaTx)?;
+        if reservations.is_empty() {
+            return Err(Error::CannotAbortPendingVanillaTx);
+        }
+        txn.del_wallet_transaction(wt.idx)?;
+        self.update_backup_info(&txn, false)?;
+        txn.commit()?;
+        Ok(())
     }
 
     /// Create new colored UTXOs (begin + MPC sign + end).
@@ -998,11 +1183,13 @@ impl MpcWallet {
             donation,
             fee_rate,
             min_confirmations,
-            Some(expiration_timestamp as i64),
+            Some(i64::try_from(expiration_timestamp).map_err(|_| Error::InvalidExpiration)?),
             dry_run,
             None,
         )?;
         if !dry_run {
+            // Commit the complete input set atomically with the Initiated batch.
+            txn.save_mpc_prepared_inputs(&begin_op_data.psbt.unsigned_tx)?;
             self.update_backup_info(&txn, false)?;
         }
         txn.commit()?;
@@ -1221,3 +1408,7 @@ impl MpcWallet {
         WalletCore::vss_client(self).clone()
     }
 }
+
+#[cfg(all(test, any(feature = "electrum", feature = "esplora")))]
+#[path = "mpc_tests.rs"]
+mod tests;
