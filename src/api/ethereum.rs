@@ -1,6 +1,6 @@
 use super::*;
 
-/// keccak256("FundsIn(address,uint256,uint64)")
+/// keccak256("FundsIn(address,uint256,uint64)"); sender and rgbOpId are indexed.
 const FUNDS_IN_TOPIC: &str = "0xf1a18caea297591892fc07ea412a5e617d8e51e1155912d8871793e1d4e70f87";
 
 pub(crate) struct EthClient {
@@ -83,15 +83,16 @@ impl EthLog {
         if !topic0.eq_ignore_ascii_case(FUNDS_IN_TOPIC) {
             return Ok(None);
         }
-        if self.topics.len() != 2 || self.data.strip_prefix("0x").unwrap_or(&self.data).len() != 128
+        if self.topics.len() != 3 || self.data.strip_prefix("0x").unwrap_or(&self.data).len() != 64
         {
             return Err(Error::Network {
                 details: s!("unexpected FundsIn ABI layout"),
             });
         }
         Ok(Some(FundsInEvent {
-            operation_id: abi_word(&self.data, 0)?,
-            amount: word_as_u64(abi_word(&self.data, 1)?)?,
+            // topic2 is the OpId bytes read as a big-endian uint256.
+            operation_id: abi_word(&self.topics[2], 0)?,
+            amount: word_as_u64(abi_word(&self.data, 0)?)?,
         }))
     }
 }
@@ -251,10 +252,25 @@ mod test {
 
     #[test]
     fn decodes_bridge_event() {
-        let log = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", "64"]);
+        let log = log(
+            &[FUNDS_IN_TOPIC, &word("dead"), &format!("0x{OPID}")],
+            &["64"],
+        );
         let event = log.as_funds_in().unwrap().unwrap();
         assert_eq!(event.amount, 100);
         assert_eq!(hex::encode(event.operation_id), OPID);
+    }
+
+    #[test]
+    fn reads_the_operation_id_big_endian() {
+        let opid = "ab00000000000000000000000000000000000000000000000000000000000002";
+        let log = log(
+            &[FUNDS_IN_TOPIC, &word("dead"), &format!("0x{opid}")],
+            &["64"],
+        );
+        let event = log.as_funds_in().unwrap().unwrap();
+        assert_eq!(event.operation_id[0], 0xab);
+        assert_eq!(event.operation_id[31], 0x02);
     }
 
     #[test]
@@ -266,24 +282,31 @@ mod test {
 
     #[test]
     fn rejects_malformed_bridge_event() {
-        let short = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab"]);
-        assert!(short.as_funds_in().is_err());
+        let no_amount = log(&[FUNDS_IN_TOPIC, &word("dead"), &word("ab")], &[]);
+        assert!(no_amount.as_funds_in().is_err());
 
-        let extra_topic = log(&[FUNDS_IN_TOPIC, &word("dead"), &word("ab")], &["ab", "64"]);
+        // The old layout: the OpId in data, not indexed.
+        let old_layout = log(&[FUNDS_IN_TOPIC, &word("dead")], &["ab", "64"]);
+        assert!(old_layout.as_funds_in().is_err());
+
+        let extra_topic = log(
+            &[FUNDS_IN_TOPIC, &word("dead"), &word("ab"), &word("cd")],
+            &["64"],
+        );
         assert!(extra_topic.as_funds_in().is_err());
     }
 
     #[test]
     fn decodes_maximum_amount_and_rejects_overflow() {
         let max = log(
-            &[FUNDS_IN_TOPIC, &word("dead")],
-            &["ab", "ffffffffffffffff"],
+            &[FUNDS_IN_TOPIC, &word("dead"), &word("ab")],
+            &["ffffffffffffffff"],
         );
         assert_eq!(max.as_funds_in().unwrap().unwrap().amount, u64::MAX);
 
         let overflow = log(
-            &[FUNDS_IN_TOPIC, &word("dead")],
-            &["ab", "10000000000000000"],
+            &[FUNDS_IN_TOPIC, &word("dead"), &word("ab")],
+            &["10000000000000000"],
         );
         assert!(overflow.as_funds_in().is_err());
     }
