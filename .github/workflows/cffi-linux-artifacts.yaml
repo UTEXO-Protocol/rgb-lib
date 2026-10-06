@@ -3,6 +3,9 @@ name: C-FFI Linux Artifacts
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
