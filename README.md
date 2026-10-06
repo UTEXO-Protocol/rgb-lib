@@ -37,6 +37,7 @@ error is returned in case discrepancies are detected.
 
 ## Language bindings
 Bindings for other languages are available. Check the [bindings] directory.
+For server-side JVM on Linux, see [JVM on Linux via C-FFI][docs-jvm-linux-cffi].
 
 ## AI code review
 The repository supports AI-assisted pull request reviews.
@@ -77,6 +78,7 @@ transitions of an asset transfer and [multisig][docs-multisig] coordination.
 [RGB proxy]: https://github.com/RGB-Tools/rgb-proxy-server
 [bdk]: https://github.com/bitcoindevkit/bdk
 [bindings]: bindings/
+[docs-jvm-linux-cffi]: docs/jvm_linux_cffi.md
 [docs-multisig]: docs/multisig.md
 [bitcoind]: https://github.com/bitcoin/bitcoin
 [electrs]: https://github.com/romanz/electrs

@@ -1,0 +1,71 @@
+name: C-FFI Linux Artifacts
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  build-cffi-linux:
+    name: Build c-ffi (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            lib_name_shared: librgblibcffi.so
+          - target: aarch64-unknown-linux-gnu
+            lib_name_shared: librgblibcffi.so
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to private RGB forks
+        shell: bash
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ secrets.BFA_MIRRORS_TOKEN }}@github.com/UTEXO-Protocol/".insteadOf \
+            "https://github.com/UTEXO-Protocol/"
+
+      - name: Install cross-compilation toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Setup rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Build c-ffi library
+        working-directory: bindings/c-ffi
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
+
+      - name: Package Linux c-ffi bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="${{ matrix.target }}"
+          OUT_DIR="release/cffi-linux-${TARGET}"
+          mkdir -p "${OUT_DIR}"
+
+          cp "bindings/c-ffi/target/${TARGET}/release/${{ matrix.lib_name_shared }}" "${OUT_DIR}/"
+          cp "bindings/c-ffi/rgblib.h" "${OUT_DIR}/"
+          cp "bindings/c-ffi/rgblib.hpp" "${OUT_DIR}/"
+
+          tar -czf "release/rgb-lib-cffi-linux-${TARGET}.tar.gz" -C release "cffi-linux-${TARGET}"
+
+      - name: Upload Linux c-ffi bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cffi-linux-${{ matrix.target }}
+          if-no-files-found: error
+          path: release/rgb-lib-cffi-linux-${{ matrix.target }}.tar.gz

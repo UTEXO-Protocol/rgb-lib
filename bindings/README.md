@@ -28,6 +28,7 @@ These are the unofficially supported languages:
 | -------- | ------ | --------------------- | ---------------- |
 | Go       | uniffi | Linux, macOS          | [rgb-lib-go]     |
 | C#       | c-ffi  | Linux, macOS, Windows | [rgb-lib-c-sharp]|
+| Java/JVM | c-ffi  | Linux                 | [jvm-linux-cffi] |
 
 [rgb-lib-go]: https://github.com/Utexo-protocol/rgb-lib-go
 [rgb-lib-kotlin]: https://github.com/RGB-Tools/rgb-lib-kotlin
@@ -35,5 +36,6 @@ These are the unofficially supported languages:
 [rgb-lib-python]: https://github.com/RGB-Tools/rgb-lib-python
 [rgb-lib-swift]: https://github.com/RGB-Tools/rgb-lib-swift
 [rgb-lib-c-sharp]: https://github.com/UTEXO-Protocol/rgb-lib-c-sharp
+[jvm-linux-cffi]: ../docs/jvm_linux_cffi.md
 [c-ffi]: c-ffi/
 [uniffi]: uniffi/
