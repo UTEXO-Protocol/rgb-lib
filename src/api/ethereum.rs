@@ -124,13 +124,85 @@ struct RpcError {
 struct LogFilter {
     /// Contract address to filter on.
     address: String,
-    /// Start block (hex or tag).
+    /// Start block (hex).
     from_block: String,
-    /// End block (hex or tag).
+    /// End block (hex).
     to_block: String,
     /// Event signature filter.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     topics: Vec<String>,
+}
+
+/// Widest block range one `eth_getLogs` asks for: public Arbitrum RPCs refuse more than 10M.
+const LOG_SCAN_CHUNK: u64 = 10_000_000;
+/// Narrowest range retried after an RPC refuses a wider one.
+const MIN_LOG_SCAN_CHUNK: u64 = 1_000;
+/// Clock slack before the asset genesis: no FundsIn of its mints can be older.
+const GENESIS_SLACK_SECS: u64 = 86_400;
+
+#[derive(Debug, Deserialize)]
+struct BlockHeader {
+    timestamp: String,
+}
+
+fn parse_hex_u64(method: &str, value: &str) -> Result<u64, Error> {
+    u64::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16).map_err(|e| Error::Network {
+        details: format!("{method} returned invalid quantity {value:?}: {e}"),
+    })
+}
+
+fn rpc_refused(method: &str, err: RpcError) -> Error {
+    Error::Network {
+        details: format!("{method} error {}: {}", err.code, err.message),
+    }
+}
+
+/// First block in `0..=head` with a timestamp at or after `ts`, or `head + 1` if none.
+/// Block timestamps never decrease, so a binary search finds it.
+fn first_block_at(
+    ts: u64,
+    head: u64,
+    mut block_ts: impl FnMut(u64) -> Result<u64, Error>,
+) -> Result<u64, Error> {
+    let (mut lo, mut hi) = (0, head.saturating_add(1));
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if block_ts(mid)? < ts {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(lo)
+}
+
+/// Fetches `from..=to` in ranges of at most `chunk` blocks. RPCs cap the range
+/// differently, so a refused range is halved and retried; transport errors are not.
+fn scan_in_chunks<T>(
+    from: u64,
+    to: u64,
+    mut chunk: u64,
+    mut fetch: impl FnMut(u64, u64) -> Result<Result<Vec<T>, RpcError>, Error>,
+) -> Result<Vec<T>, Error> {
+    let mut found = vec![];
+    let mut start = from;
+    while start <= to {
+        let end = to.min(start.saturating_add(chunk - 1));
+        let width = end - start + 1;
+        match fetch(start, end)? {
+            Ok(mut items) => found.append(&mut items),
+            Err(_) if width > MIN_LOG_SCAN_CHUNK => {
+                chunk = (width / 2).max(MIN_LOG_SCAN_CHUNK);
+                continue;
+            }
+            Err(err) => return Err(rpc_refused("eth_getLogs", err)),
+        }
+        match end.checked_add(1) {
+            Some(next) => start = next,
+            None => break,
+        }
+    }
+    Ok(found)
 }
 
 impl EthClient {
@@ -151,32 +223,20 @@ impl EthClient {
         }
     }
 
-    /// Fetch logs emitted by `contract` between `from_block` and `to_block`.
-    ///
-    /// `topics` can be used to filter by event signature and/or indexed params.
-    /// Pass an empty slice to get all events from the contract.
-    ///
-    /// Block parameters accept hex strings (`"0x0"`) or tags (`"earliest"`,
-    /// `"latest"`).
-    pub(crate) fn get_logs(
+    /// Sends one JSON-RPC call. The outer error is transport, the inner one is
+    /// the node refusing the call.
+    fn call<P: Serialize, R: serde::de::DeserializeOwned>(
         &self,
-        contract: &str,
-        from_block: &str,
-        to_block: &str,
-    ) -> Result<Vec<EthLog>, Error> {
+        method: &'static str,
+        params: P,
+    ) -> Result<Result<R, RpcError>, Error> {
         let body = RpcRequest {
             jsonrpc: "2.0",
-            method: "eth_getLogs",
-            params: [LogFilter {
-                address: contract.to_string(),
-                from_block: from_block.to_string(),
-                to_block: to_block.to_string(),
-                topics: vec![FUNDS_IN_TOPIC.to_string()],
-            }],
+            method,
+            params,
             id: 1,
         };
-
-        let resp: RpcResponse<Vec<EthLog>> = self
+        let resp: RpcResponse<R> = self
             .client
             .post(&self.rpc_url)
             .header(CONTENT_TYPE, JSON)
@@ -187,42 +247,65 @@ impl EthClient {
             .map_err(Self::req_err)?;
 
         if let Some(err) = resp.error {
-            return Err(Error::Network {
-                details: format!("eth_getLogs error {}: {}", err.code, err.message),
-            });
+            return Ok(Err(err));
         }
-
-        resp.result.ok_or_else(|| Error::Network {
-            details: s!("eth_getLogs returned null result"),
+        resp.result.map(Ok).ok_or_else(|| Error::Network {
+            details: format!("{method} returned null result"),
         })
     }
 
-    pub(crate) fn client_version(&self) -> Result<String, Error> {
-        let body: RpcRequest<NullRequest> = RpcRequest {
-            jsonrpc: "2.0",
-            method: "web3_clientVersion",
-            params: NullRequest,
-            id: 1,
-        };
-        let resp: RpcResponse<String> = self
-            .client
-            .post(&self.rpc_url)
-            .header(CONTENT_TYPE, JSON)
-            .json(&body)
-            .send()
-            .map_err(Self::req_err)?
-            .json()
-            .map_err(Self::req_err)?;
+    /// FundsIn logs emitted by `contract` in `from_block..=to_block`.
+    fn get_logs(
+        &self,
+        contract: &str,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Result<Vec<EthLog>, RpcError>, Error> {
+        self.call(
+            "eth_getLogs",
+            [LogFilter {
+                address: contract.to_string(),
+                from_block: format!("{from_block:#x}"),
+                to_block: format!("{to_block:#x}"),
+                topics: vec![FUNDS_IN_TOPIC.to_string()],
+            }],
+        )
+    }
 
-        if let Some(err) = resp.error {
-            return Err(Error::Network {
-                details: format!("web3_clientVersion error {}: {}", err.code, err.message),
-            });
-        }
-
-        resp.result.ok_or_else(|| Error::Network {
-            details: s!("web3_clientVersion returned null result"),
+    /// FundsIn logs of `contract` from a day before `genesis_ts` (asset genesis,
+    /// unix seconds) to the chain head, so the range stays within RPC limits.
+    pub(crate) fn funds_in_logs_since(
+        &self,
+        contract: &str,
+        genesis_ts: i64,
+    ) -> Result<Vec<EthLog>, Error> {
+        let head = self.block_number()?;
+        let since = u64::try_from(genesis_ts)
+            .unwrap_or(0)
+            .saturating_sub(GENESIS_SLACK_SECS);
+        let from = first_block_at(since, head, |n| self.block_timestamp(n))?;
+        scan_in_chunks(from, head, LOG_SCAN_CHUNK, |a, b| {
+            self.get_logs(contract, a, b)
         })
+    }
+
+    fn block_number(&self) -> Result<u64, Error> {
+        let head: String = self
+            .call("eth_blockNumber", NullRequest)?
+            .map_err(|e| rpc_refused("eth_blockNumber", e))?;
+        parse_hex_u64("eth_blockNumber", &head)
+    }
+
+    fn block_timestamp(&self, number: u64) -> Result<u64, Error> {
+        let block: BlockHeader = self
+            .call("eth_getBlockByNumber", (format!("{number:#x}"), false))?
+            .map_err(|e| rpc_refused("eth_getBlockByNumber", e))?;
+        parse_hex_u64("eth_getBlockByNumber", &block.timestamp)
+    }
+
+    pub(crate) fn client_version(&self) -> Result<String, Error> {
+        self.call("web3_clientVersion", NullRequest)?
+            .map_err(|e| rpc_refused("web3_clientVersion", e))
     }
 }
 
@@ -321,7 +404,7 @@ mod test {
             "params": [{
                 "address": address,
                 "fromBlock": "0x0",
-                "toBlock": "latest",
+                "toBlock": "0xf",
                 "topics": [FUNDS_IN_TOPIC],
             }],
             "id": 1,
@@ -335,10 +418,163 @@ mod test {
 
         let logs = EthClient::new(&server.url())
             .unwrap()
-            .get_logs(address, "0x0", "latest")
+            .get_logs(address, 0, 15)
+            .unwrap()
             .unwrap();
         assert!(logs.is_empty());
         mock.assert();
+    }
+
+    fn refusal() -> RpcError {
+        RpcError {
+            code: -32602,
+            message: s!("query spans too many blocks, only 10000000 are allowed"),
+        }
+    }
+
+    #[test]
+    fn finds_the_first_block_at_a_timestamp() {
+        let block_ts = [100, 110, 110, 120, 130];
+        let at = |ts| first_block_at(ts, 4, |n| Ok(block_ts[n as usize])).unwrap();
+        assert_eq!(at(0), 0);
+        assert_eq!(at(100), 0);
+        assert_eq!(at(105), 1);
+        assert_eq!(at(110), 1, "the first of equal timestamps");
+        assert_eq!(at(130), 4);
+        assert_eq!(at(131), 5, "nothing that late: past the head");
+    }
+
+    #[test]
+    fn scans_the_whole_range_in_chunks() {
+        let mut ranges = vec![];
+        let found = scan_in_chunks(5, 2_504, 1_000, |a, b| {
+            ranges.push((a, b));
+            Ok(Ok(vec![a]))
+        })
+        .unwrap();
+        assert_eq!(ranges, [(5, 1_004), (1_005, 2_004), (2_005, 2_504)]);
+        assert_eq!(found, [5, 1_005, 2_005]);
+    }
+
+    #[test]
+    fn scans_nothing_when_the_start_is_past_the_head() {
+        let found = scan_in_chunks(6, 5, 1_000, |_, _| -> Result<Result<Vec<u64>, _>, _> {
+            panic!("no range to fetch")
+        })
+        .unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn halves_a_range_the_rpc_refuses() {
+        let mut ranges = vec![];
+        scan_in_chunks(0, 9_999, 8_000, |a, b| {
+            ranges.push((a, b));
+            Ok(if b - a + 1 > 2_000 {
+                Err(refusal())
+            } else {
+                Ok(vec![()])
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            ranges,
+            [
+                (0, 7_999),
+                (0, 3_999),
+                (0, 1_999),
+                (2_000, 3_999),
+                (4_000, 5_999),
+                (6_000, 7_999),
+                (8_000, 9_999),
+            ]
+        );
+    }
+
+    #[test]
+    fn halves_the_range_actually_sent() {
+        let mut ranges = vec![];
+        scan_in_chunks(0, 2_999, LOG_SCAN_CHUNK, |a, b| {
+            ranges.push((a, b));
+            Ok(if b - a + 1 > 2_000 {
+                Err(refusal())
+            } else {
+                Ok(vec![()])
+            })
+        })
+        .unwrap();
+        assert_eq!(ranges, [(0, 2_999), (0, 1_499), (1_500, 2_999)]);
+    }
+
+    #[test]
+    fn gives_up_when_even_the_narrowest_range_is_refused() {
+        let mut calls = 0;
+        let err = scan_in_chunks(0, 9_999, 4_000, |_, _| -> Result<Result<Vec<()>, _>, _> {
+            calls += 1;
+            Ok(Err(refusal()))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("only 10000000 are allowed"));
+        assert_eq!(calls, 3, "4000, 2000, then the 1000 floor");
+    }
+
+    #[test]
+    fn does_not_retry_a_transport_error() {
+        let mut calls = 0;
+        let err = scan_in_chunks(0, 9_999, 4_000, |_, _| -> Result<Result<Vec<()>, _>, _> {
+            calls += 1;
+            Err(Error::Network {
+                details: s!("connection refused"),
+            })
+        });
+        assert!(err.is_err());
+        assert_eq!(calls, 1);
+    }
+
+    // Block n is mined at n * 10_000 s; the genesis is one day after block 5, so
+    // the scan starts at block 5 and ends at the head, 0x14.
+    #[test]
+    fn scans_from_a_day_before_the_genesis_to_the_head() {
+        let mut server = mockito::Server::new();
+        let address = "0x0000000000000000000000000000000000000001";
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"method": "eth_blockNumber"}),
+            ))
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":"0x14"}"#)
+            .create();
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({"method": "eth_getBlockByNumber"}),
+            ))
+            .with_body_from_request(|request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(request.body().unwrap()).unwrap();
+                let number = parse_hex_u64("test", body["params"][0].as_str().unwrap()).unwrap();
+                format!(
+                    r#"{{"jsonrpc":"2.0","id":1,"result":{{"timestamp":"{:#x}"}}}}"#,
+                    number * 10_000
+                )
+                .into()
+            })
+            .create();
+        let logs = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "method": "eth_getLogs",
+                "params": [{"fromBlock": "0x5", "toBlock": "0x14"}],
+            })))
+            .with_body(r#"{"jsonrpc":"2.0","id":1,"result":[]}"#)
+            .create();
+
+        let found = EthClient::new(&server.url())
+            .unwrap()
+            .funds_in_logs_since(address, 50_000 + 86_400)
+            .unwrap();
+        assert!(found.is_empty());
+        logs.assert();
     }
 
     #[test]
