@@ -2505,6 +2505,7 @@ impl Wallet {
             asset_schema,
             &resolver,
             &validation_config,
+            &[],
         )? {
             Ok(consignment) => consignment,
             Err(ValidationError::InvalidConsignment(e)) => {

@@ -1984,6 +1984,17 @@ pub struct BridgeDetails {
     pub opid: String,
 }
 
+/// A mint a bridge prepared for one of this wallet's invoices, as read from its consignment.
+#[cfg(any(feature = "electrum", feature = "esplora"))]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct BridgeMint {
+    /// ID of the bridge transition, to be committed to the EVM lock
+    pub opid: String,
+    /// Amount the transition mints, to be locked on the EVM side
+    pub amount: u64,
+}
+
 /// The result of a send begin operation.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg(any(feature = "electrum", feature = "esplora"))]

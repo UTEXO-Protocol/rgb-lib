@@ -29,7 +29,7 @@ use rgb_lib::{
     wallet::{
         Address as RgbLibAddress, AssetBFA, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA,
         AssetNIA, AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BridgeBeginResult,
-        BridgeDetails, BridgeInitResult, BtcBalance, BurnBeginResult, BurnDetails,
+        BridgeDetails, BridgeInitResult, BridgeMint, BtcBalance, BurnBeginResult, BurnDetails,
         Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
         InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
@@ -1669,6 +1669,18 @@ impl Wallet {
         )
     }
 
+    fn bridge_consignment_ack(
+        &self,
+        online: Online,
+        psbt: String,
+    ) -> Result<Option<bool>, RgbLibError> {
+        self._get_wallet().bridge_consignment_ack(online, psbt)
+    }
+
+    fn get_bridge_mint(&self, recipient_id: String) -> Result<Option<BridgeMint>, RgbLibError> {
+        self._get_wallet().get_bridge_mint(recipient_id)
+    }
+
     fn bridge_end(
         &self,
         online: Online,
@@ -2245,6 +2257,14 @@ impl MultisigWallet {
             fee_rate,
             min_confirmations,
         )
+    }
+
+    fn bridge_consignment_ack(
+        &self,
+        online: Online,
+        psbt: String,
+    ) -> Result<Option<bool>, RgbLibError> {
+        self._get_wallet().bridge_consignment_ack(online, psbt)
     }
 
     fn bridge_init_end(
