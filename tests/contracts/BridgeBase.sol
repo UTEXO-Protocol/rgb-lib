@@ -29,11 +29,11 @@ abstract contract BridgeBase is Ownable, Pausable {
 
     /// @notice Emitted on every fundsIn.
     /// @param sender      Address that deposited the tokens.
-    /// @param operationId Backend-assigned operation identifier.
+    /// @param operationId Backend-assigned operation identifier (the RGB OpId).
     /// @param amount      Amount of tokens locked.
     event FundsIn(
         address indexed sender,
-        uint256 operationId,
+        uint256 indexed operationId,
         uint64 amount
     );
 

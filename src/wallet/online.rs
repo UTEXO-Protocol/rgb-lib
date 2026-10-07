@@ -1401,7 +1401,8 @@ pub trait WalletOnline: WalletOffline {
                         });
                     };
                     let eth_client = EthClient::new(&eth_rpc_url)?;
-                    for log in &eth_client.get_logs(&address, "0x0", "latest")? {
+                    let genesis_ts = consignment.genesis.timestamp;
+                    for log in &eth_client.funds_in_logs_since(&address, genesis_ts)? {
                         // A log we cannot decode cannot authorise a mint, but it must not
                         // poison the whole set: one amount above u64 would otherwise break
                         // every mint of this asset, forever.
