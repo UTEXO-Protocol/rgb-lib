@@ -4,6 +4,28 @@
 
 use super::*;
 
+/// Overrides of the keychain layout of a singlesig wallet: the coin type of each side's account
+/// and the keychain of the colored side. Every field left `None` keeps rgb-lib's default for the
+/// wallet network. The vanilla keychain is [`SinglesigKeys::vanilla_keychain`].
+///
+/// A host whose signer only exports the standard BIP-86 account can put both sides under that
+/// account: set both coin types to the standard one and give the two sides distinct keychains
+/// (`colored_keychain` and [`SinglesigKeys::vanilla_keychain`]); both account xPubs are then that
+/// account's xPub.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
+pub struct KeychainLayoutOverrides {
+    /// Keychain index for the colored side of the wallet (default: 0)
+    #[serde(default, deserialize_with = "from_str_or_number_optional")]
+    pub colored_keychain: Option<u8>,
+    /// Coin type of the colored-side account (default: 827166 on mainnet, 827167 otherwise)
+    #[serde(default, deserialize_with = "from_str_or_number_optional")]
+    pub colored_coin_type: Option<u32>,
+    /// Coin type of the vanilla-side account (default: 0 on mainnet, 1 otherwise)
+    #[serde(default, deserialize_with = "from_str_or_number_optional")]
+    pub vanilla_coin_type: Option<u32>,
+}
+
 /// Keys for the singlesig wallet.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
@@ -15,6 +37,11 @@ pub struct SinglesigKeys {
     /// Keychain index for the vanilla-side of the wallet (default: 0)
     #[serde(deserialize_with = "from_str_or_number_optional")]
     pub vanilla_keychain: Option<u8>,
+    /// Overrides of the default keychain layout (default: none).
+    ///
+    /// Flattened when serialized: its fields sit next to `vanilla_keychain`.
+    #[serde(flatten)]
+    pub keychain_layout: KeychainLayoutOverrides,
     /// Wallet master fingerprint
     pub master_fingerprint: String,
     /// Wallet mnemonic phrase
@@ -25,18 +52,44 @@ pub struct SinglesigKeys {
 }
 
 impl SinglesigKeys {
+    pub(crate) fn resolve_keychain_layout(
+        &self,
+        bitcoin_network: &BitcoinNetwork,
+    ) -> Result<KeychainLayout, Error> {
+        KeychainLayout::resolve(
+            bitcoin_network,
+            &self.keychain_layout,
+            self.vanilla_keychain,
+        )
+    }
+
     pub(crate) fn build_descriptors(
         &self,
         bitcoin_network: &BitcoinNetwork,
     ) -> Result<(WalletDescriptors, bool), Error> {
+        let layout = self.resolve_keychain_layout(bitcoin_network)?;
         let network_kind = bitcoin_network.network_kind();
         let xpub_rgb = str_to_xpub(&self.account_xpub_colored, &network_kind)?;
         let xpub_btc = str_to_xpub(&self.account_xpub_vanilla, &network_kind)?;
+        // purpose and account index are the same for both sides, so they share an account
+        // exactly when they share a coin type: the account xPubs must then be the same key, and
+        // different keys otherwise. An xPub under the wrong coin type still receives, but PSBTs
+        // spending from it carry key origins the signer won't derive. Compare the key, not its
+        // encoding: str_to_xpub already set the network, and depth, parent fingerprint and child
+        // number play no part in derivation.
+        let same_coin = layout.colored_coin_type == layout.vanilla_coin_type;
+        let same_key = xpub_rgb.public_key == xpub_btc.public_key
+            && xpub_rgb.chain_code == xpub_btc.chain_code;
+        if same_coin != same_key {
+            return Err(Error::InvalidKeychainLayout {
+                details: s!("account xpubs are inconsistent with the configured coin types"),
+            });
+        }
         Ok(if let Some(mnemonic) = &self.mnemonic {
             let descs = get_descriptors(
                 bitcoin_network,
                 mnemonic,
-                self.vanilla_keychain,
+                &layout,
                 &xpub_btc,
                 &xpub_rgb,
                 self.witness_version,
@@ -55,11 +108,10 @@ impl SinglesigKeys {
             (descs, false)
         } else {
             let descs = get_descriptors_from_xpubs(
-                bitcoin_network,
                 &self.master_fingerprint,
                 &xpub_rgb,
                 &xpub_btc,
-                self.vanilla_keychain,
+                &layout,
                 self.witness_version,
             )?;
             (descs, true)
@@ -72,6 +124,7 @@ impl SinglesigKeys {
             account_xpub_vanilla: keys.account_xpub_vanilla.clone(),
             account_xpub_colored: keys.account_xpub_colored.clone(),
             vanilla_keychain,
+            keychain_layout: KeychainLayoutOverrides::default(),
             master_fingerprint: keys.master_fingerprint.clone(),
             mnemonic: Some(keys.mnemonic.clone()),
             witness_version: keys.witness_version,
@@ -84,10 +137,19 @@ impl SinglesigKeys {
             account_xpub_vanilla: keys.account_xpub_vanilla.clone(),
             account_xpub_colored: keys.account_xpub_colored.clone(),
             vanilla_keychain,
+            keychain_layout: KeychainLayoutOverrides::default(),
             master_fingerprint: keys.master_fingerprint.clone(),
             mnemonic: None,
             witness_version: keys.witness_version,
         }
+    }
+
+    /// Return a copy of these keys with the given keychain layout overrides.
+    ///
+    /// See [`KeychainLayoutOverrides`].
+    pub fn with_keychain_layout(mut self, keychain_layout: KeychainLayoutOverrides) -> Self {
+        self.keychain_layout = keychain_layout;
+        self
     }
 }
 

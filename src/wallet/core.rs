@@ -40,6 +40,16 @@ pub(crate) struct WalletManifest {
     pub(crate) account_xpub_vanilla: String,
     pub(crate) account_xpub_colored: String,
     pub(crate) vanilla_keychain: u8,
+    // keychain layout overrides; None = rgb-lib default for the network. Stored only when they
+    // differ from the default so manifests of default-layout wallets stay byte-identical. Kept
+    // flat and snake_case rather than flattening KeychainLayoutOverrides, which the camel_case
+    // feature renames: a manifest must read the same whichever build wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) colored_keychain: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) colored_coin_type: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) vanilla_coin_type: Option<u32>,
     pub(crate) master_fingerprint: String,
     pub(crate) witness_version: WitnessVersion,
 }
@@ -56,6 +66,18 @@ impl WalletManifest {
             account_xpub_vanilla: keys.account_xpub_vanilla.clone(),
             account_xpub_colored: keys.account_xpub_colored.clone(),
             vanilla_keychain: keys.vanilla_keychain.unwrap_or(KEYCHAIN_BTC),
+            colored_keychain: keys
+                .keychain_layout
+                .colored_keychain
+                .filter(|k| *k != KEYCHAIN_RGB),
+            colored_coin_type: keys
+                .keychain_layout
+                .colored_coin_type
+                .filter(|c| *c != get_coin_type(&wallet_data.bitcoin_network, true)),
+            vanilla_coin_type: keys
+                .keychain_layout
+                .vanilla_coin_type
+                .filter(|c| *c != get_coin_type(&wallet_data.bitcoin_network, false)),
             master_fingerprint: keys.master_fingerprint.clone(),
             witness_version: keys.witness_version,
         }
@@ -134,6 +156,9 @@ impl WalletManifest {
             master_fingerprint,
             witness_version,
             vanilla_keychain,
+            colored_keychain,
+            colored_coin_type,
+            vanilla_coin_type,
             account_xpub_colored,
             account_xpub_vanilla,
         );
@@ -158,6 +183,11 @@ impl WalletManifest {
                 account_xpub_vanilla: self.account_xpub_vanilla,
                 account_xpub_colored: self.account_xpub_colored,
                 vanilla_keychain: Some(self.vanilla_keychain),
+                keychain_layout: KeychainLayoutOverrides {
+                    colored_keychain: self.colored_keychain,
+                    colored_coin_type: self.colored_coin_type,
+                    vanilla_coin_type: self.vanilla_coin_type,
+                },
                 master_fingerprint: self.master_fingerprint,
                 mnemonic,
                 witness_version: self.witness_version,

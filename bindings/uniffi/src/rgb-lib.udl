@@ -90,6 +90,7 @@ interface RgbLibError {
   InvalidPsbtOperationStatus(string details);
   InvalidIndexer(string details);
   InvalidInvoice(string details);
+  InvalidKeychainLayout(string details);
   InvalidMnemonic(string details);
   InvalidMultisigThreshold(u8 required, u8 total);
   InvalidName(string details);
@@ -728,10 +729,18 @@ dictionary WalletData {
 };
 
 [Remote]
+dictionary KeychainLayoutOverrides {
+  u8? colored_keychain;
+  u32? colored_coin_type;
+  u32? vanilla_coin_type;
+};
+
+[Remote]
 dictionary SinglesigKeys {
   string account_xpub_vanilla;
   string account_xpub_colored;
   u8? vanilla_keychain;
+  KeychainLayoutOverrides keychain_layout;
   string master_fingerprint;
   string? mnemonic;
   WitnessVersion witness_version;
