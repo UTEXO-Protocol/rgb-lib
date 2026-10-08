@@ -44,7 +44,7 @@ pub use objects::{
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use objects::{
-    BridgeBeginResult, BridgeDetails, BurnBeginResult, BurnDetails, InflateBeginResult,
+    BridgeBeginResult, BridgeDetails, BridgeMint, BurnBeginResult, BurnDetails, InflateBeginResult,
     InflateDetails, OnlineOptions, OperationResult, RefreshFilter, RefreshResult,
     RefreshTransferStatus, RefreshedTransfer, SendBeginResult, SendDetails,
 };
