@@ -3841,6 +3841,7 @@ fn send_extra_allocations_no_dry_run_impl(donation: bool) {
             MIN_CONFIRMATIONS,
             default_send_expiration(),
             false,
+            None,
         )
         .unwrap();
     let batch_transfer_idx = begin.batch_transfer_idx.unwrap();
