@@ -1988,11 +1988,13 @@ pub struct BridgeDetails {
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "camel_case", serde(rename_all = "camelCase"))]
-pub struct BridgeMint {
+pub struct ReceivedMint {
     /// ID of the bridge transition, to be committed to the EVM lock
     pub opid: String,
     /// Amount the transition mints, to be locked on the EVM side
     pub amount: u64,
+    /// EVM bridge contract the lock must be made on, from the asset's genesis
+    pub contract_address: String,
 }
 
 /// The result of a send begin operation.

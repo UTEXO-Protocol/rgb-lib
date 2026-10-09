@@ -29,14 +29,14 @@ use rgb_lib::{
     wallet::{
         Address as RgbLibAddress, AssetBFA, AssetCFA, AssetFilter as RgbLibAssetFilter, AssetIFA,
         AssetNIA, AssetUDA, Assets, AssignmentsCollection, Balance, BlockTime, BridgeBeginResult,
-        BridgeDetails, BridgeInitResult, BridgeMint, BtcBalance, BurnBeginResult, BurnDetails,
+        BridgeDetails, BridgeInitResult, BtcBalance, BurnBeginResult, BurnDetails,
         Cosigner as CosignerData, DatabaseType, EmbeddedMedia, HubInfo, InflateBeginResult,
         InflateDetails, InitOperationResult, Invoice as RgbLibInvoice,
         InvoiceData as RgbLibInvoiceData, Media, Metadata, MultisigKeys, MultisigOnlineOptions,
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
         OperationResult, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo,
-        PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient as RgbLibRecipient,
+        PsbtInspection, PsbtOutputInfo, ReceiveData, ReceivedMint, Recipient as RgbLibRecipient,
         RecipientInfo as RgbLibRecipientInfo, RecipientType, RefreshFilter, RefreshTransferStatus,
         RefreshedTransfer, RespondToOperation as RgbLibRespondToOperation,
         RgbAllocation as RgbLibRgbAllocation, RgbInputInfo as RgbLibRgbInputInfo,
@@ -1669,16 +1669,8 @@ impl Wallet {
         )
     }
 
-    fn bridge_consignment_ack(
-        &self,
-        online: Online,
-        psbt: String,
-    ) -> Result<Option<bool>, RgbLibError> {
-        self._get_wallet().bridge_consignment_ack(online, psbt)
-    }
-
-    fn get_bridge_mint(&self, recipient_id: String) -> Result<Option<BridgeMint>, RgbLibError> {
-        self._get_wallet().get_bridge_mint(recipient_id)
+    fn get_received_mint(&self, recipient_id: String) -> Result<Option<ReceivedMint>, RgbLibError> {
+        self._get_wallet().get_received_mint(recipient_id)
     }
 
     fn bridge_end(
@@ -2257,14 +2249,6 @@ impl MultisigWallet {
             fee_rate,
             min_confirmations,
         )
-    }
-
-    fn bridge_consignment_ack(
-        &self,
-        online: Online,
-        psbt: String,
-    ) -> Result<Option<bool>, RgbLibError> {
-        self._get_wallet().bridge_consignment_ack(online, psbt)
     }
 
     fn bridge_init_end(
