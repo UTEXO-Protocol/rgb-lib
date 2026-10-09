@@ -1391,25 +1391,13 @@ impl Wallet {
         })
     }
 
-    /// Return what the recipient of a mint prepared with [`bridge_begin`](Wallet::bridge_begin)
-    /// answered on the proxy: `Some(true)` once it acknowledged the posted consignment,
-    /// `Some(false)` if it refused it, `None` while it has not answered. The EVM lock should go
-    /// ahead only on `Some(true)`.
-    pub fn bridge_consignment_ack(
-        &self,
-        online: Online,
-        psbt: String,
-    ) -> Result<Option<bool>, Error> {
-        self.check_online(online)?;
-        self.bridge_consignment_ack_impl(&Psbt::from_str(&psbt)?)
-    }
-
     /// Return the mint a bridge prepared for the invoice with the given recipient ID, as read from
-    /// the consignment this wallet fetched (and acknowledged, if valid) on refresh: the OpId and
-    /// amount the EVM lock must commit to. `None` until a consignment has been fetched.
+    /// the consignment this wallet fetched and checked on refresh: what the EVM lock must commit
+    /// to. `None` until a consignment has been fetched; check the transfer status before locking,
+    /// a refused mint fails the transfer.
     #[cfg(any(feature = "electrum", feature = "esplora"))]
-    pub fn get_bridge_mint(&self, recipient_id: String) -> Result<Option<BridgeMint>, Error> {
-        self.get_bridge_mint_impl(&recipient_id)
+    pub fn get_received_mint(&self, recipient_id: String) -> Result<Option<ReceivedMint>, Error> {
+        self.get_received_mint_impl(&recipient_id)
     }
 
     /// Complete the bridge operation by broadcasting the provided PSBT and saving the transfer to

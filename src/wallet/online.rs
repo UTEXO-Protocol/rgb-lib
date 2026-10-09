@@ -4,11 +4,13 @@
 
 use super::*;
 use crate::api::ethereum::EthClient;
+use amplify::confinement::Confined;
 use rgbstd::Operation as _;
 use rgbstd::contract::LinkableSchemaWrapper;
 use rgbstd::vm::ether_extension::{BridgedContract, Event, IssuedAmountCheckExt};
 use rgbstd::{OpId, RevealedValue};
-use schemata::{GS_BRIDGED_SUPPLY, GS_LINKED_TO_CONTRACT};
+use schemata::{GS_BRIDGE_LOCATION, GS_BRIDGED_SUPPLY, GS_LINKED_TO_CONTRACT};
+use strict_encoding::StrictDeserialize;
 
 const SCHEMAS_SUPPORTING_BURN: [database::enums::AssetSchema; 2] =
     [AssetSchema::Ifa, AssetSchema::Bfa];
@@ -1211,25 +1213,18 @@ pub trait WalletOnline: WalletOffline {
                 Ok(r) => {
                     if let Some(ref err) = r.error {
                         if err.message.contains("Cannot change ACK") {
-                            // our own earlier ACK (a bridge mint acknowledged before its EVM
-                            // lock) is not a refusal
-                            if proxy_client.get_ack(&recipient_id)?.result != Some(true) {
-                                warn!(
-                                    self.logger(),
-                                    "Pre-existing NACK found when trying to ACK, failing transfer"
-                                );
-                                updated_batch_transfer.status =
-                                    ActiveValue::Set(TransferStatus::Failed);
-                                return Ok(Some(
-                                    txn.update_batch_transfer(updated_batch_transfer)?,
-                                ));
-                            }
-                        } else {
-                            error!(self.logger(), "Proxy error posting ACK: {}", err.message);
-                            return Err(Error::Proxy {
-                                details: err.message.clone(),
-                            });
+                            warn!(
+                                self.logger(),
+                                "Pre-existing NACK found when trying to ACK, failing transfer"
+                            );
+                            updated_batch_transfer.status =
+                                ActiveValue::Set(TransferStatus::Failed);
+                            return Ok(Some(txn.update_batch_transfer(updated_batch_transfer)?));
                         }
+                        error!(self.logger(), "Proxy error posting ACK: {}", err.message);
+                        return Err(Error::Proxy {
+                            details: err.message.clone(),
+                        });
                     }
                     debug!(self.logger(), "Consignment ACK response: {:?}", r);
                 }
@@ -1409,7 +1404,7 @@ pub trait WalletOnline: WalletOffline {
             .collect()
     }
 
-    fn get_bridge_mint_impl(&self, recipient_id: &str) -> Result<Option<BridgeMint>, Error> {
+    fn get_received_mint_impl(&self, recipient_id: &str) -> Result<Option<ReceivedMint>, Error> {
         let txn = self.database().begin_transaction()?;
         for transfer in txn
             .iter_transfers()?
@@ -1425,12 +1420,23 @@ pub trait WalletOnline: WalletOffline {
             let Some(bundle) = consignment.bundles.last() else {
                 continue;
             };
-            if let Some((opid, amount)) = bridge_mints(&consignment, bundle.witness_id()).next() {
-                return Ok(Some(BridgeMint {
-                    opid: opid.to_string(),
-                    amount,
-                }));
-            }
+            let Some((opid, amount)) = bridge_mints(&consignment, bundle.witness_id()).next()
+            else {
+                continue;
+            };
+            let BridgeLocation::Ethereum(contract_address) = consignment
+                .genesis
+                .globals
+                .get(&GS_BRIDGE_LOCATION)
+                .and_then(|g| g.iter().next())
+                .and_then(|v| Confined::try_from(v.as_slice().to_vec()).ok())
+                .and_then(|b| BridgeLocation::from_strict_serialized::<{ usize::MAX }>(b).ok())
+                .ok_or(Error::InvalidConsignment)?;
+            return Ok(Some(ReceivedMint {
+                opid: opid.to_string(),
+                amount,
+                contract_address: contract_address.to_string(),
+            }));
         }
         Ok(None)
     }
@@ -1555,9 +1561,9 @@ pub trait WalletOnline: WalletOffline {
             }
         };
 
-        // a mint is posted before its EVM lock, for the recipient to acknowledge, and broadcast
-        // only after it: validate it as if the lock existed and answer on the proxy, leaving the
-        // transfer untouched until the mint is on chain
+        // a mint is posted before its EVM lock, for the recipient to check, and broadcast only
+        // after it: validate it as if the lock existed, leaving the transfer untouched until the
+        // mint is on chain
         let pending_mint_events = if asset_schema == AssetSchema::Bfa
             && self.indexer().get_tx_confirmations(&txid)?.is_none()
         {
@@ -1709,11 +1715,14 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
-        if asset_schema == AssetSchema::Ifa {
+        if matches!(asset_schema, AssetSchema::Ifa | AssetSchema::Bfa) {
             let url = if let Ok(ass) = txn.check_asset_exists(asset_id.clone()) {
                 ass.reject_list_url
-            } else {
+            } else if asset_schema == AssetSchema::Ifa {
                 let contract = IfaWrapper::with(valid_consignment.contract_data());
+                contract.reject_list_url().map(|u| u.to_string())
+            } else {
+                let contract = BfaWrapper::with(valid_consignment.contract_data());
                 contract.reject_list_url().map(|u| u.to_string())
             };
             if let Some(url) = &url {
@@ -1751,24 +1760,27 @@ pub trait WalletOnline: WalletOffline {
         }
 
         if !pending_mint_events.is_empty() {
-            if let ReceiveMode::Proxy { proxy_url } = &mode {
-                match ProxyClient::new(proxy_url)?.post_ack(&recipient_id, true) {
-                    Ok(r) => {
-                        if let Some(err) = r.error
-                            && !err.message.contains("Cannot change ACK")
-                        {
-                            return Err(Error::Proxy {
-                                details: err.message,
-                            });
-                        }
-                    }
-                    Err(e) if e.to_string().contains("Cannot change ACK") => {}
-                    Err(e) => return Err(e),
-                }
+            // the user locks the whole minted amount, so all of it must be theirs and what the
+            // invoice asked for
+            let received: u64 = receiving.values().map(|a| a.main_amount()).sum();
+            let minted: u64 = pending_mint_events
+                .iter()
+                .map(|e| e.amount().as_u64())
+                .sum();
+            let requested = match transfer.requested_assignment {
+                Some(Assignment::Fungible(amount)) => Some(amount),
+                _ => None,
+            };
+            if received != minted || requested.is_some_and(|r| r != received) {
+                error!(
+                    self.logger(),
+                    "Mint {txid} pays {received} of {minted}, requested {requested:?}"
+                );
+                return self.refuse_consignment(txn, &mode, recipient_id, updated_batch_transfer);
             }
             debug!(
                 self.logger(),
-                "Mint {txid} acknowledged, waiting for its broadcast"
+                "Mint {txid} checked, waiting for its broadcast"
             );
             return Ok(None);
         }
@@ -4805,9 +4817,9 @@ pub trait WalletOnline: WalletOffline {
             WalletTransactionType::RgbTransfer,
         )?;
 
-        // Compose the consignment now and post it: the recipient acknowledges it on the proxy
-        // before making the EVM lock, and `bridge_end_impl` only broadcasts. The used endpoints
-        // are saved with the transfer data so the end path finds them.
+        // Compose the consignment now and post it: the recipient checks it before making the
+        // EVM lock, and `bridge_end_impl` only broadcasts. The used endpoints are saved with the
+        // transfer data so the end path finds them.
         let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(&begin_operation_data.psbt)?;
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
@@ -4825,41 +4837,6 @@ pub trait WalletOnline: WalletOffline {
         fs::write(transfer_dir.join(TRANSFER_DATA_FILE), serialized_info)?;
 
         Ok(begin_operation_data)
-    }
-
-    /// What the recipient of a prepared mint answered on the proxy: `Some(true)` once it has
-    /// acknowledged the consignment, `Some(false)` if it refused it, `None` while undecided.
-    fn bridge_consignment_ack_impl(&self, psbt: &Psbt) -> Result<Option<bool>, Error> {
-        let (_, _, info_contents, _) = self.get_transfer_end_data(psbt)?;
-        let mut ack = None;
-        for recipient in info_contents
-            .transfers
-            .values()
-            .flat_map(|t| t.recipients.iter())
-        {
-            let Some(transport_endpoint) = recipient.transport_endpoints.iter().find(|te| te.used)
-            else {
-                continue;
-            };
-            let (proxy_url, nonce) =
-                crate::utils::extract_recipient_nonce(&transport_endpoint.endpoint);
-            let proxy_rid = crate::utils::derive_proxy_recipient_id(
-                &recipient.recipient_id,
-                nonce.as_deref().unwrap_or(&[]),
-            );
-            let ack_res = ProxyClient::new(&proxy_url)?.get_ack(&proxy_rid)?;
-            if let Some(err) = ack_res.error {
-                return Err(Error::Proxy {
-                    details: err.message,
-                });
-            }
-            match ack_res.result {
-                Some(false) => return Ok(Some(false)),
-                Some(true) => ack = Some(true),
-                None => return Ok(None),
-            }
-        }
-        Ok(ack)
     }
 
     fn bridge_end_impl(

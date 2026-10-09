@@ -44,8 +44,8 @@ pub use objects::{
 };
 #[cfg(any(feature = "electrum", feature = "esplora"))]
 pub use objects::{
-    BridgeBeginResult, BridgeDetails, BridgeMint, BurnBeginResult, BurnDetails, InflateBeginResult,
-    InflateDetails, OnlineOptions, OperationResult, RefreshFilter, RefreshResult,
+    BridgeBeginResult, BridgeDetails, BurnBeginResult, BurnDetails, InflateBeginResult,
+    InflateDetails, OnlineOptions, OperationResult, ReceivedMint, RefreshFilter, RefreshResult,
     RefreshTransferStatus, RefreshedTransfer, SendBeginResult, SendDetails,
 };
 pub use offline::RgbWalletOpsOffline;

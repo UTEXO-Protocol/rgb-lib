@@ -321,14 +321,14 @@ fn fascia_opid_matches_begin_result() {
     assert_eq!(from_fascia, begin.details.opid);
 }
 
-/// The proxy-acknowledged mint end to end, over a blinded and a witness invoice: begin posts the
-/// consignment, the user's refresh validates it against the lock the user is about to make and
-/// acknowledges it, and only then is the EVM lock made and the mint broadcast. The user's
-/// ordinary refresh settles it.
+/// The mint end to end, over a blinded and a witness invoice: begin posts the consignment, the
+/// user's refresh validates it against the lock the user is about to make, the user locks what
+/// their wallet read from it, and only then is the mint broadcast. The user's ordinary refresh
+/// settles it.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn mint_acknowledged_on_the_proxy_before_the_evm_lock() {
+fn mint_checked_by_the_user_before_the_evm_lock() {
     initialize();
 
     let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
@@ -356,7 +356,7 @@ fn mint_acknowledged_on_the_proxy_before_the_evm_lock() {
         // nothing has been fetched for this invoice yet
         assert_eq!(
             user.wallet
-                .get_bridge_mint(receive_data.recipient_id.clone())
+                .get_received_mint(receive_data.recipient_id.clone())
                 .unwrap(),
             None
         );
@@ -370,40 +370,34 @@ fn mint_acknowledged_on_the_proxy_before_the_evm_lock() {
                 transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
             },
         );
-        let bridge_ack = |bridge: &SinglesigParty| {
-            bridge
-                .wallet
-                .bridge_consignment_ack(bridge.party_online(), begin.psbt.clone())
-                .unwrap()
-        };
 
-        // the consignment is on the proxy, the user has not answered yet
-        assert_eq!(bridge_ack(&bridge), None);
-
-        // the refresh acknowledges the mint without progressing the transfer
+        // the refresh checks the mint without progressing the transfer
         assert!(!user.refresh_all());
-        assert_eq!(bridge_ack(&bridge), Some(true));
-        // what the user locks on the EVM side comes from the acknowledged consignment itself
-        assert_eq!(
-            user.wallet
-                .get_bridge_mint(receive_data.recipient_id.clone())
-                .unwrap(),
-            Some(BridgeMint {
-                opid: begin.details.opid.clone(),
-                amount: AMOUNT,
-            })
-        );
         assert!(user.check_test_transfer_status_recipient(
             &receive_data.recipient_id,
             TransferStatus::WaitingCounterparty,
         ));
-        // a later refresh finds its own ACK and is not bothered by it
+        // what the user locks on the EVM side comes from the checked consignment itself
+        let mint = user
+            .wallet
+            .get_received_mint(receive_data.recipient_id.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            mint,
+            ReceivedMint {
+                opid: begin.details.opid.clone(),
+                amount: AMOUNT,
+                contract_address: bridge_contract.address.clone(),
+            }
+        );
+        // a later refresh changes nothing
         assert!(!user.refresh_all());
 
-        erc20_approve(&eth_contract.address, &bridge_contract.address, AMOUNT);
-        bridge_funds_in(&bridge_contract.address, AMOUNT, &begin.details.opid);
+        erc20_approve(&eth_contract.address, &mint.contract_address, mint.amount);
+        bridge_funds_in(&mint.contract_address, mint.amount, &mint.opid);
         let signed_psbt = bridge.wallet.sign_psbt(begin.psbt.clone(), None).unwrap();
-        // the consignment is already out and acknowledged: this must not post it again
+        // the consignment is already out: this must not post it again
         bridge.bridge_end(signed_psbt);
 
         user.wait_for_refresh(None);
@@ -422,58 +416,61 @@ fn mint_acknowledged_on_the_proxy_before_the_evm_lock() {
     }
 }
 
-/// A mint posted for an invoice that asks for a different asset: the user's refresh refuses it
-/// the way it refuses any wrong-asset consignment, and the bridge sees the refusal.
+/// Mints that do not match the invoice: one for a different asset, one for a different amount.
+/// The user's refresh refuses them and the transfers fail, so the user has nothing to lock.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn refused_mint_is_seen_by_the_bridge() {
+fn mint_not_matching_the_invoice_is_refused() {
     initialize();
 
     let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
     let bridge_contract = deploy_bridge(&eth_contract.address);
 
     let mut bridge = get_funded_party!();
-    let asset = bridge.issue_asset_bfa(1, bridge_contract.address.clone(), None);
+    let asset = bridge.issue_asset_bfa(2, bridge_contract.address.clone(), None);
+    bridge.create_utxos_default();
 
     let mut user = get_funded_party!();
     user.create_utxos_default();
     let other_asset = user.issue_asset_nia(None);
-    let receive_data = user.blind_receive_asset_expiry(Some(other_asset.asset_id), None);
+    let invoices = [
+        user.blind_receive_asset_expiry(Some(other_asset.asset_id), None),
+        user.wallet
+            .blind_receive(
+                None,
+                Assignment::Fungible(AMOUNT + 1),
+                default_rcv_expiration(),
+                TRANSPORT_ENDPOINTS.clone(),
+                MIN_CONFIRMATIONS,
+            )
+            .unwrap(),
+    ];
 
-    let begin = bridge.bridge_begin(
-        &asset.asset_id,
-        Recipient {
-            assignment: Assignment::Fungible(AMOUNT),
-            recipient_id: receive_data.recipient_id.clone(),
-            witness_data: None,
-            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
-        },
-    );
-    let bridge_ack = |bridge: &SinglesigParty| {
-        bridge
-            .wallet
-            .bridge_consignment_ack(bridge.party_online(), begin.psbt.clone())
-            .unwrap()
-    };
-    assert_eq!(bridge_ack(&bridge), None);
-
-    assert!(user.refresh_all());
-    assert!(
-        user.check_test_transfer_status_recipient(
+    for receive_data in invoices {
+        bridge.bridge_begin(
+            &asset.asset_id,
+            Recipient {
+                assignment: Assignment::Fungible(AMOUNT),
+                recipient_id: receive_data.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        );
+        assert!(user.refresh_all());
+        assert!(user.check_test_transfer_status_recipient(
             &receive_data.recipient_id,
             TransferStatus::Failed
-        )
-    );
-    assert_eq!(bridge_ack(&bridge), Some(false));
+        ));
+    }
 }
 
 /// A bridge that posts, under the user's invoice, a mint paying somebody else: the user's refresh
-/// refuses it, the bridge sees the refusal, and the EVM lock never happens.
+/// refuses it and the EVM lock never happens.
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
-fn mint_to_another_recipient_is_refused_on_the_proxy() {
+fn mint_to_another_recipient_is_refused() {
     initialize();
 
     let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
@@ -513,7 +510,7 @@ fn mint_to_another_recipient_is_refused_on_the_proxy() {
         .wallet
         .post_consignment_to_proxy(
             &get_proxy_client(None),
-            user_proxy_rid.clone(),
+            user_proxy_rid,
             bridge
                 .wallet
                 .get_send_consignment_path(&asset.asset_id, &txid),
@@ -528,12 +525,5 @@ fn mint_to_another_recipient_is_refused_on_the_proxy() {
             &user_receive.recipient_id,
             TransferStatus::Failed
         )
-    );
-    assert_eq!(
-        get_proxy_client(None)
-            .get_ack(&user_proxy_rid)
-            .unwrap()
-            .result,
-        Some(false)
     );
 }

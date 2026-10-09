@@ -2740,19 +2740,6 @@ impl MultisigWallet {
         })
     }
 
-    /// Return what the recipient of a mint prepared with
-    /// [`bridge_init_begin`](Self::bridge_init_begin) answered on the proxy: `Some(true)` once it
-    /// acknowledged the posted consignment, `Some(false)` if it refused it, `None` while it has
-    /// not answered. The EVM lock should go ahead only on `Some(true)`.
-    pub fn bridge_consignment_ack(
-        &self,
-        online: Online,
-        psbt: String,
-    ) -> Result<Option<bool>, Error> {
-        self.check_online(online)?;
-        self.bridge_consignment_ack_impl(&Psbt::from_str(&psbt)?)
-    }
-
     /// Post a mint prepared by [`bridge_init_begin`](Self::bridge_init_begin) to the
     /// hub, given the PSBT it returned. The transition is rebuilt from the PSBT
     /// the way the completion path rebuilds it, so nothing else needs keeping.
