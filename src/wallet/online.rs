@@ -4,11 +4,13 @@
 
 use super::*;
 use crate::api::ethereum::EthClient;
+use amplify::confinement::Confined;
 use rgbstd::Operation as _;
 use rgbstd::contract::LinkableSchemaWrapper;
 use rgbstd::vm::ether_extension::{BridgedContract, Event, IssuedAmountCheckExt};
 use rgbstd::{OpId, RevealedValue};
-use schemata::GS_LINKED_TO_CONTRACT;
+use schemata::{GS_BRIDGE_LOCATION, GS_BRIDGED_SUPPLY, GS_LINKED_TO_CONTRACT};
+use strict_encoding::StrictDeserialize;
 
 const SCHEMAS_SUPPORTING_BURN: [database::enums::AssetSchema; 2] =
     [AssetSchema::Ifa, AssetSchema::Bfa];
@@ -39,6 +41,30 @@ fn proxy_routing_id_for_transfer(transfer: &DbTransfer) -> String {
         _ => &[],
     };
     crate::utils::derive_proxy_recipient_id(&recipient_id, nonce)
+}
+
+/// The bridge transitions anchored to `witness_id`, with the amount each declares to mint.
+fn bridge_mints(
+    consignment: &RgbTransfer,
+    witness_id: RgbTxid,
+) -> impl Iterator<Item = (OpId, u64)> + '_ {
+    consignment
+        .bundles
+        .iter()
+        .filter(move |b| b.witness_id() == witness_id)
+        .flat_map(|b| b.bundle.known_transitions.iter())
+        .filter(|kt| kt.transition.transition_type == TS_BRIDGE)
+        .map(|kt| {
+            let amount = kt
+                .transition
+                .globals
+                .get(&GS_BRIDGED_SUPPLY)
+                .and_then(|g| g.iter().next())
+                .and_then(|v| v.as_slice().try_into().ok())
+                .map(u64::from_le_bytes)
+                .unwrap_or_default();
+            (kt.transition.id(), amount)
+        })
 }
 
 pub trait WalletOnline: WalletOffline {
@@ -1370,6 +1396,51 @@ pub trait WalletOnline: WalletOffline {
         )
     }
 
+    // the lock a not yet broadcast mint will be valid against: the deposit the recipient is about
+    // to make, for the amount the mint declares
+    fn pending_mint_events(consignment: &RgbTransfer, witness_id: RgbTxid) -> Vec<Event> {
+        bridge_mints(consignment, witness_id)
+            .map(|(opid, amount)| Event::new(opid, RevealedValue::from(amount)))
+            .collect()
+    }
+
+    fn get_received_mint_impl(&self, recipient_id: &str) -> Result<Option<ReceivedMint>, Error> {
+        let txn = self.database().begin_transaction()?;
+        for transfer in txn
+            .iter_transfers()?
+            .iter()
+            .filter(|t| t.recipient_id.as_deref() == Some(recipient_id))
+        {
+            let path = self.get_receive_consignment_path(&proxy_routing_id_for_transfer(transfer));
+            if !path.exists() {
+                continue;
+            }
+            let consignment =
+                RgbTransfer::load_file(&path).map_err(|_| Error::InvalidConsignment)?;
+            let Some(bundle) = consignment.bundles.last() else {
+                continue;
+            };
+            let Some((opid, amount)) = bridge_mints(&consignment, bundle.witness_id()).next()
+            else {
+                continue;
+            };
+            let BridgeLocation::Ethereum(contract_address) = consignment
+                .genesis
+                .globals
+                .get(&GS_BRIDGE_LOCATION)
+                .and_then(|g| g.iter().next())
+                .and_then(|v| Confined::try_from(v.as_slice().to_vec()).ok())
+                .and_then(|b| BridgeLocation::from_strict_serialized::<{ usize::MAX }>(b).ok())
+                .ok_or(Error::InvalidConsignment)?;
+            return Ok(Some(ReceivedMint {
+                opid: opid.to_string(),
+                amount,
+                contract_address: contract_address.to_string(),
+            }));
+        }
+        Ok(None)
+    }
+
     // A BFA mint is only valid if the EVM lock it commits to actually happened; the extension
     // feeds RGB consensus the bridge contract's FundsIn events, so every holder repeats the check
     fn validate_consignment_for_schema<R: ResolveWitness>(
@@ -1378,6 +1449,7 @@ pub trait WalletOnline: WalletOffline {
         asset_schema: AssetSchema,
         resolver: &R,
         validation_config: &ValidationConfig,
+        assumed_events: &[Event],
     ) -> Result<Result<ValidTransfer, ValidationError>, Error> {
         let contract_id = consignment.contract_id();
         Ok(if asset_schema == AssetSchema::Bfa {
@@ -1392,7 +1464,7 @@ pub trait WalletOnline: WalletOffline {
             };
             let bridge_location =
                 BfaWrapper::with(valid_contract.contract_data()).bridge_location();
-            let mut events: Vec<Event> = vec![];
+            let mut events: Vec<Event> = assumed_events.to_vec();
             match bridge_location {
                 BridgeLocation::Ethereum(address) => {
                     let Some(eth_rpc_url) = self.eth_rpc_url().clone() else {
@@ -1489,6 +1561,17 @@ pub trait WalletOnline: WalletOffline {
             }
         };
 
+        // a mint is posted before its EVM lock, for the recipient to check, and broadcast only
+        // after it: validate it as if the lock existed, leaving the transfer untouched until the
+        // mint is on chain
+        let pending_mint_events = if asset_schema == AssetSchema::Bfa
+            && self.indexer().get_tx_confirmations(&txid)?.is_none()
+        {
+            Self::pending_mint_events(&consignment, witness_id)
+        } else {
+            vec![]
+        };
+
         // validate consignment
         debug!(self.logger(), "Validating consignment...");
         let safe_height = NonZeroU32::new(self.safe_height(batch_transfer.min_confirmations)?);
@@ -1508,6 +1591,7 @@ pub trait WalletOnline: WalletOffline {
             asset_schema,
             &resolver,
             &validation_config,
+            &pending_mint_events,
         )?;
         let valid_consignment = match validation_result {
             Ok(consignment) => consignment,
@@ -1631,11 +1715,14 @@ pub trait WalletOnline: WalletOffline {
             }
         }
 
-        if asset_schema == AssetSchema::Ifa {
+        if matches!(asset_schema, AssetSchema::Ifa | AssetSchema::Bfa) {
             let url = if let Ok(ass) = txn.check_asset_exists(asset_id.clone()) {
                 ass.reject_list_url
-            } else {
+            } else if asset_schema == AssetSchema::Ifa {
                 let contract = IfaWrapper::with(valid_consignment.contract_data());
+                contract.reject_list_url().map(|u| u.to_string())
+            } else {
+                let contract = BfaWrapper::with(valid_consignment.contract_data());
                 contract.reject_list_url().map(|u| u.to_string())
             };
             if let Some(url) = &url {
@@ -1670,6 +1757,32 @@ pub trait WalletOnline: WalletOffline {
                     );
                 }
             }
+        }
+
+        if !pending_mint_events.is_empty() {
+            // the user locks the whole minted amount, so all of it must be theirs and what the
+            // invoice asked for
+            let received: u64 = receiving.values().map(|a| a.main_amount()).sum();
+            let minted: u64 = pending_mint_events
+                .iter()
+                .map(|e| e.amount().as_u64())
+                .sum();
+            let requested = match transfer.requested_assignment {
+                Some(Assignment::Fungible(amount)) => Some(amount),
+                _ => None,
+            };
+            if received != minted || requested.is_some_and(|r| r != received) {
+                error!(
+                    self.logger(),
+                    "Mint {txid} pays {received} of {minted}, requested {requested:?}"
+                );
+                return self.refuse_consignment(txn, &mode, recipient_id, updated_batch_transfer);
+            }
+            debug!(
+                self.logger(),
+                "Mint {txid} checked, waiting for its broadcast"
+            );
+            return Ok(None);
         }
 
         if asset_transfer.asset_id.is_none() {
@@ -4704,12 +4817,24 @@ pub trait WalletOnline: WalletOffline {
             WalletTransactionType::RgbTransfer,
         )?;
 
-        // Compose the consignment now: the caller needs the OpId before the EVM lock exists.
-        // It stays local until `bridge_end_impl` broadcasts: posted to the proxy any
-        // earlier it would consume the invoice even when the mint never happens.
-        let (_txid, transfer_dir, info_contents, fascia) =
+        // Compose the consignment now and post it: the recipient checks it before making the
+        // EVM lock, and `bridge_end_impl` only broadcasts. The used endpoints are saved with the
+        // transfer data so the end path finds them.
+        let (txid, transfer_dir, mut info_contents, fascia) =
             self.get_transfer_end_data(&begin_operation_data.psbt)?;
         self.gen_consignments(&fascia, &info_contents.transfers, &transfer_dir)?;
+        for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
+            let asset = txn.get_asset(asset_id.clone())?.unwrap();
+            let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
+            self.post_transfer_data(
+                &mut info_contents_asset.recipients,
+                asset_transfer_dir,
+                txid.clone(),
+                self.get_asset_medias(txn, asset.media_idx, None)?,
+            )?;
+        }
+        let serialized_info = serde_json::to_string(&info_contents).map_err(InternalError::from)?;
+        fs::write(transfer_dir.join(TRANSFER_DATA_FILE), serialized_info)?;
 
         Ok(begin_operation_data)
     }
@@ -4718,26 +4843,9 @@ pub trait WalletOnline: WalletOffline {
         &mut self,
         txn: &DbTxn,
         signed_psbt: &Psbt,
-        post_consignment: bool,
     ) -> Result<OperationResult, Error> {
-        let (txid, transfer_dir, mut info_contents, fascia) =
-            self.get_transfer_end_data(signed_psbt)?;
-
-        // the consignments were composed at begin; post them only now that the mint
-        // is being broadcast, and only from the initiator: every cosigner runs this
-        // at approval too, and a second post fails once the receiver has acked
-        if post_consignment {
-            for (asset_id, info_contents_asset) in info_contents.transfers.iter_mut() {
-                let asset = txn.get_asset(asset_id.clone())?.unwrap();
-                let asset_transfer_dir = self.get_asset_transfer_dir(&transfer_dir, asset_id);
-                self.post_transfer_data(
-                    &mut info_contents_asset.recipients,
-                    asset_transfer_dir,
-                    txid.clone(),
-                    self.get_asset_medias(txn, asset.media_idx, None)?,
-                )?;
-            }
-        }
+        // the consignments were composed and posted at begin
+        let (txid, _, info_contents, fascia) = self.get_transfer_end_data(signed_psbt)?;
 
         let batch_transfer_idx = self.finalize_transfer_end(
             txn,

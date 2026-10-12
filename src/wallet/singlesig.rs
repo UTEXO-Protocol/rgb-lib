@@ -1391,6 +1391,15 @@ impl Wallet {
         })
     }
 
+    /// Return the mint a bridge prepared for the invoice with the given recipient ID, as read from
+    /// the consignment this wallet fetched and checked on refresh: what the EVM lock must commit
+    /// to. `None` until a consignment has been fetched; check the transfer status before locking,
+    /// a refused mint fails the transfer.
+    #[cfg(any(feature = "electrum", feature = "esplora"))]
+    pub fn get_received_mint(&self, recipient_id: String) -> Result<Option<ReceivedMint>, Error> {
+        self.get_received_mint_impl(&recipient_id)
+    }
+
     /// Complete the bridge operation by broadcasting the provided PSBT and saving the transfer to
     /// DB.
     ///
@@ -1407,7 +1416,7 @@ impl Wallet {
         self.check_online(online)?;
         let psbt = Psbt::from_str(&signed_psbt)?;
         let txn = self.database().begin_transaction()?;
-        let res = self.bridge_end_impl(&txn, &psbt, true)?;
+        let res = self.bridge_end_impl(&txn, &psbt)?;
         self.update_backup_info(&txn, false)?;
         txn.commit()?;
         self.trigger_auto_backup();

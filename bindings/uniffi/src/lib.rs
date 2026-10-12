@@ -36,7 +36,7 @@ use rgb_lib::{
         MultisigVotingStatus as RgbLibMultisigVotingStatus, MultisigWallet as RgbLibMultisigWallet,
         Online, OnlineOptions, Operation as RgbLibOperation, OperationInfo as RgbLibOperationInfo,
         OperationResult, Outpoint, PendingVanillaTx, ProofOfReserves, PsbtInputInfo,
-        PsbtInspection, PsbtOutputInfo, ReceiveData, Recipient as RgbLibRecipient,
+        PsbtInspection, PsbtOutputInfo, ReceiveData, ReceivedMint, Recipient as RgbLibRecipient,
         RecipientInfo as RgbLibRecipientInfo, RecipientType, RefreshFilter, RefreshTransferStatus,
         RefreshedTransfer, RespondToOperation as RgbLibRespondToOperation,
         RgbAllocation as RgbLibRgbAllocation, RgbInputInfo as RgbLibRgbInputInfo,
@@ -1667,6 +1667,10 @@ impl Wallet {
             fee_rate,
             min_confirmations,
         )
+    }
+
+    fn get_received_mint(&self, recipient_id: String) -> Result<Option<ReceivedMint>, RgbLibError> {
+        self._get_wallet().get_received_mint(recipient_id)
     }
 
     fn bridge_end(

@@ -1010,9 +1010,9 @@ impl OperationHandler for BridgeHandler {
         txn: &DbTxn,
         wallet: &mut MultisigWallet,
         combined_psbt: &Psbt,
-        initiated_by_me: bool,
+        _initiated_by_me: bool,
     ) -> Result<String, Error> {
-        let res = wallet.bridge_end_impl(txn, combined_psbt, initiated_by_me)?;
+        let res = wallet.bridge_end_impl(txn, combined_psbt)?;
         Ok(res.txid)
     }
 

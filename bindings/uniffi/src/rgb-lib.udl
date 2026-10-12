@@ -790,6 +790,13 @@ dictionary BridgeBeginResult {
 };
 
 [Remote]
+dictionary ReceivedMint {
+  string opid;
+  u64 amount;
+  string contract_address;
+};
+
+[Remote]
 dictionary InflateDetails {
   string fascia_path;
   u8 min_confirmations;
@@ -1179,6 +1186,9 @@ interface Wallet {
   BridgeBeginResult bridge_begin(
     Online online, string asset_id, Recipient recipient, u64 fee_rate,
     u8 min_confirmations);
+
+  [Throws=RgbLibError]
+  ReceivedMint? get_received_mint(string recipient_id);
 
   [Throws=RgbLibError]
   OperationResult bridge_end(Online online, string signed_psbt);

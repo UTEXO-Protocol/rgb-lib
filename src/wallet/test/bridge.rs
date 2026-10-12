@@ -332,3 +332,210 @@ fn fascia_opid_matches_begin_result() {
     .unwrap();
     assert_eq!(from_fascia, begin.details.opid);
 }
+
+/// The mint end to end, over a blinded and a witness invoice: begin posts the consignment, the
+/// user's refresh validates it against the lock the user is about to make, the user locks what
+/// their wallet read from it, and only then is the mint broadcast. The user's ordinary refresh
+/// settles it.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn mint_checked_by_the_user_before_the_evm_lock() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    // one bridge right per mint
+    let mut bridge = get_funded_party!();
+    let asset = bridge.issue_asset_bfa(2, bridge_contract.address.clone(), None);
+    bridge.create_utxos_default();
+
+    let mut user = get_funded_party!();
+    user.create_utxos_default();
+    let invoices = [
+        (user.blind_receive(), None),
+        (
+            user.witness_receive(),
+            Some(WitnessData {
+                amount_sat: 1000,
+                blinding: None,
+            }),
+        ),
+    ];
+
+    for (i, (receive_data, witness_data)) in invoices.into_iter().enumerate() {
+        // nothing has been fetched for this invoice yet
+        assert_eq!(
+            user.wallet
+                .get_received_mint(receive_data.recipient_id.clone())
+                .unwrap(),
+            None
+        );
+
+        let begin = bridge.bridge_begin(
+            &asset.asset_id,
+            Recipient {
+                assignment: Assignment::Fungible(AMOUNT),
+                recipient_id: receive_data.recipient_id.clone(),
+                witness_data,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        );
+
+        // the refresh checks the mint without progressing the transfer
+        assert!(!user.refresh_all());
+        assert!(user.check_test_transfer_status_recipient(
+            &receive_data.recipient_id,
+            TransferStatus::WaitingCounterparty,
+        ));
+        // what the user locks on the EVM side comes from the checked consignment itself
+        let mint = user
+            .wallet
+            .get_received_mint(receive_data.recipient_id.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            mint,
+            ReceivedMint {
+                opid: begin.details.opid.clone(),
+                amount: AMOUNT,
+                contract_address: bridge_contract.address.clone(),
+            }
+        );
+        // a later refresh changes nothing
+        assert!(!user.refresh_all());
+
+        erc20_approve(&eth_contract.address, &mint.contract_address, mint.amount);
+        bridge_funds_in(&mint.contract_address, mint.amount, &mint.opid);
+        let signed_psbt = bridge.wallet.sign_psbt(begin.psbt.clone(), None).unwrap();
+        // the consignment is already out: this must not post it again
+        bridge.bridge_end(signed_psbt);
+
+        user.wait_for_refresh(None);
+        mine(false);
+        assert!(user.refresh_asset(&asset.asset_id));
+        bridge.wait_for_refresh(Some(&asset.asset_id));
+        let minted = AMOUNT * (i as u64 + 1);
+        assert_eq!(
+            user.get_asset_balance(&asset.asset_id),
+            Balance {
+                settled: minted,
+                future: minted,
+                spendable: minted,
+            }
+        );
+    }
+}
+
+/// Mints that do not match the invoice: one for a different asset, one for a different amount.
+/// The user's refresh refuses them and the transfers fail, so the user has nothing to lock.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn mint_not_matching_the_invoice_is_refused() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    let mut bridge = get_funded_party!();
+    let asset = bridge.issue_asset_bfa(2, bridge_contract.address.clone(), None);
+    bridge.create_utxos_default();
+
+    let mut user = get_funded_party!();
+    user.create_utxos_default();
+    let other_asset = user.issue_asset_nia(None);
+    let invoices = [
+        user.blind_receive_asset_expiry(Some(other_asset.asset_id), None),
+        user.wallet
+            .blind_receive(
+                None,
+                Assignment::Fungible(AMOUNT + 1),
+                default_rcv_expiration(),
+                TRANSPORT_ENDPOINTS.clone(),
+                MIN_CONFIRMATIONS,
+            )
+            .unwrap(),
+    ];
+
+    for receive_data in invoices {
+        bridge.bridge_begin(
+            &asset.asset_id,
+            Recipient {
+                assignment: Assignment::Fungible(AMOUNT),
+                recipient_id: receive_data.recipient_id.clone(),
+                witness_data: None,
+                transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+            },
+        );
+        assert!(user.refresh_all());
+        assert!(user.check_test_transfer_status_recipient(
+            &receive_data.recipient_id,
+            TransferStatus::Failed
+        ));
+    }
+}
+
+/// A bridge that posts, under the user's invoice, a mint paying somebody else: the user's refresh
+/// refuses it and the EVM lock never happens.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn mint_to_another_recipient_is_refused() {
+    initialize();
+
+    let eth_contract = deploy_test_erc20("Bridged Token", "BRG", 18, 1_000_000);
+    let bridge_contract = deploy_bridge(&eth_contract.address);
+
+    let mut bridge = get_funded_party!();
+    let asset = bridge.issue_asset_bfa(1, bridge_contract.address.clone(), None);
+
+    let mut user = get_funded_party!();
+    user.create_utxos_default();
+    let user_receive = user.blind_receive();
+    let mut attacker = get_funded_party!();
+    attacker.create_utxos_default();
+    let attacker_receive = attacker.blind_receive();
+
+    // the mint pays the attacker's invoice...
+    let begin = bridge.bridge_begin(
+        &asset.asset_id,
+        Recipient {
+            assignment: Assignment::Fungible(AMOUNT),
+            recipient_id: attacker_receive.recipient_id.clone(),
+            witness_data: None,
+            transport_endpoints: TRANSPORT_ENDPOINTS.clone(),
+        },
+    );
+    // ...but its consignment is presented to the user as its own
+    let txid = Psbt::from_str(&begin.psbt)
+        .unwrap()
+        .unsigned_tx
+        .compute_txid()
+        .to_string();
+    let user_proxy_rid = Invoice::new(user_receive.invoice.clone())
+        .unwrap()
+        .invoice_data()
+        .proxy_recipient_id;
+    bridge
+        .wallet
+        .post_consignment_to_proxy(
+            &get_proxy_client(None),
+            user_proxy_rid,
+            bridge
+                .wallet
+                .get_send_consignment_path(&asset.asset_id, &txid),
+            txid,
+            None,
+        )
+        .unwrap();
+
+    assert!(user.refresh_all());
+    assert!(
+        user.check_test_transfer_status_recipient(
+            &user_receive.recipient_id,
+            TransferStatus::Failed
+        )
+    );
+}
