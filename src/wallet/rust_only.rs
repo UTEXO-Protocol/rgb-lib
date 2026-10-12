@@ -900,6 +900,54 @@ impl Wallet {
         Ok((fascia, asset_beneficiaries))
     }
 
+    /// Color a PSBT, consume the RGB fascia and return the related consignment.
+    ///
+    /// The fascia is applied to the RGB stash right away, before the tx is signed or broadcast,
+    /// and nothing is recorded that could roll it back: use this only when the tx is going to be
+    /// broadcast immediately, otherwise prefer [`Self::color_psbt_and_prepare_consume`].
+    ///
+    /// <div class="warning">This method is meant for special usage and is normally not needed, use
+    /// it only if you know what you're doing</div>
+    pub fn color_psbt_and_consume(
+        &self,
+        psbt: &mut Psbt,
+        coloring_info: ColoringInfo,
+    ) -> Result<Vec<RgbTransfer>, Error> {
+        info!(self.logger(), "Coloring PSBT and consuming...");
+        let (fascia, asset_beneficiaries) = self.color_psbt(psbt, coloring_info.clone())?;
+
+        let witness_txid = psbt.get_txid();
+
+        let mut runtime = self.rgb_runtime()?;
+        let mut transfers = vec![];
+        for (contract_id, beneficiaries) in asset_beneficiaries {
+            let mut beneficiaries_witness = vec![];
+            let mut beneficiaries_blinded = vec![];
+            for builder_seal in beneficiaries {
+                match builder_seal {
+                    BuilderSeal::Revealed(seal) => {
+                        let explicit_seal = ExplicitSeal::with(witness_txid, seal.vout);
+                        beneficiaries_witness.push(explicit_seal);
+                    }
+                    BuilderSeal::Concealed(secret_seal) => {
+                        beneficiaries_blinded.push(secret_seal);
+                    }
+                };
+            }
+            transfers.push(runtime.transfer_from_fascia(
+                contract_id,
+                beneficiaries_witness,
+                beneficiaries_blinded,
+                [],
+                &fascia,
+            )?);
+        }
+        runtime.consume_fascia(fascia, None)?;
+
+        info!(self.logger(), "Color PSBT and consume completed");
+        Ok(transfers)
+    }
+
     /// Color a PSBT, build consignments, and register a fallible batch transfer.
     ///
     /// `output_map` indexing follows [`Self::color_psbt`] (legacy P2TR / `OpretFirst` +1 shift).
