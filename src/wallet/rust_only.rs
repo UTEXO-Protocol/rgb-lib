@@ -2711,9 +2711,6 @@ impl Wallet {
             trusted_typesystem,
             ..Default::default()
         };
-        // Funding consignments may contain BFA bridge transitions. Metadata registration
-        // must validate their Ethereum evidence just like the preceding transfer acceptance.
-        // Use observed bridge events only, without assuming any pending deposits.
         let valid_transfer = match self.validate_consignment_for_schema(
             &consignment,
             asset_schema,

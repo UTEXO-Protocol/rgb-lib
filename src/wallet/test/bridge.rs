@@ -108,8 +108,7 @@ fn success() {
         .count();
     assert_eq!(rights, 1);
 
-    // Lightning registers metadata from a funding consignment whose history includes
-    // this bridge transition. Plain RGB validation has no Ethereum context and rejects it.
+    // save metadata from a consignment containing a bridge mint
     let mut channel_recipient = get_empty_party!();
     party.check_save_new_asset(
         &mut channel_recipient,
