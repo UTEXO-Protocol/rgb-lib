@@ -2711,7 +2711,13 @@ impl Wallet {
             trusted_typesystem,
             ..Default::default()
         };
-        let valid_transfer = match consignment.clone().validate(&resolver, &validation_config) {
+        let valid_transfer = match self.validate_consignment_for_schema(
+            &consignment,
+            asset_schema,
+            &resolver,
+            &validation_config,
+            &[],
+        )? {
             Ok(consignment) => consignment,
             Err(ValidationError::InvalidConsignment(error)) => {
                 error!(self.logger(), "Consignment is invalid: {}", error);

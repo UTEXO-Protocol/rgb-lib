@@ -107,6 +107,17 @@ fn success() {
         .filter(|a| matches!(a.assignment, Assignment::BridgeRight))
         .count();
     assert_eq!(rights, 1);
+
+    // save metadata from a consignment containing a bridge mint
+    let mut channel_recipient = get_empty_party!();
+    party.check_save_new_asset(
+        &mut channel_recipient,
+        &asset.asset_id,
+        Assignment::Fungible(66),
+    );
+    let metadata = channel_recipient.get_asset_metadata(&asset.asset_id);
+    assert_eq!(metadata.asset_schema, AssetSchema::Bfa);
+    assert_eq!(metadata.known_circulating_supply, AMOUNT);
 }
 
 /// A mint lane received from the issuer mints like one from genesis: the issuer sends a bridge
