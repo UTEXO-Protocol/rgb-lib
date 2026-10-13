@@ -163,6 +163,87 @@ fn success() {
         .unwrap();
 }
 
+/// The one-step variant: the fascia goes into the stash at once and the consignment it returns
+/// is accepted by the receiver.
+#[cfg(feature = "electrum")]
+#[test]
+#[parallel]
+fn color_psbt_and_consume_success() {
+    initialize();
+
+    let amt_sat = 500;
+    let blinding = 777;
+
+    let mut party_send = get_funded_noutxo_party!();
+    let mut recv_party = get_empty_party!();
+    party_send.create_utxos(false, Some(1), None, FEE_RATE, None);
+    party_send.send_btc(&recv_party.get_address(), 99_998_200);
+    let asset = party_send.issue_asset_nia(Some(&[AMOUNT]));
+
+    let address = BdkAddress::from_str(&recv_party.get_address()).unwrap();
+    let mut tx_builder = party_send.wallet.bdk_wallet_mut().build_tx();
+    tx_builder
+        .add_recipient(
+            address.assume_checked().script_pubkey(),
+            BdkAmount::from_sat(amt_sat),
+        )
+        .fee_rate(FeeRate::from_sat_per_vb_u32(FEE_RATE as u32));
+    let mut psbt = tx_builder.finish().unwrap();
+    let vout = psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .position(|o| o.value.to_sat() == amt_sat)
+        .unwrap() as u32;
+    let coloring_info = ColoringInfo {
+        asset_info_map: HashMap::from_iter([(
+            ContractId::from_str(&asset.asset_id).unwrap(),
+            AssetColoringInfo {
+                output_map: HashMap::from_iter([(vout, AMOUNT)]),
+                static_blinding: Some(blinding),
+            },
+        )]),
+        static_blinding: Some(blinding),
+        nonce: None,
+    };
+    let mut psbt_copy = psbt.clone();
+    party_send
+        .wallet
+        .color_psbt(&mut psbt, coloring_info.clone())
+        .unwrap();
+
+    let transfers = party_send
+        .wallet
+        .color_psbt_and_consume(&mut psbt_copy, coloring_info)
+        .unwrap();
+    // same coloring as color_psbt, OP_RETURN at vout 0 shifts the recipient output
+    assert_eq!(psbt, psbt_copy);
+    let vout = vout + 1;
+
+    let txid = psbt_copy.unsigned_tx.compute_txid().to_string();
+    let transfers_dir = party_send.wallet.get_transfers_dir().join(&txid);
+    let consignment_path = transfers_dir.join(CONSIGNMENT_FILE);
+    std::fs::create_dir_all(&transfers_dir).unwrap();
+    assert_eq!(transfers.len(), 1);
+    transfers
+        .first()
+        .unwrap()
+        .save_file(&consignment_path)
+        .unwrap();
+    recv_party
+        .wallet
+        .accept_transfer_consignment(
+            recv_party.online,
+            consignment_path,
+            txid.clone(),
+            vout,
+            blinding,
+        )
+        .unwrap();
+
+    broadcast_wallet_psbt(&party_send.wallet, &psbt_copy);
+}
+
 #[cfg(feature = "electrum")]
 #[test]
 #[parallel]
