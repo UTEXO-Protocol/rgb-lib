@@ -150,6 +150,13 @@ pub struct AcceptTransferResult {
     pub assignments: Vec<Assignment>,
 }
 
+/// Raw fetch result; `txid` and `vout` are what the proxy reported, not validated.
+pub struct FetchedConsignment {
+    pub consignment: Vec<u8>,
+    pub txid: String,
+    pub vout: u32,
+}
+
 /// Caller intent for `fetch_and_accept_transfer_by_recipient_id`.
 pub struct ExpectedTransfer {
     pub asset_id: String,
@@ -1409,6 +1416,48 @@ impl Wallet {
                 &consignment_endpoint,
                 blinding,
                 min_confirmations,
+                expected.into(),
+            )?;
+        Ok(AcceptTransferResult {
+            consignment: save_rgb_transfer(&transfer)?,
+            assignments: assignments.into_iter().map(Into::into).collect(),
+        })
+    }
+
+    fn fetch_consignment_by_recipient_id_unchecked(
+        &self,
+        recipient_id: String,
+        consignment_endpoint: String,
+    ) -> Result<FetchedConsignment, RgbLibError> {
+        let (transfer, txid, vout) = self
+            ._get_wallet()
+            .fetch_consignment_by_recipient_id_unchecked(recipient_id, &consignment_endpoint)?;
+        Ok(FetchedConsignment {
+            consignment: save_rgb_transfer(&transfer)?,
+            txid,
+            vout,
+        })
+    }
+
+    fn accept_transfer_from_consignment_unchecked(
+        &self,
+        online: Online,
+        consignment: Vec<u8>,
+        txid: String,
+        vout: u32,
+        blinding: u64,
+        expected: ExpectedTransfer,
+    ) -> Result<AcceptTransferResult, RgbLibError> {
+        let consignment =
+            RgbTransfer::load(&consignment[..]).map_err(|_| RgbLibError::InvalidConsignment)?;
+        let (transfer, assignments) = self
+            ._get_wallet()
+            .accept_transfer_from_consignment_unchecked(
+                online,
+                consignment,
+                txid,
+                vout,
+                blinding,
                 expected.into(),
             )?;
         Ok(AcceptTransferResult {
