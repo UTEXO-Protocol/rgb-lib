@@ -320,6 +320,13 @@ dictionary AcceptTransferResult {
   sequence<Assignment> assignments;
 };
 
+// Raw fetch result: txid and vout are what the proxy reported, not validated.
+dictionary FetchedConsignment {
+  sequence<u8> consignment;
+  string txid;
+  u32 vout;
+};
+
 // Caller intent for fetch_and_accept: reject unintended but structurally valid consignments.
 dictionary ExpectedTransfer {
   string asset_id;
@@ -1082,7 +1089,6 @@ interface Wallet {
   // invoice afterwards to complete the batch, Receive coloring and balance.
   // expected binds contract id, schema, assignment type and amount (empty/mismatch rejected).
   // min_confirmations: 0 allows mempool/Tentative (reorg-exposed HTLC race); >=1 requires mined.
-  // Raw fetch/accept halves are Rust-only (`*_unchecked`) — do not re-export them here.
   [Throws=RgbLibError]
   AcceptTransferResult fetch_and_accept_transfer_by_recipient_id(
     Online online,
@@ -1091,6 +1097,18 @@ interface Wallet {
     string consignment_endpoint,
     u64 blinding,
     u8 min_confirmations,
+    ExpectedTransfer expected);
+
+  // Raw halves of the above for witness outputs the wallet does not own (NUMS HTLC locks).
+  // The caller MUST pin before accepting: consignment txid == the submitted deposit tx and
+  // output[vout] pays the lock script; a malicious proxy can otherwise steer acceptance.
+  [Throws=RgbLibError]
+  FetchedConsignment fetch_consignment_by_recipient_id_unchecked(
+    string recipient_id, string consignment_endpoint);
+
+  [Throws=RgbLibError]
+  AcceptTransferResult accept_transfer_from_consignment_unchecked(
+    Online online, sequence<u8> consignment, string txid, u32 vout, u64 blinding,
     ExpectedTransfer expected);
 
   [Throws=RgbLibError]
